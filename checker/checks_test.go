@@ -323,7 +323,8 @@ output "o" { value = "${local.tags}" }
 	}
 }
 
-// ParseDir: unreadable file emits E000.
+// ParseDir: unreadable file emits E000 with the underlying OS error in the
+// message (so users can distinguish permission-denied from other failures).
 func TestParseDir_UnreadableFile_EmitsE000(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -332,8 +333,21 @@ func TestParseDir_UnreadableFile_EmitsE000(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, vs := checker.ParseDir(dir)
-	if !hasCode(vs, "E000") {
+	var e000 *checker.Violation
+	for i := range vs {
+		if vs[i].Code == "E000" {
+			e000 = &vs[i]
+			break
+		}
+	}
+	if e000 == nil {
 		t.Fatalf("expected E000 for unreadable file, got %v", codes(vs))
+	}
+	// Message must include the OS-level error so diagnostics can distinguish
+	// EACCES vs ENOENT vs other failures.
+	if !strings.Contains(e000.Message, "permission denied") &&
+		!strings.Contains(e000.Message, "EACCES") {
+		t.Errorf("E000 message should contain the underlying error, got %q", e000.Message)
 	}
 }
 
@@ -350,6 +364,40 @@ data "aws_ami" "latest" {
 	})
 	if !hasCode(vs, "E005") {
 		t.Fatalf("expected E005 for data block with count+for_each, got %v", codes(vs))
+	}
+}
+
+// E005 also fires on `module` blocks — Terraform supports count and for_each
+// on modules but rejects using both simultaneously, same as resource/data.
+func TestE005_ModuleBlock_CountAndForEach(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `
+module "vpc" {
+  source   = "./modules/vpc"
+  count    = 1
+  for_each = toset(["a"])
+}
+`,
+	})
+	if !hasCode(vs, "E005") {
+		t.Fatalf("expected E005 for module block with count+for_each, got %v", codes(vs))
+	}
+}
+
+// E005 must NOT fire on a module block with only one of count/for_each.
+func TestE005_ModuleBlock_OnlyForEach_NoViolation(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `
+module "vpc" {
+  source   = "./modules/vpc"
+  for_each = toset(["a", "b"])
+}
+`,
+	})
+	if hasCode(vs, "E005") {
+		t.Fatalf("unexpected E005 (only for_each, no count): %v", codes(vs))
 	}
 }
 
@@ -539,11 +587,33 @@ output "o" { value = "${local.obj}-${local.str}" }
 // ── Missing coverage tests ────────────────────────────────────────────────────
 
 // ParseDir rejects paths with ".." as a path segment.
-func TestParseDir_DotDotSegment_Rejected(t *testing.T) {
+// `..`-prefixed paths must work — `tfdry ../infra` is a legitimate CLI
+// invocation when the user runs from a sibling directory. The previous
+// blanket rejection at ParseDir was over-paranoid: tfdry runs as the
+// caller's UID with the caller's filesystem access, so blocking parent
+// traversal at the top level adds no security and breaks normal usage.
+// Module-source containment (G5) is still enforced.
+func TestParseDir_DotDotSegment_Allowed(t *testing.T) {
 	t.Parallel()
-	_, vs := checker.ParseDir("/tmp/../etc")
-	if !hasCode(vs, "E000") {
-		t.Fatalf("expected E000 for path with '..' segment, got %v", codes(vs))
+	parent := t.TempDir()
+	subdir := filepath.Join(parent, "sub")
+	if err := os.MkdirAll(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "main.tf"),
+		[]byte(`locals { x = "y" }`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Reach `parent` from `subdir` via raw `..` path (string concat avoids
+	// filepath.Join's automatic cleaning, so the path actually contains
+	// a `..` segment when ParseDir sees it).
+	relPath := subdir + string(os.PathSeparator) + ".."
+	files, vs := checker.ParseDir(relPath)
+	if hasCode(vs, "E000") {
+		t.Fatalf("unexpected E000 for legitimate '..' path %q: %v", relPath, codes(vs))
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 parsed file from %q, got %d", relPath, len(files))
 	}
 }
 
@@ -746,6 +816,37 @@ variable "name" {
 	vs := runDir(t, dir)
 	if hasCode(vs, "E006") {
 		t.Fatalf("unexpected E006 for unresolvable type: %v", codes(vs))
+	}
+}
+
+// E006: unknown bare-identifier type in the module's variable (e.g. a typo
+// like `type = mystery` or a custom-type reference tfdry doesn't recognise)
+// must not produce a false-positive at the caller. The module is broken,
+// not the caller, so the safe behaviour is to skip type-mismatch checks for
+// that variable (treat as SchemaUnknown).
+func TestE006_UnknownTraversalType_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+module "vpc" {
+  source = "./modules/vpc"
+  name   = "hello"
+}
+`,
+		},
+		"modules/vpc",
+		map[string]string{
+			"variables.tf": `
+variable "name" {
+  type = mystery
+}
+`,
+		},
+	)
+	vs := runDir(t, dir)
+	if hasCode(vs, "E006") {
+		t.Fatalf("E006 false positive on broken module type %q: %v", "mystery", codes(vs))
 	}
 }
 
@@ -1268,6 +1369,172 @@ module "m" {
 	vs := runDir(t, dir)
 	if !hasCode(vs, "E006") {
 		t.Fatalf("expected E006 for list passed to map(string), got %v", codes(vs))
+	}
+}
+
+// ── G8: recursive element type checking for list/set/map ─────────────────────
+
+// list(string) with a non-string element must fire E006.
+func TestE006_ListOfString_WithNumberElement(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+module "m" {
+  source = "./modules/m"
+  names  = ["alpha", 42, "beta"]
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "names" { type = list(string) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if !hasCode(vs, "E006") {
+		t.Fatalf("expected E006 for number element in list(string), got %v", codes(vs))
+	}
+}
+
+// set(string) with a non-string element must fire E006.
+func TestE006_SetOfString_WithBoolElement(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+module "m" {
+  source = "./modules/m"
+  flags  = ["yes", true]
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "flags" { type = set(string) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if !hasCode(vs, "E006") {
+		t.Fatalf("expected E006 for bool element in set(string), got %v", codes(vs))
+	}
+}
+
+// map(number) with a non-number value must fire E006.
+func TestE006_MapOfNumber_WithStringValue(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+module "m" {
+  source = "./modules/m"
+  ports  = { http = 80, https = "ssl" }
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "ports" { type = map(number) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if !hasCode(vs, "E006") {
+		t.Fatalf("expected E006 for string value in map(number), got %v", codes(vs))
+	}
+}
+
+// Element type matches: no violation.
+func TestE006_ListOfString_AllStrings_NoViolation(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+module "m" {
+  source = "./modules/m"
+  names  = ["alpha", "beta", "gamma"]
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "names" { type = list(string) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if hasCode(vs, "E006") {
+		t.Fatalf("unexpected E006 for matching list(string), got %v", codes(vs))
+	}
+}
+
+// Element type matches in map: no violation.
+func TestE006_MapOfNumber_AllNumbers_NoViolation(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+module "m" {
+  source = "./modules/m"
+  ports  = { http = 80, https = 443 }
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "ports" { type = map(number) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if hasCode(vs, "E006") {
+		t.Fatalf("unexpected E006 for matching map(number), got %v", codes(vs))
+	}
+}
+
+// list(any): elements with mixed types must NOT fire (any = no checking).
+func TestE006_ListOfAny_MixedTypes_NoViolation(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+module "m" {
+  source = "./modules/m"
+  items  = ["alpha", 42, true]
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "items" { type = list(any) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if hasCode(vs, "E006") {
+		t.Fatalf("unexpected E006 for list(any) with mixed types, got %v", codes(vs))
+	}
+}
+
+// Element is a local with unresolvable type → no false positive.
+func TestE006_ListOfString_UnresolvableLocalElement_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+locals {
+  mystery = var.something
+}
+module "m" {
+  source = "./modules/m"
+  names  = ["alpha", local.mystery]
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "names" { type = list(string) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if hasCode(vs, "E006") {
+		t.Fatalf("unexpected E006 for unresolvable local element: %v", codes(vs))
 	}
 }
 

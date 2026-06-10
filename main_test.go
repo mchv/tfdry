@@ -441,3 +441,52 @@ func TestRun_KnownFlagsStillWork(t *testing.T) {
 		})
 	}
 }
+
+// ── Multiple positional args / extras after subcommands → error ──────────────
+
+// `tfdry dir1 dir2` should error rather than silently using dir2.
+func TestRun_MultiplePositionalDirs_ExitTwo(t *testing.T) {
+	dir1 := writeTFDir(t, map[string]string{"a.tf": `locals { x = "y" }` + "\n"})
+	dir2 := writeTFDir(t, map[string]string{"b.tf": `locals { y = "z" }` + "\n"})
+	code, _, stderr := runCLI(dir1, dir2)
+	if code != 2 {
+		t.Errorf("two dirs should exit 2, got code=%d stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stderr, "unexpected") && !strings.Contains(stderr, "extra") {
+		t.Errorf("stderr should mention extra/unexpected arg, got %q", stderr)
+	}
+}
+
+// Extra args after `describe` / `version` should error.
+func TestRun_ExtrasAfterSubcommand_ExitTwo(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"describe + dir", []string{"describe", "."}},
+		{"version + extra", []string{"version", "foo"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, stderr := runCLI(tc.args...)
+			if code != 2 {
+				t.Errorf("%v should exit 2, got code=%d stderr=%q", tc.args, code, stderr)
+			}
+			if !strings.Contains(stderr, "unexpected") &&
+				!strings.Contains(stderr, "extra") &&
+				!strings.Contains(stderr, "does not accept") {
+				t.Errorf("stderr should mention extra/unexpected arg, got %q", stderr)
+			}
+		})
+	}
+}
+
+// `tfdry fmt path1 path2` should also error — fmt takes at most one path.
+func TestRun_FmtMultiplePaths_ExitTwo(t *testing.T) {
+	dir1 := writeTFDir(t, nil)
+	dir2 := writeTFDir(t, nil)
+	code, _, stderr := runCLI("fmt", dir1, dir2)
+	if code != 2 {
+		t.Errorf("two paths to fmt should exit 2, got code=%d stderr=%q", code, stderr)
+	}
+}

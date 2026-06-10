@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,11 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSch
 		if rerr != nil {
 			continue
 		}
+		// readAll is bounded to maxFileSize+1 but is robust against Stat
+		// reporting a stale size (FUSE / file grew). Skip oversized files.
+		if int64(len(src)) > maxFileSize {
+			continue
+		}
 		f, diags := hclsyntax.ParseConfig(src, e.Name(), hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
 			continue
@@ -148,7 +154,12 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 		case "any":
 			return TypeSchema{Kind: SchemaUnknown}
 		}
-		return TypeSchema{Kind: SchemaObject}
+		// Unrecognised bare identifier (e.g. a typo like `type = mystery`,
+		// or a custom-type reference tfdry doesn't model). Return Unknown
+		// so type-mismatch checks at callers are skipped — the module is
+		// broken, not the caller, so we should not produce false positives
+		// downstream.
+		return TypeSchema{Kind: SchemaUnknown}
 
 	case *hclsyntax.FunctionCallExpr:
 		switch e.Name {
@@ -329,6 +340,36 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 		if obj, ok := unwrapExpr(expr).(*hclsyntax.ObjectConsExpr); ok {
 			compareObjectToSchema(file, line, context, obj, schema, locals, checks, out)
 			return
+		}
+	}
+	// Recursive element-type checking for list/set/map. The kind-mismatch
+	// fall-through below still catches "passed an object where list expected"
+	// type errors; this branch only fires when the kinds match and we have
+	// an Elem schema to validate the contents against.
+	if schema.Elem != nil && schema.Elem.Kind != SchemaUnknown {
+		switch schema.Kind {
+		case SchemaList, SchemaSet:
+			if tup, ok := unwrapExpr(expr).(*hclsyntax.TupleConsExpr); ok {
+				for i, elemExpr := range tup.Exprs {
+					compareExprToSchema(file, line,
+						fmt.Sprintf("%s[%d]", context, i),
+						elemExpr, *schema.Elem, locals, checks, out)
+				}
+				return
+			}
+		case SchemaMap:
+			if obj, ok := unwrapExpr(expr).(*hclsyntax.ObjectConsExpr); ok {
+				for _, item := range obj.Items {
+					key := objectKeyName(item.KeyExpr)
+					if key == "" {
+						key = "?"
+					}
+					compareExprToSchema(file, line,
+						fmt.Sprintf("%s[%q]", context, key),
+						item.ValueExpr, *schema.Elem, locals, checks, out)
+				}
+				return
+			}
 		}
 	}
 	if !checks.Enabled("E006") {

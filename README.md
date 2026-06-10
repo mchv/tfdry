@@ -12,7 +12,7 @@ Catches a focused set of errors by statically analysing `.tf` files in a directo
 | E002 | Duplicate local definition |
 | E003 | Reference to undefined local |
 | E004 | Non-scalar local used in string interpolation |
-| E005 | `count` and `for_each` used together on same resource |
+| E005 | `count` and `for_each` used together on same resource/data/module block |
 | E006 | Local module input type mismatch |
 | E007 | Unknown local module input key |
 | E008 | File not formatted (auto-fixable with `--fix`) |

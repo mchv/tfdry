@@ -113,7 +113,7 @@ func TestParseTypeSchema(t *testing.T) {
 		{"optional() unwraps to inner", "x = optional(string)", SchemaString},
 		{"optional() with no args → unknown", "x = optional()", SchemaUnknown},
 
-		{"unknown traversal name → object", "x = mystery", SchemaObject},
+		{"unknown traversal name → unknown (skip checks)", "x = mystery", SchemaUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

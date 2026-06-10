@@ -89,6 +89,42 @@ func TestReadAll_ZeroSizeFile(t *testing.T) {
 	}
 }
 
+// FUSE / virtual / network filesystems can report Stat.Size = 0 for
+// non-empty files (the size is computed lazily on read). readAll must
+// drain the reader instead of trusting the size hint and returning early
+// — otherwise the file is silently skipped and downstream parsing sees
+// nil bytes.
+func TestReadAll_StatZeroForNonEmptyFile(t *testing.T) {
+	data := []byte(`locals { x = "y" }` + "\n")
+	r := &shortReader{data: data, chunkSize: 8}
+
+	// Caller passes 0 because Stat misreported (FUSE-style). readAll must
+	// still return the actual content.
+	got, err := readAll(r, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("got %q, want %q", got, data)
+	}
+}
+
+// File grew between Stat and Read: caller passes the (now-stale) size,
+// but the reader has more bytes available. readAll must read everything
+// up to the maximum allowed size, not stop at the stale size.
+func TestReadAll_FileGrewBetweenStatAndRead(t *testing.T) {
+	data := []byte("locals { x = \"y\" }\n# extra content added after Stat\n")
+	r := &shortReader{data: data, chunkSize: 8}
+
+	got, err := readAll(r, 5) // stale Stat — file is much bigger now
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("got %q, want %q (full content)", got, data)
+	}
+}
+
 // TestParseDir_ParallelBranch_NoRace stresses the parallel branch of
 // ParseDir (>4 files) under the race detector. The original concern was
 // goroutine closure capture of the for-range loop variables: in Go 1.21

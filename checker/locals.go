@@ -20,7 +20,10 @@ type LocalInfo struct {
 func BuildLocalsMap(files []ParsedFile) (map[string]LocalInfo, []Violation) {
 	// Pre-size the map: count attributes in all locals blocks in one O(blocks)
 	// pass so the underlying hashmap allocates the right number of buckets up
-	// front, avoiding O(log n) growth reallocations during the main pass.
+	// front. Without the hint, Go's map grows by doubling its bucket array as
+	// it fills, paying a rehash cost at each grow phase. The pre-pass is
+	// cheap (no hashing, no allocation) and trades one extra walk for zero
+	// growth phases on the main insert loop.
 	hint := 0
 	for _, f := range files {
 		for _, block := range f.Body.Blocks {

@@ -28,7 +28,7 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
 | E002 | error    | Duplicate local definition |
 | E003 | error    | Reference to undefined local |
 | E004 | error    | Non-scalar local used in string interpolation |
-| E005 | error    | `count` and `for_each` used together on same resource |
+| E005 | error    | `count` and `for_each` used together on same resource/data/module block |
 | E006 | error    | Local module input type mismatch |
 | E007 | error    | Unknown local module input key |
 | E008 | error    | File not formatted (equivalent to `terraform fmt --check`) |

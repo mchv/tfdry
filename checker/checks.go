@@ -49,7 +49,7 @@ var allChecksList = []CheckInfo{
 	{"E002", "error", "Duplicate local definition"},
 	{"E003", "error", "Reference to undefined local"},
 	{"E004", "error", "Non-scalar local used in string interpolation"},
-	{"E005", "error", "count and for_each used together on same resource"},
+	{"E005", "error", "count and for_each used together on same resource/data/module block"},
 	{"E006", "error", "Local module input type mismatch"},
 	{"E007", "error", "Unknown local module input key"},
 	{"E008", "error", "File not formatted (run tfdry --fix or terraform fmt)"},
@@ -203,11 +203,13 @@ func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[st
 	}
 }
 
-// checkCountForEach finds resources/data blocks with both count and for_each.
+// checkCountForEach finds resource/data/module blocks with both count and
+// for_each. Terraform supports both meta-arguments individually on all three
+// block types but rejects using both simultaneously.
 func checkCountForEach(f ParsedFile) []Violation {
 	var violations []Violation
 	for _, block := range f.Body.Blocks {
-		if block.Type != "resource" && block.Type != "data" {
+		if block.Type != "resource" && block.Type != "data" && block.Type != "module" {
 			continue
 		}
 		_, hasCount := block.Body.Attributes["count"]

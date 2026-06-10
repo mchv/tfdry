@@ -1,13 +1,11 @@
 package checker
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -16,20 +14,14 @@ import (
 
 const maxFileSize = 10 * 1024 * 1024 // 10 MB
 
-// readAll reads up to size bytes from r into a fresh buffer, handling
-// short reads correctly. If r reaches EOF before size bytes (file shrank
-// between stat and read), the buffer is truncated to bytes actually read.
-// Non-EOF errors are returned as-is.
-func readAll(r io.Reader, size int64) ([]byte, error) {
-	if size == 0 {
-		return nil, nil
-	}
-	buf := make([]byte, size)
-	n, err := io.ReadFull(r, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, err
-	}
-	return buf[:n], nil
+// readAll drains r and returns up to maxFileSize+1 bytes. The size hint
+// (typically from os.FileInfo.Size) is intentionally ignored — some
+// filesystems (FUSE, network FS) report a stale or zero size for non-empty
+// files, and the file may grow between stat and read. The +1 lets the
+// caller distinguish "exactly at the limit" from "exceeded the limit" via
+// `len(buf) > maxFileSize`.
+func readAll(r io.Reader, _ int64) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, maxFileSize+1))
 }
 
 // ParsedFile holds the parsed AST and original source for one .tf file.
@@ -48,10 +40,6 @@ type parseResult struct {
 // ParseDir parses all .tf files in dir concurrently.
 // Returns parsed files and any syntax/infrastructure violations.
 func ParseDir(dir string) ([]ParsedFile, []Violation) {
-	// Check for ".." segments before Clean so we catch traversal attempts.
-	if hasDotDotSegment(dir) {
-		return nil, []Violation{{Code: "E000", Severity: "error", File: dir, Message: "directory path must not contain '..' segments"}}
-	}
 	dir = filepath.Clean(dir)
 
 	entries, err := os.ReadDir(dir)
@@ -101,16 +89,6 @@ func ParseDir(dir string) ([]ParsedFile, []Violation) {
 	return files, violations
 }
 
-// hasDotDotSegment reports whether any path segment is exactly "..".
-func hasDotDotSegment(p string) bool {
-	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
-		if seg == ".." {
-			return true
-		}
-	}
-	return false
-}
-
 func parseOne(dir string, e os.DirEntry) parseResult {
 	path := filepath.Join(dir, e.Name())
 
@@ -123,13 +101,13 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 		if isSymlinkRejection(err) {
 			return parseResult{}
 		}
-		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: "cannot open file"}}}
+		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("cannot open file: %v", err)}}}
 	}
 	defer f.Close()
 
 	fi, err := f.Stat()
 	if err != nil {
-		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: "cannot stat file"}}}
+		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("cannot stat file: %v", err)}}}
 	}
 	if !fi.Mode().IsRegular() {
 		return parseResult{} // skip non-regular files silently
@@ -140,7 +118,7 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 
 	src, err := readAll(f, fi.Size())
 	if err != nil {
-		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: "cannot read file"}}}
+		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("cannot read file: %v", err)}}}
 	}
 	if int64(len(src)) > maxFileSize {
 		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("file exceeds size limit (%d MB)", maxFileSize/1024/1024)}}}

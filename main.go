@@ -32,6 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fmtRecursive := false
 	var checksFilter checker.CheckSet
 	dir := "."
+	dirSet := false
 	subcmd := ""
 
 	for _, arg := range args {
@@ -68,13 +69,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 				checksFilter[c] = struct{}{}
 			}
 		case arg == "describe" || arg == "version" || arg == "fmt":
+			if subcmd != "" {
+				fmt.Fprintf(stderr, "tfdry: unexpected subcommand %q after %q\n", arg, subcmd)
+				return 2
+			}
 			subcmd = arg
 		case strings.HasPrefix(arg, "-"):
 			fmt.Fprintf(stderr, "tfdry: unrecognized flag %q\n", arg)
 			return 2
 		default:
+			if dirSet {
+				fmt.Fprintf(stderr, "tfdry: unexpected extra argument %q\n", arg)
+				return 2
+			}
 			dir = arg
+			dirSet = true
 		}
+	}
+	// describe / version do not take a positional argument.
+	if (subcmd == "describe" || subcmd == "version") && dirSet {
+		fmt.Fprintf(stderr, "tfdry: %s does not accept a positional argument\n", subcmd)
+		return 2
 	}
 
 	switch subcmd {
