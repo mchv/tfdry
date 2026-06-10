@@ -175,9 +175,16 @@ func sanitize(s string) string {
 				state = stStringEsc
 			}
 		case stStringEsc:
-			if r == '\\' {
-				state = stNormal // ST consumed
-			} else {
+			switch r {
+			case '\\':
+				state = stNormal // ST consumed (ESC \)
+			case '\x1b':
+				// Another ESC: the previous ESC was bogus, this one is the
+				// new ST candidate. Stay in stStringEsc so a following '\'
+				// terminates the sequence. Without this, a sequence like
+				// `\x1b]…\x1b\x1b\` would leak the trailing '\' into output.
+				state = stStringEsc
+			default:
 				// Malformed: no '\' followed the ESC. Keep dropping.
 				state = stString
 			}

@@ -14,6 +14,7 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
   - `0` — no violations found (or all violations were fixed by `--fix`)
   - `1` — one or more violations found
   - `2` — tool error (bad arguments, unreadable directory, etc.)
+  - `3` — `tfdry fmt -check` found unformatted files
 - **Always use `--json` for machine consumption.** Human output format is not stable.
 - **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`.
 - **`--checks` filters are additive.** Passing `--checks=E003,E004` runs only those two checks.

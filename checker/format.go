@@ -2,11 +2,9 @@ package checker
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/hashicorp/hcl/v2/hclwrite"
 )
@@ -74,9 +72,11 @@ func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violation
 func writeFormatted(path string, formatted []byte) (bool, error) {
 	// Open with O_NOFOLLOW so a symlink at path is rejected atomically (ELOOP),
 	// closing the small race window between Lstat and the subsequent operations.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	// On Windows oNoFollow = 0; symlink rejection there falls back to the
+	// IsRegular check below (see checker/nofollow_windows.go).
+	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
 	if err != nil {
-		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
+		if isSymlinkRejection(err) {
 			return false, fmt.Errorf("not a regular file")
 		}
 		return false, err

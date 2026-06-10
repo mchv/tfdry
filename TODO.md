@@ -2,13 +2,9 @@
 
 ## Checks
 
-- **E001 terraform fmt** — check HCL formatting using the HCL library's canonical formatter (equivalent to `terraform fmt -check`). Since tfdry already parses HCL, this is a pure in-process check with no Docker or provider downloads needed — much faster than running `terraform fmt`.
-
 - **E006 remote modules** — extend module input type checking to Spacelift registry modules and other sources where the module is cached locally. Currently only `./` and `../` relative paths are supported.
 
 - **E007 OAC + AllViewer incompatibility** — detect when a CloudFront distribution uses an S3 origin with OAC (`origin_access_control_id` set) AND `Managed-AllViewer` as the origin request policy. This combination causes `SignatureDoesNotMatch` errors because `AllViewer` forwards the browser's `Authorization` header, conflicting with CloudFront's own SigV4 signing. The correct policy is `Managed-AllViewerExceptHostHeader`.
-
-- **E006 variables in subdirectories** — currently only reads `variables.tf`; some modules split variables across multiple files (e.g. `variables_network.tf`). Consider reading all `*.tf` files in the module directory for variable declarations.
 
 ## Tests
 
@@ -143,6 +139,48 @@ without paying the binary or experiment-flag cost.
 [jsontext-pools]: https://go.dev/src/encoding/json/jsontext/pools.go
 
 ## Distribution
+
+### CI pipeline
+
+No CI exists yet. First targets when one lands:
+
+1. `go test ./... -race -count=1` on Linux + macOS + Windows runners.
+2. `go vet ./...` and `staticcheck`.
+3. Cross-build the four platform/arch combos (linux-amd64, linux-arm64,
+   darwin-arm64, windows-amd64) to catch build-tag drift between
+   platforms early — e.g. the `nofollow_unix.go` /
+   `nofollow_windows.go` split landed for PR #1's G1+G2 review feedback,
+   but lives untested on Windows until CI is in place.
+4. Bench job (currently `make bench`) can stay nightly to keep PR cycle
+   short.
+
+### Proper Windows symlink protection
+
+The Windows variant of `oNoFollow` (in `checker/nofollow_windows.go`) is
+currently `0` — a no-op. Real symlink rejection on Windows requires
+`CreateFile` with `FILE_FLAG_OPEN_REPARSE_POINT`, accessible via
+`golang.org/x/sys/windows`. Without it, the `tfdry`-on-Windows path:
+
+- correctly rejects symlinks pointing at directories or devices, via the
+  post-open `fi.Mode().IsRegular()` check;
+- silently follows symlinks pointing at regular files, reading the target.
+
+This is a downgrade from Unix (which atomically rejects all symlinks at
+the kernel level via `O_NOFOLLOW`) but no worse than typical Windows
+tooling. The proper fix needs:
+
+1. A `windows.CreateFile` call in `nofollow_windows.go` with
+   `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS` and the
+   appropriate `OPEN_EXISTING` disposition.
+2. Wrapping the resulting handle in `os.NewFile` for the rest of the
+   call site.
+3. A Windows-side equivalent of `isSymlinkRejection` that detects
+   `ERROR_CANT_ACCESS_FILE` (the reparse-point signal).
+4. Test coverage that actually runs on Windows — which requires CI
+   (above) to be in place first.
+
+Land the proper Windows implementation in the same PR as the Windows CI
+runner so the behaviour is verified, not assumed.
 
 ### UPX compression for Linux/Windows release artifacts
 

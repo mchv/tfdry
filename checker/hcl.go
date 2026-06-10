@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -116,11 +115,12 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 	path := filepath.Join(dir, e.Name())
 
 	// Open with O_NOFOLLOW to atomically reject symlinks and read the file,
-	// eliminating the TOCTOU race between Lstat and ReadFile.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	// eliminating the TOCTOU race between Lstat and ReadFile. On Windows
+	// oNoFollow = 0 (see checker/nofollow_windows.go).
+	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
 	if err != nil {
-		// ELOOP means the path is a symlink — skip silently.
-		if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) {
+		// Symlink path — skip silently.
+		if isSymlinkRejection(err) {
 			return parseResult{}
 		}
 		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: "cannot open file"}}}

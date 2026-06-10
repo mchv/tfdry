@@ -182,11 +182,11 @@ BASELINE_BIN="$REPO_ROOT/.bench-baseline"
 if [ -n "${EXPERIMENT:-}" ]; then
     # Both builds from current source; one with the experiment, one without.
     spin "Building default" go build "${BUILD_FLAGS[@]}" -o "$BASELINE_BIN" .
-    step_done "default built ($(stat -f '%z' "$BASELINE_BIN") bytes)"
+    step_done "default built ($(wc -c < "$BASELINE_BIN" | tr -d ' ') bytes)"
 
     spin "Building GOEXPERIMENT=$EXPERIMENT" \
         env "GOEXPERIMENT=$EXPERIMENT" go build "${BUILD_FLAGS[@]}" -o "$CURRENT_BIN" .
-    step_done "$EXPERIMENT built ($(stat -f '%z' "$CURRENT_BIN") bytes)"
+    step_done "$EXPERIMENT built ($(wc -c < "$CURRENT_BIN" | tr -d ' ') bytes)"
 else
     spin "Building current" go build "${BUILD_FLAGS[@]}" -o "$CURRENT_BIN" .
     step_done "current built"

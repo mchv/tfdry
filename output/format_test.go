@@ -157,6 +157,23 @@ func TestSanitize_TerminalInjection(t *testing.T) {
 			mustNot:  nil,
 			mustHave: []string{"modules/foo/bar.tf"},
 		},
+		// Regression: ESC inside an OSC string-mode body. The first ESC begins a
+		// candidate ST (ESC \). If a second ESC follows immediately, the first
+		// ESC was bogus and the second ESC must itself be treated as a fresh ST
+		// candidate. Without this fix the OSC never terminates and the
+		// remainder of the line gets silently eaten as OSC body.
+		{
+			name:     "OSC with ESC ESC \\ — second ESC starts ST",
+			input:    "pre \x1b]0;evil\x1b\x1b\\post end",
+			mustNot:  []string{"\x1b", "evil", "0;"},
+			mustHave: []string{"pre ", "post end"},
+		},
+		{
+			name:     "OSC with multiple stray ESCs before ST",
+			input:    "pre \x1b]8;;url\x1b\x1b\x1b\\after end",
+			mustNot:  []string{"\x1b", "url", "8;;"},
+			mustHave: []string{"pre ", "after end"},
+		},
 	}
 
 	for _, tc := range cases {

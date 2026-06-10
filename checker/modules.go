@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -93,7 +92,9 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSch
 		}
 		path := filepath.Join(moduleDir, e.Name())
 		// Open with O_NOFOLLOW to atomically reject symlinks (matches parseOne).
-		fh, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		// On Windows oNoFollow = 0; the IsRegular check below provides a
+		// best-effort fallback (see checker/nofollow_windows.go).
+		fh, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
 		if err != nil {
 			continue
 		}
@@ -273,8 +274,16 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]LocalInfo, ch
 		if realModule == realDir {
 			continue // self-reference — skip
 		}
-		if !strings.HasPrefix(realModule+string(os.PathSeparator), realDir+string(os.PathSeparator)) {
-			continue // path traversal attempt — skip
+		// Containment check: realModule must be inside realDir. filepath.Rel
+		// is more idiomatic than strings.HasPrefix and handles edge cases
+		// (different Windows volumes return an error; ".."-prefixed *child*
+		// names like "..hidden" don't false-trigger as parent-escape).
+		rel, err := filepath.Rel(realDir, realModule)
+		if err != nil {
+			continue // different volume / unrelated paths
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			continue // path escapes project root
 		}
 
 		schemas := parseModuleVarSchemas(moduleDir, cache)

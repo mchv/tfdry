@@ -388,3 +388,56 @@ func TestRun_FmtRecursiveCheck_DirtyInSubdir_ExitThree(t *testing.T) {
 		t.Errorf("file rewritten despite -check: %q", string(got))
 	}
 }
+
+// ── Unknown flags must be rejected ───────────────────────────────────────────
+
+// Unknown flags should produce an error and exit code 2 (tool error),
+// not be silently treated as a directory path.
+func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"long flag typo", []string{"--checkss=E001"}},
+		{"short flag typo", []string{"-x"}},
+		{"unknown flag with value", []string{"--verbose"}},
+		{"unknown flag after dir", []string{".", "--what"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, stderr := runCLI(tc.args...)
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2; stderr=%q", code, stderr)
+			}
+			if !strings.Contains(stderr, "unrecognized") && !strings.Contains(stderr, "unknown") {
+				t.Errorf("stderr should mention unrecognized/unknown flag, got %q", stderr)
+			}
+		})
+	}
+}
+
+// Known flags, the bare dir argument, and the `--` end-of-flags marker should
+// all keep working.
+func TestRun_KnownFlagsStillWork(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `locals {
+  a = "x"
+}
+`,
+	})
+	// Each must NOT exit 2.
+	cases := [][]string{
+		{dir},
+		{"--json", dir},
+		{"--checks=E001", dir},
+		{dir, "--json"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			code, _, stderr := runCLI(args...)
+			if code == 2 {
+				t.Errorf("known flags should not exit 2; got code=%d stderr=%q", code, stderr)
+			}
+		})
+	}
+}

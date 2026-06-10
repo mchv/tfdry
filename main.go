@@ -69,7 +69,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 		case arg == "describe" || arg == "version" || arg == "fmt":
 			subcmd = arg
-		case !strings.HasPrefix(arg, "-"):
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintf(stderr, "tfdry: unrecognized flag %q\n", arg)
+			return 2
+		default:
 			dir = arg
 		}
 	}

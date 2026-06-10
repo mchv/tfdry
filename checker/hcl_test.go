@@ -3,7 +3,11 @@ package checker
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,5 +86,64 @@ func TestReadAll_ZeroSizeFile(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("got %d bytes, want 0", len(got))
+	}
+}
+
+// TestParseDir_ParallelBranch_NoRace stresses the parallel branch of
+// ParseDir (>4 files) under the race detector. The original concern was
+// goroutine closure capture of the for-range loop variables: in Go 1.21
+// and earlier, `for i, e := range ...` reused i and e across iterations,
+// so concurrent closures could observe the wrong values.
+//
+// Go 1.22+ creates fresh `i` and `e` per iteration, so the closures in
+// hcl.go:ParseDir are safe. go.mod declares go 1.26.3, well past that
+// boundary. This test exercises the parallel path repeatedly and
+// asserts every file lands in its own results slot. Run with
+// `go test -race` to catch any data race that might creep in via a
+// future refactor.
+func TestParseDir_ParallelBranch_NoRace(t *testing.T) {
+	t.Parallel()
+
+	const numFiles = 32 // well over the parallelThreshold = 4
+	dir := t.TempDir()
+	for i := 0; i < numFiles; i++ {
+		// Each file's content uniquely encodes its index so we can verify
+		// it ends up in the correct results slot.
+		path := filepath.Join(dir, fmt.Sprintf("file_%02d.tf", i))
+		content := fmt.Sprintf(`locals { idx_%02d = "marker_%02d" }`+"\n", i, i)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Run ParseDir many times to expose any goroutine ordering bugs.
+	const iterations = 50
+	for it := 0; it < iterations; it++ {
+		files, violations := ParseDir(dir)
+		if len(violations) != 0 {
+			t.Fatalf("iteration %d: unexpected violations: %v", it, violations)
+		}
+		if len(files) != numFiles {
+			t.Fatalf("iteration %d: got %d files, want %d", it, len(files), numFiles)
+		}
+
+		// Build a name -> body-marker map and assert each file's content
+		// matches its filename. If the loop-variable capture were broken,
+		// some files would have content from the wrong source.
+		seen := make(map[string]bool, numFiles)
+		for _, f := range files {
+			seen[f.Name] = true
+			// Body source should contain the "marker_NN" matching the file
+			// index in the name.
+			expected := strings.TrimSuffix(strings.TrimPrefix(f.Name, "file_"), ".tf")
+			marker := "marker_" + expected
+			if !bytes.Contains(f.Src, []byte(marker)) {
+				t.Errorf("iteration %d: file %s body does not contain %q\nbody: %s",
+					it, f.Name, marker, f.Src)
+			}
+		}
+		if len(seen) != numFiles {
+			t.Errorf("iteration %d: only %d unique files seen, want %d", it, len(seen), numFiles)
+		}
 	}
 }
