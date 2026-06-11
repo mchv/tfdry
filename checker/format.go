@@ -30,9 +30,21 @@ func CheckFormat(files []ParsedFile) []Violation {
 }
 
 // FormatFile writes the hclwrite-formatted version of src to path atomically,
-// preserving the original file's permissions.
+// preserving the original file's permissions. Use [WriteFormatted] instead
+// when the caller already has the formatted bytes to avoid running
+// hclwrite.Format twice.
 func FormatFile(path string, src []byte) error {
 	formatted := hclwrite.Format(src)
+	_, err := writeFormatted(path, formatted)
+	return err
+}
+
+// WriteFormatted atomically writes pre-formatted bytes to path, preserving
+// the original file's permissions. The caller is responsible for having
+// already produced `formatted` via hclwrite.Format. Useful when a previous
+// step in the pipeline (e.g. dirtiness detection in `tfdry fmt`) has
+// already computed the formatted form, so we don't recompute it here.
+func WriteFormatted(path string, formatted []byte) error {
 	_, err := writeFormatted(path, formatted)
 	return err
 }

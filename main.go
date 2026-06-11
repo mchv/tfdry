@@ -94,8 +94,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	switch subcmd {
 	case "describe":
-		runDescribe(stdout, jsonFlag)
-		return 0
+		return runDescribe(stdout, stderr, jsonFlag)
 	case "version":
 		fmt.Fprintln(stdout, "tfdry", output.Version)
 		return 0
@@ -141,17 +140,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runDescribe(stdout io.Writer, asJSON bool) {
+func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 	checks := checker.AllChecks()
 	if asJSON {
-		_ = output.WriteChecksJSON(stdout, checks)
-		return
+		if err := output.WriteChecksJSON(stdout, checks); err != nil {
+			fmt.Fprintln(stderr, "tfdry: error writing output:", err)
+			return 2
+		}
+		return 0
 	}
 	fmt.Fprintln(stdout, "tfdry checks:")
 	fmt.Fprintln(stdout)
 	for _, c := range checks {
 		fmt.Fprintf(stdout, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
 	}
+	return 0
 }
 
 // runFmt implements `tfdry fmt`, modelled on `terraform fmt`:
@@ -195,7 +198,7 @@ func runFmt(stdout, stderr io.Writer, dir string, check, recursive bool) int {
 			}
 			fmt.Fprintln(stdout, relPath)
 			if !check {
-				if err := checker.FormatFile(absFile, f.Src); err != nil {
+				if err := checker.WriteFormatted(absFile, formatted); err != nil {
 					fmt.Fprintln(stderr, "Error formatting", relPath+":", err)
 					anyError = true
 				}

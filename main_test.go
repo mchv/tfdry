@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -488,5 +489,42 @@ func TestRun_FmtMultiplePaths_ExitTwo(t *testing.T) {
 	code, _, stderr := runCLI("fmt", dir1, dir2)
 	if code != 2 {
 		t.Errorf("two paths to fmt should exit 2, got code=%d stderr=%q", code, stderr)
+	}
+}
+
+// ── describe --json must propagate write errors (C15) ────────────────────────
+
+// errWriter is a Writer that always fails on Write — simulates closed pipe /
+// EPIPE / disk full etc. Used to verify CLI exit code on output failure.
+type errWriter struct{ err error }
+
+func (e errWriter) Write(p []byte) (int, error) { return 0, e.err }
+
+// runDescribe --json with a failing stdout must return exit 2, matching the
+// behaviour of the main `--json` path. Previously the error was swallowed via
+// `_ = output.WriteChecksJSON(...)`, causing silent success on broken pipe.
+func TestRun_DescribeJSON_PropagatesWriteError(t *testing.T) {
+	stdout := errWriter{err: io.ErrClosedPipe}
+	var stderr bytes.Buffer
+	code := run([]string{"describe", "--json"}, stdout, &stderr)
+	if code != 2 {
+		t.Errorf("describe --json with failing stdout should exit 2, got %d (stderr=%q)",
+			code, stderr.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected an error message on stderr explaining the write failure")
+	}
+}
+
+// Symmetry test: the main `--json` path already returns 2 on stdout failure;
+// guard that behaviour against regression too.
+func TestRun_MainJSON_PropagatesWriteError(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
+	stdout := errWriter{err: io.ErrClosedPipe}
+	var stderr bytes.Buffer
+	code := run([]string{"--json", dir}, stdout, &stderr)
+	if code != 2 {
+		t.Errorf("--json with failing stdout should exit 2, got %d (stderr=%q)",
+			code, stderr.String())
 	}
 }
