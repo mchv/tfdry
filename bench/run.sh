@@ -93,6 +93,38 @@ hyperfine -N \
     --command-name 'tfdry --json' \
         'tfdry --json /testdata/large'
 
+# ── 5. Format write: tfdry fmt vs terraform fmt (DIRTY input) ────────────────
+# Apples-to-apples write-mode comparison. Each iteration starts from a fresh
+# copy of pre-generated dirty fixtures so both tools have real formatting work
+# to do every run. --prepare runs OUTSIDE the measurement so the cp cost
+# isn't included. Wrapped in `bash -c` because hyperfine -N also disables
+# shell parsing for --prepare.
+echo
+echo "=== format write — dirty input, fresh per run (small) ==="
+hyperfine -N \
+    --warmup 3 \
+    --runs 30 \
+    --prepare 'bash -c "rm -rf /tmp/work && cp -R /testdata/dirty/small /tmp/work"' \
+    --export-markdown "$OUT/fmt-write-small.md" \
+    --export-json "$OUT/fmt-write-small.json" \
+    --command-name 'tfdry fmt' \
+        'tfdry fmt /tmp/work' \
+    --command-name 'terraform fmt' \
+        'terraform fmt -recursive /tmp/work'
+
+echo
+echo "=== format write — dirty input, fresh per run (large) ==="
+hyperfine -N \
+    --warmup 3 \
+    --runs 20 \
+    --prepare 'bash -c "rm -rf /tmp/work && cp -R /testdata/dirty/large /tmp/work"' \
+    --export-markdown "$OUT/fmt-write-large.md" \
+    --export-json "$OUT/fmt-write-large.json" \
+    --command-name 'tfdry fmt' \
+        'tfdry fmt /tmp/work' \
+    --command-name 'terraform fmt' \
+        'terraform fmt -recursive /tmp/work'
+
 echo
 echo "=== reports written to $OUT ==="
 ls -lh "$OUT"

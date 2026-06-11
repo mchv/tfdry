@@ -77,6 +77,18 @@ RUN chmod +x /usr/local/bin/gen-testdata.sh /usr/local/bin/run.sh
 RUN /usr/local/bin/gen-testdata.sh /testdata/medium 20
 RUN /usr/local/bin/gen-testdata.sh /testdata/large 100
 
+# Generate dirty variants of every size for write-mode fmt benchmarks.
+# Same content as /testdata/<size> but with leading whitespace stripped, so
+# `hclwrite.Format` (and `terraform fmt`) have real work to do. The bench
+# script (run.sh) refreshes a working copy from these via hyperfine --prepare
+# so each iteration sees fresh dirty input.
+RUN mkdir -p /testdata/dirty/small /testdata/dirty/medium /testdata/dirty/large && \
+    for size in small medium large; do \
+        for f in /testdata/$size/*.tf; do \
+            sed -e 's/^[[:space:]]*//' "$f" > /testdata/dirty/$size/$(basename "$f"); \
+        done; \
+    done
+
 # Pre-run terraform init in every testdata dir so terraform validate doesn't
 # need network access during benchmarking.
 RUN for d in /testdata/small /testdata/medium /testdata/large; do \

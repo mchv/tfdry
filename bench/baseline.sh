@@ -231,9 +231,25 @@ if [ -n "${EXPERIMENT:-}" ]; then
 fi
 # In ref mode, the cleanup() trap registered above already handles TESTDATA_TMP.
 
-cp -R "$REPO_ROOT/bench/testdata/small" "$TESTDATA_TMP/small"
-"$REPO_ROOT/bench/gen-testdata.sh" "$TESTDATA_TMP/medium" 20 >/dev/null
-"$REPO_ROOT/bench/gen-testdata.sh" "$TESTDATA_TMP/large"  100 >/dev/null
+# DIRTY=1 generates unformatted (still-valid) HCL into <size>-src/ and uses
+# hyperfine --prepare to reset the working <size>/ dir from -src/ before each
+# run. This is required when ARGS=fmt (or any write-mode command) so each
+# iteration sees fresh dirty input — without it, the first run would format
+# the files in place and every subsequent run would be a no-op.
+#
+# In DIRTY mode the committed bench/testdata/small fixtures are NOT used; we
+# use gen-testdata --dirty for every size so file shape and dirtiness are
+# uniform. Absolute numbers won't be directly comparable to non-DIRTY runs,
+# but baseline-vs-current deltas are exactly what the mode is for.
+if [ "${DIRTY:-0}" = "1" ]; then
+    "$REPO_ROOT/bench/gen-testdata.sh" --dirty "$TESTDATA_TMP/small-src"  5   >/dev/null
+    "$REPO_ROOT/bench/gen-testdata.sh" --dirty "$TESTDATA_TMP/medium-src" 20  >/dev/null
+    "$REPO_ROOT/bench/gen-testdata.sh" --dirty "$TESTDATA_TMP/large-src"  100 >/dev/null
+else
+    cp -R "$REPO_ROOT/bench/testdata/small" "$TESTDATA_TMP/small"
+    "$REPO_ROOT/bench/gen-testdata.sh" "$TESTDATA_TMP/medium" 20 >/dev/null
+    "$REPO_ROOT/bench/gen-testdata.sh" "$TESTDATA_TMP/large"  100 >/dev/null
+fi
 
 mkdir -p "$TESTDATA_TMP/bin"
 if [ -n "${EXPERIMENT:-}" ]; then
@@ -245,10 +261,11 @@ else
     VARIANT_B="current"
     REPORT_PREFIX="baseline"
 fi
+[ "${DIRTY:-0}" = "1" ] && REPORT_PREFIX="${REPORT_PREFIX}-dirty"
 cp "$BASELINE_BIN" "$TESTDATA_TMP/bin/$VARIANT_A"
 cp "$CURRENT_BIN"  "$TESTDATA_TMP/bin/$VARIANT_B"
 
-step_done "testdata staged (small / medium / large)"
+step_done "testdata staged (small / medium / large${DIRTY:+ — dirty})"
 
 # ── Run hyperfine: one A/B comparison per size ───────────────────────────────
 
@@ -256,14 +273,30 @@ mkdir -p "$REPO_ROOT/bench/results"
 
 for size in small medium large; do
     section "$size"
-    hyperfine -N \
-        --warmup 3 \
-        --runs 30 \
-        -L variant "$VARIANT_A,$VARIANT_B" \
-        --command-name '{variant}' \
-        --export-markdown "$REPO_ROOT/bench/results/$REPORT_PREFIX-$size.md" \
-        --export-json     "$REPO_ROOT/bench/results/$REPORT_PREFIX-$size.json" \
-        "$TESTDATA_TMP/bin/{variant} ${ARGS:-} $TESTDATA_TMP/$size"
+    if [ "${DIRTY:-0}" = "1" ]; then
+        # Refresh the working dir from -src/ before each measured run so the
+        # dirty-data invariant holds. cp -R cost is outside the timed window.
+        # Wrap in `bash -c` because hyperfine -N also disables shell parsing
+        # for --prepare, which would otherwise treat `&&` as a literal arg.
+        hyperfine -N \
+            --warmup 3 \
+            --runs 30 \
+            --prepare "bash -c \"rm -rf '$TESTDATA_TMP/$size' && cp -R '$TESTDATA_TMP/$size-src' '$TESTDATA_TMP/$size'\"" \
+            -L variant "$VARIANT_A,$VARIANT_B" \
+            --command-name '{variant}' \
+            --export-markdown "$REPO_ROOT/bench/results/$REPORT_PREFIX-$size.md" \
+            --export-json     "$REPO_ROOT/bench/results/$REPORT_PREFIX-$size.json" \
+            "$TESTDATA_TMP/bin/{variant} ${ARGS:-} $TESTDATA_TMP/$size"
+    else
+        hyperfine -N \
+            --warmup 3 \
+            --runs 30 \
+            -L variant "$VARIANT_A,$VARIANT_B" \
+            --command-name '{variant}' \
+            --export-markdown "$REPO_ROOT/bench/results/$REPORT_PREFIX-$size.md" \
+            --export-json     "$REPO_ROOT/bench/results/$REPORT_PREFIX-$size.json" \
+            "$TESTDATA_TMP/bin/{variant} ${ARGS:-} $TESTDATA_TMP/$size"
+    fi
 done
 
 # ── Final summary ────────────────────────────────────────────────────────────

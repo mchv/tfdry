@@ -8,7 +8,8 @@ Everything runs inside a container with pinned versions so results are reproduci
 
 | Comparison | Why |
 |------------|-----|
-| `tfdry --checks=E008` vs `terraform fmt -check` | Closest apples-to-apples: both check formatting only |
+| `tfdry --checks=E008` vs `terraform fmt -check` | Closest apples-to-apples for read-only formatting check |
+| `tfdry fmt` vs `terraform fmt` (write mode, dirty input) | Apples-to-apples for the rewrite path; refreshes input per run |
 | `tfdry` (all checks) vs `terraform validate` | Different scopes but both are "is this code OK?" tools |
 | Scaling across small/medium/large | How each tool scales with directory size |
 | `tfdry` human vs JSON output | Cost of JSON encoding |
@@ -54,6 +55,16 @@ make bench-baseline BASELINE=HEAD~1  # vs the previous commit
 ```
 
 Output: `bench/results/baseline-{small,medium,large}.{md,json}` — each report is a pairwise current-vs-baseline comparison at one input size.
+
+### Measuring write-mode formatting performance (`DIRTY=1`)
+
+By default `bench-baseline` operates on already-formatted fixtures, so `ARGS=fmt` no-ops on every run. To measure the rewrite path (e.g. comparing two refs of `runFmt`/`FormatFile`), set `DIRTY=1`:
+
+```sh
+ARGS=fmt DIRTY=1 make bench-baseline BASELINE=HEAD~1
+```
+
+In this mode `gen-testdata.sh --dirty` produces unformatted (still-valid) HCL into a per-size source dir, and hyperfine `--prepare` resets a working copy from it before every measured run. The `cp -R` cost is outside the timed window. Reports are named `baseline-dirty-{small,medium,large}.{md,json}` to keep them separate from the read-only baseline runs.
 
 How it works:
 
