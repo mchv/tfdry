@@ -180,6 +180,32 @@ locals {
 	}
 }
 
+// G15: repeated --checks= flags must accumulate, not overwrite. The single-
+// flag form `--checks=E003,W001` is already supported; the multi-flag form
+// `--checks=E003 --checks=W001` should be equivalent. Previously each flag
+// re-initialised checksFilter via make(), silently dropping the prior set.
+func TestRun_ChecksRepeated_Accumulate(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `output "x" { value = local.missing }
+locals {
+  unused = "warn"
+}
+`,
+	})
+	// Equivalent forms — both must produce the same set of codes (E003 + W001).
+	codeMulti, stdoutMulti, _ := runCLI("--checks=E003", "--checks=W001", dir)
+	codeSingle, _, _ := runCLI("--checks=E003,W001", dir)
+	if codeMulti != codeSingle {
+		t.Errorf("multi-flag exit %d != single-flag exit %d", codeMulti, codeSingle)
+	}
+	if !strings.Contains(stdoutMulti, "E003") {
+		t.Errorf("multi-flag output missing E003: %s", stdoutMulti)
+	}
+	if !strings.Contains(stdoutMulti, "W001") {
+		t.Errorf("multi-flag output missing W001 — flags were not accumulated: %s", stdoutMulti)
+	}
+}
+
 // ── describe subcommand ──────────────────────────────────────────────────────
 
 func TestRun_Describe_ListsChecks(t *testing.T) {
@@ -582,6 +608,62 @@ func TestRun_Fmt_RecursiveOnFile_ExitTwo(t *testing.T) {
 	code, _, stderr := runCLI("fmt", "-recursive", path)
 	if code != 2 {
 		t.Errorf("fmt -recursive <file> should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+}
+
+// G14: tfdry fmt <symlink-path> must reject symlinks before reading or
+// writing — on Unix this was already enforced at writeFormatted via
+// O_NOFOLLOW, but the dirty-detection read in runFmtFile happened first
+// (os.ReadFile follows symlinks), and on Windows oNoFollow=0 means the
+// rename would later destroy the symlink. The Lstat precheck rejects
+// symlinks consistently across platforms before any I/O against the target.
+func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
+	real := filepath.Join(dir, "real.tf")
+	link := filepath.Join(dir, "link.tf")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	// fmt write-mode on a symlink must NOT modify either the symlink or its
+	// target — exit 2 with a useful stderr message.
+	code, _, stderr := runCLI("fmt", link)
+	if code != 2 {
+		t.Errorf("fmt <symlink> should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+	if stderr == "" {
+		t.Error("expected an error message on stderr explaining symlink rejection")
+	}
+
+	// The symlink itself must remain a symlink (not have been replaced by a
+	// regular file via os.Rename).
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("symlink unexpectedly missing after fmt: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink was replaced by a regular file (Windows-style destruction)")
+	}
+
+	// The target file must still contain the dirty content.
+	target, _ := os.ReadFile(real)
+	if string(target) != fmtDirtyTF {
+		t.Fatalf("symlink target was modified through the symlink; got %q", string(target))
+	}
+}
+
+// G14 (read-only): fmt -check on a symlink should also reject (no read
+// follows, no exit-3 false positive, just a usage error).
+func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
+	real := filepath.Join(dir, "real.tf")
+	link := filepath.Join(dir, "link.tf")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+	code, _, stderr := runCLI("fmt", "-check", link)
+	if code != 2 {
+		t.Errorf("fmt -check <symlink> should exit 2, got %d (stderr=%q)", code, stderr)
 	}
 }
 

@@ -90,9 +90,14 @@ RUN mkdir -p /testdata/dirty/small /testdata/dirty/medium /testdata/dirty/large 
     done
 
 # Pre-run terraform init in every testdata dir so terraform validate doesn't
-# need network access during benchmarking.
+# need network access during benchmarking. The `|| exit 1` is required
+# because Docker invokes RUN via `sh -c` without `set -e`, so a failed
+# `terraform init` in the middle of the loop would otherwise be masked by
+# a subsequent successful iteration (the loop's exit code is the last
+# iteration's). Without this, the image could build with one or more
+# partially-initialised testdata dirs and benchmarks would silently lie.
 RUN for d in /testdata/small /testdata/medium /testdata/large; do \
-        cd "$d" && terraform init -input=false -backend=false; \
+        cd "$d" && terraform init -input=false -backend=false || exit 1; \
     done
 
 # Run as non-root for defense in depth. /out is a bind-mounted volume — the

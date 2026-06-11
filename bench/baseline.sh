@@ -122,8 +122,16 @@ resolve_baseline() {
     if [ -n "${BASELINE:-}" ]; then
         echo "$BASELINE"; return
     fi
+    # If origin/main exists, prefer its merge-base with HEAD. Wrap the
+    # merge-base call in a conditional so `set -e` doesn't abort the script
+    # when HEAD shares no common ancestry with origin/main (G17 — happens on
+    # forks that started independently or when origin/main hasn't been
+    # fetched). On failure, fall through to the local `main` branch below
+    # rather than dying outright.
     if git rev-parse --verify --quiet origin/main >/dev/null; then
-        git merge-base HEAD origin/main; return
+        if base=$(git merge-base HEAD origin/main 2>/dev/null); then
+            echo "$base"; return
+        fi
     fi
     if git rev-parse --verify --quiet main >/dev/null; then
         echo "main"; return

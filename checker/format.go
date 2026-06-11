@@ -82,10 +82,20 @@ func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violation
 // permissions in one syscall (mirrors the pattern in hcl.go:parseOne).
 // Returns (true, nil) on success, (false, err) on error.
 func writeFormatted(path string, formatted []byte) (bool, error) {
+	// Cross-platform symlink rejection (G14): on Windows oNoFollow == 0 means
+	// O_NOFOLLOW is a no-op and OpenFile silently follows symlinks. Without
+	// this Lstat precheck, the subsequent os.Rename would destroy the symlink
+	// and replace it with a regular file. Lstat introduces a small TOCTOU
+	// window between the check and the open, but that's a fundamentally less
+	// severe failure mode than silent symlink destruction. Unix is already
+	// covered by O_NOFOLLOW below; the Lstat is defence in depth there.
+	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("not a regular file")
+	}
 	// Open with O_NOFOLLOW so a symlink at path is rejected atomically (ELOOP),
 	// closing the small race window between Lstat and the subsequent operations.
-	// On Windows oNoFollow = 0; symlink rejection there falls back to the
-	// IsRegular check below (see checker/nofollow_windows.go).
+	// On Windows oNoFollow = 0; the Lstat precheck above is the actual symlink
+	// rejection on that platform (see checker/nofollow_windows.go).
 	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
 	if err != nil {
 		if isSymlinkRejection(err) {

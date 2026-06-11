@@ -148,6 +148,16 @@ func sanitize(s string) string {
 				state = stEsc
 				continue
 			}
+			// Strip Cc (control) characters EXCEPT \t/\n which are legitimate
+			// horizontal/vertical whitespace in our reports. Also strip Cf
+			// (format) characters in the Bidi-override and isolate-control
+			// ranges — these are not caught by unicode.IsControl (which only
+			// covers Cc) but enable Trojan Source attacks (CVE-2021-42574)
+			// where U+202E etc. visually re-orders trailing text. Filenames
+			// and local names from a malicious .tf file can carry these.
+			if isBidiOverride(r) {
+				continue
+			}
 			if unicode.IsControl(r) && r != '\t' && r != '\n' {
 				continue
 			}
@@ -191,4 +201,25 @@ func sanitize(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// isBidiOverride reports whether r is a Unicode bidirectional override or
+// isolate-control character. These belong to category Cf (format), so
+// unicode.IsControl misses them, but they enable Trojan Source attacks
+// (CVE-2021-42574) by visually re-ordering surrounding glyphs:
+//
+//   - U+202A LRE  (Left-to-Right Embedding)
+//   - U+202B RLE  (Right-to-Left Embedding)
+//   - U+202C PDF  (Pop Directional Formatting)
+//   - U+202D LRO  (Left-to-Right Override)
+//   - U+202E RLO  (Right-to-Left Override)
+//   - U+2066 LRI  (Left-to-Right Isolate)
+//   - U+2067 RLI  (Right-to-Left Isolate)
+//   - U+2068 FSI  (First Strong Isolate)
+//   - U+2069 PDI  (Pop Directional Isolate)
+//
+// Stripped from human and JSON report fields that originate in attacker-
+// controlled values (filenames, local names, raw .tf contents).
+func isBidiOverride(r rune) bool {
+	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
 }

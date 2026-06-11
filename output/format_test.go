@@ -174,6 +174,37 @@ func TestSanitize_TerminalInjection(t *testing.T) {
 			mustNot:  []string{"\x1b", "url", "8;;"},
 			mustHave: []string{"pre ", "after end"},
 		},
+		// ── G13 (Trojan Source / CVE-2021-42574 family) ──────────────────────
+		// Bidi override and isolate-control characters belong to Unicode's Cf
+		// (format) category, which unicode.IsControl does NOT cover. Without
+		// explicit stripping, an attacker could craft a filename or local name
+		// like `passwd\u202E.tf` so that the rendered text reads `passwdfg.tx`
+		// in the human report — visually misrepresenting the actual content.
+		// All Cf characters in the Bidi/Isolate ranges must be stripped.
+		{
+			name:     "Bidi RLO (right-to-left override) U+202E",
+			input:    "before\u202Eevil_target.txafter",
+			mustNot:  []string{"\u202E"},
+			mustHave: []string{"before", "evil_target.tx", "after"},
+		},
+		{
+			name:     "Bidi LRO (left-to-right override) U+202D",
+			input:    "x\u202Dy",
+			mustNot:  []string{"\u202D"},
+			mustHave: []string{"xy"},
+		},
+		{
+			name:     "Bidi LRE/RLE/PDF embedding controls U+202A/B/C",
+			input:    "a\u202Ab\u202Bc\u202Cd",
+			mustNot:  []string{"\u202A", "\u202B", "\u202C"},
+			mustHave: []string{"abcd"},
+		},
+		{
+			name:     "Bidi LRI/RLI/FSI/PDI isolate controls U+2066-U+2069",
+			input:    "p\u2066q\u2067r\u2068s\u2069t",
+			mustNot:  []string{"\u2066", "\u2067", "\u2068", "\u2069"},
+			mustHave: []string{"pqrst"},
+		},
 	}
 
 	for _, tc := range cases {

@@ -53,11 +53,15 @@ func tfDirWithModule(b testing.TB, n int) string {
 	b.Helper()
 	dir := b.TempDir()
 	modDir := filepath.Join(dir, "modules", "m")
-	os.MkdirAll(modDir, 0755)
-	os.WriteFile(filepath.Join(modDir, "variables.tf"), []byte(`
+	if err := os.MkdirAll(modDir, 0755); err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "variables.tf"), []byte(`
 variable "name" { type = string }
 variable "count" { type = number }
-`), 0644)
+`), 0644); err != nil {
+		b.Fatal(err)
+	}
 	for i := range n {
 		content := fmt.Sprintf(`
 module "m%d" {
@@ -66,7 +70,9 @@ module "m%d" {
   count  = %d
 }
 `, i, i, i)
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), []byte(content), 0644)
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), []byte(content), 0644); err != nil {
+			b.Fatal(err)
+		}
 	}
 	return dir
 }

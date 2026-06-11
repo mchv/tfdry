@@ -64,7 +64,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stderr, "tfdry: "+err.Error())
 				return 2
 			}
-			checksFilter = make(checker.CheckSet)
+			// Accumulate when --checks= is repeated (G15): `--checks=E001
+			// --checks=E002` is equivalent to `--checks=E001,E002`. Initialise
+			// only on first use; reuse the existing set on subsequent flags.
+			if checksFilter == nil {
+				checksFilter = make(checker.CheckSet)
+			}
 			for _, c := range codes {
 				checksFilter[c] = struct{}{}
 			}
@@ -235,7 +240,16 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 // directory-walking branch in runFmt. Mirrors terraform fmt's behaviour for
 // individual files: prints the path on stdout when dirty, rewrites in-place
 // unless `check` is set, and uses exit code 3 only when -check finds dirt.
+//
+// Symlinks are rejected (G14): without Lstat here, `-check` would follow the
+// symlink at os.ReadFile and exit 3 if the target was dirty, while a write
+// pass would later destroy the symlink on Windows (oNoFollow=0). Reject
+// upfront so the failure mode is identical across read/write/platforms.
 func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
+	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(stderr, "tfdry fmt: %s: not a regular file (symlinks are not supported)\n", path)
+		return 2
+	}
 	src, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
