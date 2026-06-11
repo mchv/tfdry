@@ -850,6 +850,97 @@ variable "name" {
 	}
 }
 
+// C17: malformed container types like `list()` (no args) or `list(a, b)`
+// (too many args) must not produce false-positive E006 at the caller. The
+// module type constraint is broken; tfdry should skip type-mismatch checks
+// rather than treat the malformed form as a concrete container kind.
+func TestE006_MalformedContainerType_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		tp   string
+	}{
+		{"list_no_args", "list()"},
+		{"list_too_many", "list(string, number)"},
+		{"set_no_args", "set()"},
+		{"map_no_args", "map()"},
+		{"map_too_many", "map(string, number)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeModuleFiles(t,
+				map[string]string{
+					"main.tf": `
+module "m" {
+  source = "./modules/m"
+  v      = "scalar-string-not-a-list"
+}
+`,
+				},
+				"modules/m",
+				map[string]string{
+					"variables.tf": `
+variable "v" {
+  type = ` + tc.tp + `
+}
+`,
+				},
+			)
+			vs := runDir(t, dir)
+			if hasCode(vs, "E006") {
+				t.Fatalf("E006 false positive on malformed type %q: %v", tc.tp, codes(vs))
+			}
+		})
+	}
+}
+
+// C18: malformed object() expressions (no args, too many args, or non-object
+// argument) must not produce false-positive E007 at the caller. With an
+// empty Fields map, every key in the caller's literal would otherwise be
+// flagged as an unknown field. SchemaUnknown short-circuits the check.
+func TestE007_MalformedObjectType_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		tp   string
+	}{
+		{"object_no_args", "object()"},
+		{"object_too_many", "object({a = string}, {b = number})"},
+		{"object_non_object_arg", `object("not_an_object_literal")`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeModuleFiles(t,
+				map[string]string{
+					"main.tf": `
+module "m" {
+  source = "./modules/m"
+  v = {
+    name = "alice"
+    port = 8080
+  }
+}
+`,
+				},
+				"modules/m",
+				map[string]string{
+					"variables.tf": `
+variable "v" {
+  type = ` + tc.tp + `
+}
+`,
+				},
+			)
+			vs := runDir(t, dir)
+			if hasCode(vs, "E007") {
+				t.Fatalf("E007 false positive on malformed type %q: %v", tc.tp, codes(vs))
+			}
+		})
+	}
+}
+
 // E006: module with no variables.tf → no violation (skip gracefully).
 func TestE006_NoVariablesTf_NoViolation(t *testing.T) {
 	t.Parallel()
@@ -1195,7 +1286,9 @@ func TestFormatFile_PreservesPermissions(t *testing.T) {
 	}
 }
 
-// Security#1: module source with path traversal must be rejected.
+// Security#1: a module source that resolves to a non-existent parent dir
+// should produce no E006/E007 — the schemas are unparseable, so checks
+// silently skip rather than spuriously firing.
 func TestCheckModuleInputs_PathTraversal_Rejected(t *testing.T) {
 	t.Parallel()
 	vs := run(t, map[string]string{
@@ -1206,18 +1299,91 @@ module "evil" {
 }
 `,
 	})
-	// Must not read outside the project dir — no E006/E007 from traversal.
+	// The parent dir doesn't exist as a tfdry-readable module; no checks
+	// fire. (We no longer enforce containment — the security boundary lives
+	// at the kernel level via O_NOFOLLOW + EvalSymlinks; see G10.)
 	if hasCode(vs, "E006") || hasCode(vs, "E007") {
-		t.Fatalf("path traversal should be rejected, got %v", codes(vs))
+		t.Fatalf("non-existent parent dir produced spurious findings: %v", codes(vs))
 	}
 }
 
-// Security#2: a module source pointing at a SIBLING directory whose name
-// shares a prefix with the project root must NOT be treated as inside the
-// project. This is the case `strings.HasPrefix("/dir-evil/", "/dir/")` would
-// get wrong without the trailing-separator trick — and that filepath.Rel
-// handles natively. Regression test for both approaches.
-func TestCheckModuleInputs_SiblingPrefix_Rejected(t *testing.T) {
+// G10: parent-relative module path that DOES exist must be parsed and
+// checked. This is the standard monorepo pattern — `infra/prod` references
+// `../shared/<module>`. Previously the containment check silently skipped
+// such modules, leaving E006/E007 unable to fire.
+func TestCheckModuleInputs_ParentRelativeModule_TypeMismatch_E006(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	// <root>/proj is what tfdry analyses; <root>/shared is the module dir
+	// that lives outside proj/ — exactly the layout that used to be skipped.
+	projDir := filepath.Join(root, "proj")
+	sharedDir := filepath.Join(root, "shared", "vpc")
+	if err := os.MkdirAll(projDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sharedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	mainTF := `
+locals { items = ["a", "b"] }
+module "vpc" {
+  source = "../shared/vpc"
+  name   = local.items   # caller passes a list where module wants string
+}
+`
+	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0644); err != nil {
+		t.Fatal(err)
+	}
+	moduleVars := `variable "name" { type = string }`
+	if err := os.WriteFile(filepath.Join(sharedDir, "variables.tf"), []byte(moduleVars), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	vs := runDir(t, projDir)
+	if !hasCode(vs, "E006") {
+		t.Fatalf("expected E006 for list-passed-where-string on parent-relative module; got %v", codes(vs))
+	}
+}
+
+// G10 (positive): a parent-relative module with correctly-typed inputs
+// produces no findings. Symmetric to the negative test above.
+func TestCheckModuleInputs_ParentRelativeModule_Clean(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	projDir := filepath.Join(root, "proj")
+	sharedDir := filepath.Join(root, "shared", "vpc")
+	if err := os.MkdirAll(projDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sharedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	mainTF := `
+module "vpc" {
+  source = "../shared/vpc"
+  name   = "production"
+}
+`
+	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0644); err != nil {
+		t.Fatal(err)
+	}
+	moduleVars := `variable "name" { type = string }`
+	if err := os.WriteFile(filepath.Join(sharedDir, "variables.tf"), []byte(moduleVars), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	vs := runDir(t, projDir)
+	if hasCode(vs, "E006") || hasCode(vs, "E007") {
+		t.Fatalf("clean parent-relative module produced spurious findings: %v", codes(vs))
+	}
+}
+
+// G10 (formerly Security#2): a sibling module ../proj-evil with differing
+// variables produces E007 on the unknown caller key. Previously containment
+// would skip the module entirely; now it's checked like any other.
+func TestCheckModuleInputs_SiblingDir_UnknownInput_E007(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 
@@ -1230,7 +1396,7 @@ func TestCheckModuleInputs_SiblingPrefix_Rejected(t *testing.T) {
 	if err := os.MkdirAll(siblingDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// proj/main.tf references ../proj-evil
+	// proj/main.tf references ../proj-evil with input "name"
 	mainTF := `
 module "neighbour" {
   source = "../proj-evil"
@@ -1240,16 +1406,15 @@ module "neighbour" {
 	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// sibling has a variable.tf declaring a different name; if the
-	// containment check were broken we'd see E006 (unknown input "name").
+	// sibling declares "other", not "name" → caller-side "name" is unknown.
 	siblingVars := `variable "other" {}`
 	if err := os.WriteFile(filepath.Join(siblingDir, "variables.tf"), []byte(siblingVars), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	vs := runDir(t, projDir)
-	if hasCode(vs, "E006") || hasCode(vs, "E007") {
-		t.Fatalf("sibling-prefix path should be rejected (containment violation), got %v", codes(vs))
+	if !hasCode(vs, "E007") {
+		t.Fatalf("expected E007 for unknown input on sibling module; got %v", codes(vs))
 	}
 }
 

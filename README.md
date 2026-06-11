@@ -57,8 +57,12 @@ tfdry --fix
 # Format a directory (drop-in replacement for `terraform fmt`)
 tfdry fmt ./infra
 
+# Format a single file
+tfdry fmt ./infra/main.tf
+
 # Check formatting without rewriting (exits 3 if any file is unformatted)
 tfdry fmt -check ./infra
+tfdry fmt -check ./infra/main.tf
 
 # Format recursively, skipping hidden dirs (.terraform, .git, ...)
 tfdry fmt -recursive ./infra

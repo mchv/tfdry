@@ -114,6 +114,19 @@ func TestParseTypeSchema(t *testing.T) {
 		{"optional() with no args → unknown", "x = optional()", SchemaUnknown},
 
 		{"unknown traversal name → unknown (skip checks)", "x = mystery", SchemaUnknown},
+
+		// C17: malformed container types must return Unknown, not concrete
+		// SchemaList/Set/Map with Elem=nil. Emitting a concrete kind makes
+		// downstream compareExprToSchema produce misleading E006 ("declared
+		// list, got string") when the actual problem is the module-side type
+		// constraint. SchemaUnknown short-circuits the check, which matches
+		// the fail-safe stance for unrecognised types.
+		{"list() no args → unknown", "x = list()", SchemaUnknown},
+		{"list(a, b) too many args → unknown", "x = list(string, number)", SchemaUnknown},
+		{"set() no args → unknown", "x = set()", SchemaUnknown},
+		{"set(a, b) too many args → unknown", "x = set(string, number)", SchemaUnknown},
+		{"map() no args → unknown", "x = map()", SchemaUnknown},
+		{"map(a, b) too many args → unknown", "x = map(string, number)", SchemaUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

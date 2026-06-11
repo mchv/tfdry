@@ -492,6 +492,99 @@ func TestRun_FmtMultiplePaths_ExitTwo(t *testing.T) {
 	}
 }
 
+// ── tfdry fmt single-file (G11 — terraform fmt parity) ──────────────────────
+//
+// terraform fmt accepts both directories and individual files; tfdry must do
+// the same. Previously passing a file path produced a confusing
+// "cannot read directory" error from ParseDir.
+
+// fmt on a dirty file path: rewrite, print path, exit 0.
+func TestRun_Fmt_SingleDirtyFile_RewritesPrintsExitZero(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})
+	path := filepath.Join(dir, "dirty.tf")
+	code, stdout, stderr := runCLI("fmt", path)
+	if code != 0 {
+		t.Fatalf("fmt <dirty file> should exit 0, got %d (stderr=%q)", code, stderr)
+	}
+	if !strings.Contains(stdout, path) && !strings.Contains(stdout, "dirty.tf") {
+		t.Errorf("expected file path in stdout, got %q", stdout)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != fmtCleanTF {
+		t.Fatalf("file not formatted:\nexpected: %q\ngot:      %q", fmtCleanTF, string(got))
+	}
+}
+
+// fmt on an already-clean file: no output, exit 0, file unchanged.
+func TestRun_Fmt_SingleCleanFile_NoOutputExitZero(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"clean.tf": fmtCleanTF})
+	path := filepath.Join(dir, "clean.tf")
+	code, stdout, stderr := runCLI("fmt", path)
+	if code != 0 {
+		t.Fatalf("fmt <clean file> should exit 0, got %d (stderr=%q)", code, stderr)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Errorf("expected no stdout on already-formatted file, got %q", stdout)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != fmtCleanTF {
+		t.Fatalf("clean file should not be modified, got %q", string(got))
+	}
+}
+
+// fmt -check on a dirty file: print path, exit 3, file unchanged.
+func TestRun_FmtCheck_SingleDirtyFile_PrintsExitThree(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})
+	path := filepath.Join(dir, "dirty.tf")
+	code, stdout, stderr := runCLI("fmt", "-check", path)
+	if code != 3 {
+		t.Fatalf("fmt -check <dirty file> should exit 3, got %d (stderr=%q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "dirty.tf") {
+		t.Errorf("expected dirty.tf in stdout, got %q", stdout)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != fmtDirtyTF {
+		t.Fatalf("fmt -check must not modify the file; got %q", string(got))
+	}
+}
+
+// fmt -check on a clean file: no output, exit 0.
+func TestRun_FmtCheck_SingleCleanFile_NoOutputExitZero(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"clean.tf": fmtCleanTF})
+	path := filepath.Join(dir, "clean.tf")
+	code, stdout, stderr := runCLI("fmt", "-check", path)
+	if code != 0 {
+		t.Fatalf("fmt -check <clean file> should exit 0, got %d (stderr=%q)", code, stderr)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Errorf("expected no stdout, got %q", stdout)
+	}
+}
+
+// fmt on a non-existent path: exit 2 with a useful error message.
+func TestRun_Fmt_NonExistentPath_ExitTwo(t *testing.T) {
+	dir := writeTFDir(t, nil)
+	missing := filepath.Join(dir, "does-not-exist.tf")
+	code, _, stderr := runCLI("fmt", missing)
+	if code != 2 {
+		t.Errorf("fmt <missing> should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+	if stderr == "" {
+		t.Error("expected an error message on stderr")
+	}
+}
+
+// fmt -recursive on a file path is meaningless; reject with exit 2.
+func TestRun_Fmt_RecursiveOnFile_ExitTwo(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"a.tf": fmtCleanTF})
+	path := filepath.Join(dir, "a.tf")
+	code, _, stderr := runCLI("fmt", "-recursive", path)
+	if code != 2 {
+		t.Errorf("fmt -recursive <file> should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+}
+
 // ── describe --json must propagate write errors (C15) ────────────────────────
 
 // errWriter is a Writer that always fails on Write — simulates closed pipe /

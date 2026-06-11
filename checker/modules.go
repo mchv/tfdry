@@ -170,22 +170,27 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 		case "bool":
 			return TypeSchema{Kind: SchemaBool}
 		case "list", "set":
-			s := TypeSchema{Kind: SchemaList}
+			// Malformed list()/set() (zero args) or list(a, b) (too many args)
+			// should not become a concrete container with Elem=nil — that
+			// produces misleading E006 ("declared list, got string") at the
+			// caller when the actual problem is the module's broken type
+			// constraint. Fail safe: return Unknown so checks are skipped.
+			if len(e.Args) != 1 {
+				return TypeSchema{Kind: SchemaUnknown}
+			}
+			elem := parseTypeSchema(e.Args[0])
+			s := TypeSchema{Kind: SchemaList, Elem: &elem}
 			if e.Name == "set" {
 				s.Kind = SchemaSet
 			}
-			if len(e.Args) == 1 {
-				elem := parseTypeSchema(e.Args[0])
-				s.Elem = &elem
-			}
 			return s
 		case "map":
-			s := TypeSchema{Kind: SchemaMap}
-			if len(e.Args) == 1 {
-				elem := parseTypeSchema(e.Args[0])
-				s.Elem = &elem
+			// Same fail-safe stance for map() / map(a, b) — see "list", "set".
+			if len(e.Args) != 1 {
+				return TypeSchema{Kind: SchemaUnknown}
 			}
-			return s
+			elem := parseTypeSchema(e.Args[0])
+			return TypeSchema{Kind: SchemaMap, Elem: &elem}
 		case "object":
 			return parseObjectSchema(e)
 		case "optional":
@@ -207,15 +212,18 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 }
 
 // parseObjectSchema parses object({key=type, ...}) into a TypeSchema.
+// Malformed object() forms (wrong arity or non-object literal) return Unknown
+// so compareObjectToSchema doesn't flag every key in the caller's literal as
+// E007 "unknown field" — the real bug is the module type constraint.
 func parseObjectSchema(e *hclsyntax.FunctionCallExpr) TypeSchema {
-	s := TypeSchema{Kind: SchemaObject, Fields: make(map[string]TypeSchema)}
 	if len(e.Args) != 1 {
-		return s
+		return TypeSchema{Kind: SchemaUnknown}
 	}
 	obj, ok := e.Args[0].(*hclsyntax.ObjectConsExpr)
 	if !ok {
-		return s
+		return TypeSchema{Kind: SchemaUnknown}
 	}
+	s := TypeSchema{Kind: SchemaObject, Fields: make(map[string]TypeSchema)}
 	for _, item := range obj.Items {
 		key := objectKeyName(item.KeyExpr)
 		if key == "" {
@@ -273,9 +281,15 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]LocalInfo, ch
 			continue
 		}
 
-		// Security: ensure resolved module dir stays within the project root
-		// and is not the project root itself (self-reference via "./" or ".").
-		// Use EvalSymlinks to resolve any symlinks in the path before comparing.
+		// Resolve symlinks to detect self-references (source = "." or any
+		// path that resolves back to the project root) and to follow any
+		// indirection before checks. We intentionally do NOT enforce
+		// containment within the project root: parent-relative paths like
+		// `../shared/<module>` are the standard monorepo pattern and must
+		// be checked. tfdry runs with the user's permissions on the user's
+		// own files, so a project-root boundary doesn't add a real security
+		// property — symlink rejection on file open (O_NOFOLLOW) is the
+		// actual defence (see G10 / round 4).
 		moduleDir := filepath.Join(dir, filepath.FromSlash(source))
 		realModule, err1 := filepath.EvalSymlinks(moduleDir)
 		realDir, err2 := filepath.EvalSymlinks(dir)
@@ -283,18 +297,7 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]LocalInfo, ch
 			continue
 		}
 		if realModule == realDir {
-			continue // self-reference — skip
-		}
-		// Containment check: realModule must be inside realDir. filepath.Rel
-		// is more idiomatic than strings.HasPrefix and handles edge cases
-		// (different Windows volumes return an error; ".."-prefixed *child*
-		// names like "..hidden" don't false-trigger as parent-escape).
-		rel, err := filepath.Rel(realDir, realModule)
-		if err != nil {
-			continue // different volume / unrelated paths
-		}
-		if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-			continue // path escapes project root
+			continue // self-reference — skip to avoid recursion
 		}
 
 		schemas := parseModuleVarSchemas(moduleDir, cache)

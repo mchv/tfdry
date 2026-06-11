@@ -108,22 +108,32 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 		return false, err
 	}
 	tmpName := tmp.Name()
+
+	// Single deferred cleanup keyed on a success flag, so the temp file is
+	// reliably reaped on every error path without four duplicated
+	// `tmp.Close(); os.Remove(...)` calls. Once Rename succeeds the temp
+	// file no longer exists at tmpName, so we skip cleanup entirely.
+	// tmp.Close() is safe to call twice (the second returns EBADF, ignored).
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+
 	if _, err := tmp.Write(formatted); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
 		return false, err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
 		return false, err
 	}
 	if err := os.Chmod(tmpName, perm); err != nil {
-		os.Remove(tmpName)
 		return false, err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
 		return false, err
 	}
+	renamed = true
 	return true, nil
 }

@@ -162,12 +162,28 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 //   - -check: don't rewrite, print filenames that would change, exit 3 if any
 //   - -recursive: walk subdirs (skip hidden ones, e.g. .terraform/.git)
 //
+// `path` may be either a directory or a single file (G11 — terraform fmt
+// parity). With a single file, `-recursive` is rejected as nonsensical.
+//
 // Exit codes match terraform fmt:
 //   - 0 = success (clean, or successfully rewrote)
-//   - 2 = parse / write error
+//   - 2 = parse / write error / bad usage
 //   - 3 = -check found unformatted files
-func runFmt(stdout, stderr io.Writer, dir string, check, recursive bool) int {
-	dirs, err := collectFmtDirs(dir, recursive)
+func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
+	fi, err := os.Stat(path)
+	if err != nil {
+		fmt.Fprintln(stderr, "tfdry fmt:", err)
+		return 2
+	}
+	if !fi.IsDir() {
+		if recursive {
+			fmt.Fprintf(stderr, "tfdry fmt: -recursive cannot be used with a file path: %s\n", path)
+			return 2
+		}
+		return runFmtFile(stdout, stderr, path, check)
+	}
+
+	dirs, err := collectFmtDirs(path, recursive)
 	if err != nil {
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
 		return 2
@@ -192,7 +208,7 @@ func runFmt(stdout, stderr io.Writer, dir string, check, recursive bool) int {
 			}
 			anyDirty = true
 			absFile := filepath.Join(d, f.Name)
-			relPath, relErr := filepath.Rel(dir, absFile)
+			relPath, relErr := filepath.Rel(path, absFile)
 			if relErr != nil {
 				relPath = absFile
 			}
@@ -211,6 +227,31 @@ func runFmt(stdout, stderr io.Writer, dir string, check, recursive bool) int {
 	}
 	if check && anyDirty {
 		return 3
+	}
+	return 0
+}
+
+// runFmtFile formats a single file path, the file-mode counterpart of the
+// directory-walking branch in runFmt. Mirrors terraform fmt's behaviour for
+// individual files: prints the path on stdout when dirty, rewrites in-place
+// unless `check` is set, and uses exit code 3 only when -check finds dirt.
+func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(stderr, "tfdry fmt:", err)
+		return 2
+	}
+	formatted := hclwrite.Format(src)
+	if bytes.Equal(src, formatted) {
+		return 0
+	}
+	fmt.Fprintln(stdout, path)
+	if check {
+		return 3
+	}
+	if err := checker.WriteFormatted(path, formatted); err != nil {
+		fmt.Fprintln(stderr, "Error formatting", path+":", err)
+		return 2
 	}
 	return 0
 }
