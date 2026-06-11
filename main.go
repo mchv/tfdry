@@ -96,6 +96,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "tfdry: %s does not accept a positional argument\n", subcmd)
 		return 2
 	}
+	// -check / -recursive only apply to the `fmt` subcommand. Reject early
+	// so a user who types `tfdry -check ./infra` (expecting a format check)
+	// gets a clear error instead of a silent lint pass with the flag
+	// ignored (C19).
+	if subcmd != "fmt" {
+		if fmtCheck {
+			fmt.Fprintln(stderr, "tfdry: -check is only valid with the fmt subcommand")
+			return 2
+		}
+		if fmtRecursive {
+			fmt.Fprintln(stderr, "tfdry: -recursive is only valid with the fmt subcommand")
+			return 2
+		}
+	}
 
 	switch subcmd {
 	case "describe":
@@ -111,21 +125,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// Parse violations (E000, E001) are always emitted — not subject to --checks filtering.
 	violations := append([]checker.Violation{}, parseViolations...)
-	violations = append(violations, checker.Run(files, checksFilter, dir)...)
 
-	// --fix: rewrite unformatted files when E008 is enabled.
-	// Only removes E008 from output for files that were successfully written.
-	if fixFlag && checksFilter.Enabled("E008") {
-		fixed, fixViolations := checker.FixFormat(files, dir)
+	// G21: when --fix is enabled, skip E008 in the initial Run pass.
+	// `checker.Run` would otherwise format every file just to emit E008,
+	// and `FixFormat` formats them again to write — doubling the
+	// hclwrite.Format work per dirty file. By disabling E008 here,
+	// FixFormat becomes the single emitter of E008 (for files it can't
+	// write — see G22 in checker/format.go which appends E008 alongside
+	// E000 on write failure so the actionable signal is preserved).
+	runFilter := checksFilter
+	shouldFix := fixFlag && checksFilter.Enabled("E008")
+	if shouldFix {
+		runFilter = checksFilterWithout(checksFilter, "E008")
+	}
+	violations = append(violations, checker.Run(files, runFilter, dir)...)
+
+	if shouldFix {
+		_, fixViolations := checker.FixFormat(files, dir)
 		violations = append(violations, fixViolations...)
-		var filtered []checker.Violation
-		for _, v := range violations {
-			if v.Code == "E008" && fixed[v.File] {
-				continue
-			}
-			filtered = append(filtered, v)
-		}
-		violations = filtered
 	}
 
 	report := output.NewReport(dir, violations)
@@ -200,7 +217,16 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 	for _, d := range dirs {
 		files, parseViolations := checker.ParseDir(d)
 		for _, v := range parseViolations {
-			fmt.Fprintf(stderr, "Error: %s: %s\n", v.File, v.Message)
+			// Show the path relative to the user-supplied root so a
+			// recursive run reports the subdir, not just a bare filename
+			// that may exist under several subdirs (G19). Falls back to
+			// the absolute path if Rel can't compute one.
+			absFile := filepath.Join(d, v.File)
+			relPath, relErr := filepath.Rel(path, absFile)
+			if relErr != nil {
+				relPath = absFile
+			}
+			fmt.Fprintf(stderr, "Error: %s: %s\n", relPath, v.Message)
 			anyError = true
 		}
 		for _, f := range files {
@@ -268,6 +294,30 @@ func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
 		return 2
 	}
 	return 0
+}
+
+// checksFilterWithout returns a CheckSet equivalent to filter but with code
+// disabled. Used by --fix (G21) to skip E008 in the initial checker.Run pass:
+// since FixFormat will compute the formatted bytes itself, having Run also
+// format every file just to emit E008 is wasted work. When filter is nil/
+// empty (the implicit "all enabled" sentinel), this expands the AllChecks()
+// list and removes the named code so the result is "all except code".
+func checksFilterWithout(filter checker.CheckSet, code string) checker.CheckSet {
+	out := make(checker.CheckSet)
+	if len(filter) == 0 {
+		for _, c := range checker.AllChecks() {
+			if c.Code != code {
+				out[c.Code] = struct{}{}
+			}
+		}
+		return out
+	}
+	for k := range filter {
+		if k != code {
+			out[k] = struct{}{}
+		}
+	}
+	return out
 }
 
 // collectFmtDirs returns directories to scan. With recursive=false this is

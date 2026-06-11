@@ -31,6 +31,45 @@ func TestNewReport_NilViolations_EmptyJSONArray(t *testing.T) {
 	}
 }
 
+// C21: violations carrying terminal-injection or Trojan Source payloads
+// in their File/Message fields must not leak into JSON output. JSON
+// consumers commonly print decoded values to a terminal (e.g. `jq`,
+// pretty-printers in CI dashboards), so unsanitized Bidi/control chars
+// in JSON would attack downstream just as they would in human output.
+// The Report constructor sanitizes once, so both writers see clean data.
+func TestWriteJSON_StripsTerminalInjection(t *testing.T) {
+	const rlo = "\u202E"
+	vs := []checker.Violation{
+		{Code: "E001", Severity: "error",
+			File:    "evil" + rlo + "fn.tf\x1b[31m",
+			Message: "msg" + rlo + "rest\x1b]0;TITLE\x07",
+		},
+	}
+	var buf bytes.Buffer
+	if err := output.WriteJSON(&buf, output.NewReport("/dir", vs)); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	// JSON-encoded forms of these characters must also be absent (encoding/json
+	// escapes control chars to \uXXXX sequences, which still render in
+	// terminals when downstream tools print decoded values).
+	mustNot := []string{
+		"\u202E",  // bidi RLO (raw)
+		"\\u202E", // JSON-escaped bidi RLO
+		"\\u202e",
+		"\x1b",    // raw ESC
+		"\\u001B", // JSON-escaped ESC
+		"\\u001b",
+		"\x07",    // raw BEL
+		"\\u0007", // JSON-escaped BEL
+	}
+	for _, s := range mustNot {
+		if strings.Contains(got, s) {
+			t.Errorf("JSON output must not contain %q (full output: %q)", s, got)
+		}
+	}
+}
+
 func TestNewReport_SummaryCounting(t *testing.T) {
 	vs := []checker.Violation{
 		{Code: "E001", Severity: "error"},

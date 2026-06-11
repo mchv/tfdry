@@ -128,9 +128,13 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 	if diags.HasErrors() {
 		var vs []Violation
 		for _, d := range diags {
-			v := Violation{Code: "E001", Severity: "error", Message: d.Detail}
+			// Always populate File from the directory entry name — file-level
+			// or global HCL diagnostics may have d.Subject == nil (e.g. lex-
+			// time failures with no position), which would otherwise leave
+			// File empty and prevent downstream consumers from grouping or
+			// addressing the error to its source file (G20).
+			v := Violation{Code: "E001", Severity: "error", File: e.Name(), Message: d.Detail}
 			if d.Subject != nil {
-				v.File = d.Subject.Filename
 				v.Line = d.Subject.Start.Line
 			}
 			vs = append(vs, v)

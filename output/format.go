@@ -31,19 +31,33 @@ type Summary struct {
 
 // NewReport builds a Report from a directory path and a list of violations.
 // A nil violations slice is normalised to an empty slice so JSON output is [] not null.
+//
+// The File and Message fields of every violation are sanitized here (C21):
+// stripping ANSI/control sequences and Bidi-override format characters
+// before either the human or JSON writer sees the data. JSON consumers
+// commonly pipe values to a terminal (e.g. `jq`, CI dashboards), so the
+// JSON path needs the same protection as the human path. Sanitizing once
+// at the constructor keeps both writers consistent and lets the human
+// writer skip per-field re-sanitization.
 func NewReport(dir string, violations []checker.Violation) Report {
 	if violations == nil {
 		violations = make([]checker.Violation, 0)
 	}
+	clean := make([]checker.Violation, len(violations))
+	for i, v := range violations {
+		v.File = sanitize(v.File)
+		v.Message = sanitize(v.Message)
+		clean[i] = v
+	}
 	s := Summary{}
-	for _, v := range violations {
+	for _, v := range clean {
 		if v.Severity == "error" {
 			s.Errors++
 		} else {
 			s.Warnings++
 		}
 	}
-	return Report{TfdryVersion: Version, Directory: dir, Violations: violations, Summary: s}
+	return Report{TfdryVersion: Version, Directory: dir, Violations: clean, Summary: s}
 }
 
 // WriteJSON writes r to w as indented JSON.
@@ -65,20 +79,24 @@ func WriteHuman(w io.Writer, r Report) {
 	// minimising syscalls for the large-output case.
 	var b bytes.Buffer
 	// Pre-size for the typical ~110-byte line plus the trailing summary.
-	// Saves the doubling-growth waste for the large-output case.
-	b.Grow(len(r.Violations)*128 + 64)
+	// Saves the doubling-growth waste for the large-output case. The
+	// helper guards against integer overflow on pathologically large
+	// violation slices (which would panic bytes.Buffer.Grow on a negative
+	// argument).
+	b.Grow(humanPreGrow(len(r.Violations)))
 	for _, v := range r.Violations {
 		b.WriteString(severityIcon(v.Severity))
 		b.WriteString("  [")
 		b.WriteString(v.Code)
 		b.WriteString("] ")
-		b.WriteString(sanitize(v.File))
+		// Fields are pre-sanitized by NewReport (C21 — see godoc there).
+		b.WriteString(v.File)
 		if v.Line > 0 {
 			b.WriteByte(':')
 			b.WriteString(strconv.Itoa(v.Line))
 		}
 		b.WriteString("  ")
-		b.WriteString(sanitize(v.Message))
+		b.WriteString(v.Message)
 		b.WriteByte('\n')
 	}
 	b.WriteByte('\n')
@@ -114,6 +132,34 @@ func severityIcon(s string) string {
 		return "✗"
 	}
 	return "⚠"
+}
+
+// humanPreGrow returns the byte capacity to pre-allocate for the WriteHuman
+// buffer given a violation count. Each violation produces ~110 bytes; we use
+// 128 for headroom plus 64 for the trailing summary line. Capped at 16 MB so
+// pathologically large counts (e.g. 16M+ violations on a 32-bit int) don't
+// either overflow the multiplication into a negative value (which would
+// panic bytes.Buffer.Grow) or pre-allocate gigabytes for unlikely cases.
+func humanPreGrow(n int) int {
+	const (
+		perViolation = 128
+		summaryBytes = 64
+		maxPreGrow   = 16 << 20 // 16 MB
+	)
+	if n <= 0 {
+		return summaryBytes
+	}
+	// Detect multiplication overflow: if n*perViolation/n != perViolation,
+	// the multiplication wrapped. Treat as "too big" → cap.
+	mul := n * perViolation
+	if mul/n != perViolation {
+		return maxPreGrow
+	}
+	want := mul + summaryBytes
+	if want < 0 || want > maxPreGrow {
+		return maxPreGrow
+	}
+	return want
 }
 
 // sanitize removes ANSI escape sequences and control characters to prevent

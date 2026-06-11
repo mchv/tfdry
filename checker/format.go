@@ -50,8 +50,12 @@ func WriteFormatted(path string, formatted []byte) error {
 }
 
 // FixFormat rewrites all unformatted files in dir atomically.
-// Returns the set of filenames successfully fixed and any E000 write-error violations.
-// Each file is formatted exactly once.
+// Returns the set of filenames successfully fixed and any E000/E008
+// violations. Each file is formatted exactly once. When a write fails,
+// both E000 (the write error itself) and E008 (the file is still
+// unformatted) are appended so callers that suppressed E008 in the
+// initial Run pass for performance (see main.go --fix path / G21+G22)
+// still surface the actionable formatting violation to the user.
 func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violations []Violation) {
 	fixed = make(map[string]bool)
 	for _, f := range files {
@@ -64,12 +68,20 @@ func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violation
 		}
 		path := filepath.Join(dir, f.Name)
 		if ok, err := writeFormatted(path, formatted); err != nil {
-			violations = append(violations, Violation{
-				Code:     "E000",
-				Severity: "error",
-				File:     f.Name,
-				Message:  fmt.Sprintf("cannot write formatted file: %v", err),
-			})
+			violations = append(violations,
+				Violation{
+					Code:     "E000",
+					Severity: "error",
+					File:     f.Name,
+					Message:  fmt.Sprintf("cannot write formatted file: %v", err),
+				},
+				Violation{
+					Code:     "E008",
+					Severity: "error",
+					File:     f.Name,
+					Message:  "file is not formatted (run tfdry --fix or terraform fmt)",
+				},
+			)
 		} else if ok {
 			fixed[f.Name] = true
 		}

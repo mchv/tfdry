@@ -137,6 +137,39 @@ func TestRun_FixWithChecksFilterExcludingE008_DoesNotFix(t *testing.T) {
 	}
 }
 
+// G21: with --fix enabled, the initial Run pass skips E008 (FixFormat owns
+// the format check). For successfully-fixed files there must be no E008 in
+// the JSON output. (Previously this was achieved by a post-Run filter on
+// `fixed[v.File]`; the new flow avoids the redundant Format work entirely
+// by not emitting E008 from Run in the first place.)
+func TestRun_FixSuccessfullyFixed_NoE008InOutput(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": "locals{a=\"x\"}\n",
+	})
+	code, stdout, _ := runCLI("--fix", "--json", dir)
+	if code != 0 {
+		t.Fatalf("expected exit 0 after --fix on dirty file, got %d", code)
+	}
+	var got struct {
+		Violations []struct {
+			Code string `json:"code"`
+		} `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	for _, v := range got.Violations {
+		if v.Code == "E008" {
+			t.Errorf("E008 must not appear after a successful --fix; got %s", stdout)
+		}
+	}
+	// And the file must actually be reformatted.
+	contents, _ := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if !strings.Contains(string(contents), "a = \"x\"") {
+		t.Errorf("file was not reformatted: %q", contents)
+	}
+}
+
 // ── --checks= edge cases ─────────────────────────────────────────────────────
 
 func TestRun_ChecksEmpty_ExitTwo(t *testing.T) {
@@ -443,6 +476,58 @@ func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
 	}
 }
 
+// C19: -check / -recursive only make sense with the `fmt` subcommand. Using
+// them on the lint path silently ignored the flag and ran the normal pass,
+// hiding user mistakes (e.g. `tfdry -check ./infra` would NOT check
+// formatting — it would lint the dir and exit accordingly). Reject as a
+// usage error.
+func TestRun_FmtFlagsOutsideFmt_ExitTwo(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"a.tf": `locals { a = "x" }`})
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"-check on lint", []string{"-check", dir}},
+		{"--check on lint", []string{"--check", dir}},
+		{"-recursive on lint", []string{"-recursive", dir}},
+		{"--recursive on lint", []string{"--recursive", dir}},
+		{"-check on describe", []string{"describe", "-check"}},
+		{"-recursive on version", []string{"version", "-recursive"}},
+		{"-check after dir on lint", []string{dir, "-check"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, stderr := runCLI(tc.args...)
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2; stderr=%q", code, stderr)
+			}
+			if stderr == "" {
+				t.Errorf("expected stderr message explaining the misuse")
+			}
+		})
+	}
+}
+
+// C19 (regression): -check and -recursive must STILL work under `fmt`.
+func TestRun_FmtFlagsWithFmtSubcommand_StillWork(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"a.tf": fmtCleanTF})
+	cases := [][]string{
+		{"fmt", "-check", dir},
+		{"fmt", "--check", dir},
+		{"fmt", "-recursive", dir},
+		{"fmt", "--recursive", dir},
+		{"fmt", "-check", "-recursive", dir},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			code, _, stderr := runCLI(args...)
+			if code == 2 {
+				t.Errorf("fmt with %v should not exit 2; stderr=%q", args, stderr)
+			}
+		})
+	}
+}
+
 // Known flags, the bare dir argument, and the `--` end-of-flags marker should
 // all keep working.
 func TestRun_KnownFlagsStillWork(t *testing.T) {
@@ -505,6 +590,32 @@ func TestRun_ExtrasAfterSubcommand_ExitTwo(t *testing.T) {
 				t.Errorf("stderr should mention extra/unexpected arg, got %q", stderr)
 			}
 		})
+	}
+}
+
+// G19: in `tfdry fmt -recursive`, parse errors in subdirs must be reported
+// with their subdirectory path so the user can locate the broken file.
+// Previously the bare basename was printed (e.g. `bad.tf`) — when the same
+// filename exists under multiple subdirs the message is ambiguous.
+func TestRun_FmtRecursive_ParseError_PrefixesSubdirPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "infra", "prod"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Invalid HCL in a deep subdir.
+	if err := os.WriteFile(filepath.Join(dir, "infra", "prod", "bad.tf"),
+		[]byte(`resource "x" "y" { @@@`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runCLI("fmt", "-recursive", dir)
+	if code != 2 {
+		t.Errorf("fmt -recursive on dir with parse error should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+	// stderr must mention the subdir path so the user can locate the file.
+	// Accept either OS path separator since the test runs on multiple platforms.
+	if !strings.Contains(stderr, filepath.Join("infra", "prod", "bad.tf")) &&
+		!strings.Contains(stderr, "infra/prod/bad.tf") {
+		t.Errorf("stderr should include subdir path 'infra/prod/bad.tf'; got %q", stderr)
 	}
 }
 

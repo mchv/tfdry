@@ -56,6 +56,33 @@ func TestE001_InvalidSyntax(t *testing.T) {
 	}
 }
 
+// G20: every E001 violation must carry a non-empty File field, even for
+// diagnostics where d.Subject is nil (file-level / global HCL errors don't
+// have a position). Without the fix, such violations get an empty filename
+// and downstream consumers (terminal output, JSON parsers grouping by file)
+// can't tell which file produced the error. Test-first regression: assert
+// File is populated for every E001 in the result.
+func TestE001_FilePopulatedEvenWhenSubjectNil(t *testing.T) {
+	t.Parallel()
+	// Multi-file scenario; the surface that previously had Subject=nil paths
+	// is hard to reproduce deterministically (requires HCL to emit a diag
+	// without subject). The strong invariant we assert is structural:
+	// regardless of why a diag fires, every emitted E001 carries the
+	// originating filename.
+	vs := run(t, map[string]string{
+		"a.tf": `resource "x" "y" { @@@`,
+		"b.tf": `locals { name = `, // unterminated expression
+	})
+	for _, v := range vs {
+		if v.Code != "E001" {
+			continue
+		}
+		if v.File == "" {
+			t.Errorf("E001 violation has empty File: %+v", v)
+		}
+	}
+}
+
 // E002 — duplicate local
 func TestE002_DuplicateLocal(t *testing.T) {
 	t.Parallel()
@@ -1234,8 +1261,11 @@ module "m" {
 	_ = vs // just ensure no panic
 }
 
-// Bug#3: --fix must keep E008 in output when the file could not be written.
-// Tested via FixFormat directly: a read-only directory causes CreateTemp to fail.
+// Bug#3 / G22: --fix must keep E008 in output when the file could not be
+// written. Once the --fix path skips E008 in the initial Run pass for
+// performance (G21), FixFormat itself becomes the only emitter of E008 for
+// unfixable files — without it, the user would see E000 (write error) but
+// not E008 (file is still unformatted), losing the actionable signal.
 func TestFixFormat_WriteError_ReturnsE000(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
@@ -1250,7 +1280,10 @@ func TestFixFormat_WriteError_ReturnsE000(t *testing.T) {
 	files, _ := checker.ParseDir(dir)
 	_, vs := checker.FixFormat(files, dir)
 	if !hasCode(vs, "E000") {
-		t.Fatalf("expected E000 when write fails, got %v", codes(vs))
+		t.Errorf("expected E000 when write fails, got %v", codes(vs))
+	}
+	if !hasCode(vs, "E008") {
+		t.Errorf("expected E008 alongside E000 (G22 — file is still unformatted), got %v", codes(vs))
 	}
 }
 
