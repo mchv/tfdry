@@ -619,6 +619,83 @@ func TestRun_FmtRecursive_ParseError_PrefixesSubdirPath(t *testing.T) {
 	}
 }
 
+// C22: when ParseDir emits a directory-level E000 (because os.ReadDir
+// failed on the directory itself, e.g. permission race), v.File is the
+// directory path — not a basename. Naively joining d+v.File then
+// duplicates the prefix (e.g. "infra/prod/infra/prod"). The
+// displayFmtPath helper detects that case and treats v.File as
+// already-a-path. Unit-tested directly because reliably triggering a
+// dir-level ParseDir error from a recursive walk requires a TOCTOU
+// race that's hard to script; the helper guarantees the correct path
+// regardless of trigger.
+func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		rootArg string
+		dir     string
+		vFile   string
+		want    string
+	}{
+		{
+			name:    "file-level violation: basename joined under dir",
+			rootArg: "/root",
+			dir:     "/root/infra/prod",
+			vFile:   "bad.tf",
+			want:    filepath.Join("infra", "prod", "bad.tf"),
+		},
+		{
+			name:    "dir-level violation: vFile equals dir, must NOT duplicate",
+			rootArg: "/root",
+			dir:     "/root/infra/prod",
+			vFile:   "/root/infra/prod",
+			want:    filepath.Join("infra", "prod"),
+		},
+		{
+			name:    "dir-level violation, relative tree",
+			rootArg: ".",
+			dir:     "infra/prod",
+			vFile:   "infra/prod",
+			want:    filepath.Join("infra", "prod"),
+		},
+		{
+			name:    "absolute vFile resolves under root",
+			rootArg: "/root",
+			dir:     "/root/infra",
+			vFile:   "/root/infra/main.tf",
+			want:    filepath.Join("infra", "main.tf"),
+		},
+		{
+			name:    "empty vFile falls back to dir",
+			rootArg: "/root",
+			dir:     "/root/infra",
+			vFile:   "",
+			want:    "infra",
+		},
+		{
+			name:    "root and dir identical: dir-level violation reports root itself",
+			rootArg: "/root",
+			dir:     "/root",
+			vFile:   "/root",
+			want:    ".",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := displayFmtPath(tc.rootArg, tc.dir, tc.vFile)
+			if got != tc.want {
+				t.Errorf("displayFmtPath(%q, %q, %q) = %q, want %q",
+					tc.rootArg, tc.dir, tc.vFile, got, tc.want)
+			}
+			// Strong invariant: the result must NEVER contain the same
+			// non-empty subpath segment twice in a row (the bug signature).
+			if tc.dir != "" && strings.Contains(got, tc.dir+string(filepath.Separator)+tc.dir) {
+				t.Errorf("path duplication detected in %q (dir=%q)", got, tc.dir)
+			}
+		})
+	}
+}
+
 // `tfdry fmt path1 path2` should also error — fmt takes at most one path.
 func TestRun_FmtMultiplePaths_ExitTwo(t *testing.T) {
 	dir1 := writeTFDir(t, nil)
@@ -778,6 +855,57 @@ func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
 	}
 }
 
+// C23: symlinked-DIR handling for `tfdry fmt`. The previous code path used
+// os.Stat (follows symlinks) to detect dir-vs-file, but collectFmtDirs uses
+// filepath.WalkDir which is Lstat-based and does NOT recurse into a
+// symlinked root — so `tfdry fmt -recursive <symlink-to-dir>` silently did
+// nothing and exited 0. Reject symlinked dir roots up front, consistent
+// with file-path symlink rejection (round 4 decision: avoid TOCTOU and
+// surprising traversal into unintended directories).
+func TestRun_Fmt_SymlinkedDirRoot_Rejected(t *testing.T) {
+	realDir := writeTFDir(t, map[string]string{"main.tf": fmtDirtyTF})
+	parent := t.TempDir()
+	link := filepath.Join(parent, "linked")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	// Both recursive and non-recursive must consistently reject symlinked
+	// dir roots — this is a security/atomicity property of the path, not
+	// of the traversal mode.
+	scenarios := []struct {
+		name string
+		args []string
+	}{
+		{"fmt non-recursive", []string{"fmt", link}},
+		{"fmt -recursive", []string{"fmt", "-recursive", link}},
+		{"fmt -check", []string{"fmt", "-check", link}},
+		{"fmt -check -recursive", []string{"fmt", "-check", "-recursive", link}},
+	}
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			code, _, stderr := runCLI(sc.args...)
+			if code != 2 {
+				t.Errorf("fmt %v on symlinked dir should exit 2, got %d (stderr=%q)",
+					sc.args, code, stderr)
+			}
+			if stderr == "" {
+				t.Errorf("expected an error message on stderr explaining symlink rejection; got empty")
+			}
+		})
+	}
+
+	// Strong invariant: the real dir's file MUST NOT have been modified
+	// through the symlinked path (no in-place rewrites bypassed).
+	content, err := os.ReadFile(filepath.Join(realDir, "main.tf"))
+	if err != nil {
+		t.Fatalf("real file unexpectedly missing: %v", err)
+	}
+	if string(content) != fmtDirtyTF {
+		t.Errorf("real dir was modified through symlink; got %q", string(content))
+	}
+}
+
 // ── describe --json must propagate write errors (C15) ────────────────────────
 
 // errWriter is a Writer that always fails on Write — simulates closed pipe /
@@ -812,5 +940,82 @@ func TestRun_MainJSON_PropagatesWriteError(t *testing.T) {
 	if code != 2 {
 		t.Errorf("--json with failing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
+	}
+}
+
+// C25: the human-output path should propagate stdout write errors with the
+// same exit code semantics as the JSON path, otherwise success is reported
+// even when stdout is broken (closed pipe, full disk, etc.).
+func TestRun_MainHuman_PropagatesWriteError(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
+	stdout := errWriter{err: io.ErrClosedPipe}
+	var stderr bytes.Buffer
+	code := run([]string{dir}, stdout, &stderr)
+	if code != 2 {
+		t.Errorf("human output with failing stdout should exit 2, got %d (stderr=%q)",
+			code, stderr.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected an error message on stderr explaining the write failure")
+	}
+}
+
+// C25 (no-violations branch): the early "No violations found" path also
+// writes to stdout and must propagate write errors.
+func TestRun_MainHuman_NoViolationsBranch_PropagatesWriteError(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
+	stdout := errWriter{err: io.ErrClosedPipe}
+	var stderr bytes.Buffer
+	code := run([]string{"--checks=E002", dir}, stdout, &stderr)
+	if code != 2 {
+		t.Errorf("clean human run with failing stdout should exit 2, got %d (stderr=%q)",
+			code, stderr.String())
+	}
+}
+
+// C25 (nearby-code review): runDescribe text mode (`tfdry describe` without
+// --json) was the closest analogue to WriteHuman and had the same issue —
+// JSON path propagated write errors but text path silently continued.
+// Symmetric fix.
+func TestRun_DescribeText_PropagatesWriteError(t *testing.T) {
+	stdout := errWriter{err: io.ErrClosedPipe}
+	var stderr bytes.Buffer
+	code := run([]string{"describe"}, stdout, &stderr)
+	if code != 2 {
+		t.Errorf("describe (text) with failing stdout should exit 2, got %d (stderr=%q)",
+			code, stderr.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected an error message on stderr explaining the write failure")
+	}
+}
+
+// C24: SKILL.md should not carry security claims that don't match what
+// tfdry actually implements. Specifically, the previous claim "All path
+// arguments are validated. Path traversal attempts are rejected." was
+// false: CLI paths are accepted as-is and module `source = "../shared"`
+// is explicitly allowed (terraform parity). Misleading agents/users into
+// believing they have sandboxing they don't have is worse than no claim
+// at all. This is a regression guard.
+func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile("SKILL.md")
+	if err != nil {
+		t.Fatalf("cannot read SKILL.md: %v", err)
+	}
+	s := string(content)
+	forbidden := []string{
+		"Path traversal attempts are rejected",
+		"All path arguments are validated",
+	}
+	for _, phrase := range forbidden {
+		if strings.Contains(s, phrase) {
+			t.Errorf("SKILL.md still contains misleading security claim: %q (C24)", phrase)
+		}
+	}
+	// Sanity: the Security section must still exist — we only object to
+	// false claims, not to having a Security section.
+	if !strings.Contains(s, "## Security") {
+		t.Error("SKILL.md should retain a Security section describing the actual posture")
 	}
 }

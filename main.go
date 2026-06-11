@@ -153,7 +153,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	} else {
-		output.WriteHuman(stdout, report)
+		if err := output.WriteHuman(stdout, report); err != nil {
+			fmt.Fprintln(stderr, "error writing output:", err)
+			return 2
+		}
 	}
 
 	if report.Summary.Errors > 0 {
@@ -171,10 +174,20 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 		}
 		return 0
 	}
-	fmt.Fprintln(stdout, "tfdry checks:")
-	fmt.Fprintln(stdout)
+	// C25 (nearby-code review): mirror the JSON path's write-error
+	// propagation. Build into a buffer first so a single Write either
+	// fully succeeds or fully fails — keeps "describe" output atomic
+	// from a stdout consumer's perspective and lets us detect the
+	// failure with one error check.
+	var b bytes.Buffer
+	fmt.Fprintln(&b, "tfdry checks:")
+	fmt.Fprintln(&b)
 	for _, c := range checks {
-		fmt.Fprintf(stdout, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
+		fmt.Fprintf(&b, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
+	}
+	if _, err := stdout.Write(b.Bytes()); err != nil {
+		fmt.Fprintln(stderr, "tfdry: error writing output:", err)
+		return 2
 	}
 	return 0
 }
@@ -192,6 +205,17 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 //   - 2 = parse / write error / bad usage
 //   - 3 = -check found unformatted files
 func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
+	// Reject symlinked roots up front (consistent with file-mode symlink
+	// rejection in runFmtFile, round 4). Without this, a symlinked-dir
+	// root produces inconsistent behaviour: ParseDir / os.ReadDir follows
+	// symlinks but filepath.WalkDir is Lstat-based and silently does
+	// nothing for `fmt -recursive`, exiting 0 with no output (C23).
+	// Reject in both modes so the security/atomicity contract of the path
+	// argument is uniform regardless of -recursive.
+	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(stderr, "tfdry fmt: refusing to operate on symlinked path: %s\n", path)
+		return 2
+	}
 	fi, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
@@ -219,14 +243,10 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 		for _, v := range parseViolations {
 			// Show the path relative to the user-supplied root so a
 			// recursive run reports the subdir, not just a bare filename
-			// that may exist under several subdirs (G19). Falls back to
-			// the absolute path if Rel can't compute one.
-			absFile := filepath.Join(d, v.File)
-			relPath, relErr := filepath.Rel(path, absFile)
-			if relErr != nil {
-				relPath = absFile
-			}
-			fmt.Fprintf(stderr, "Error: %s: %s\n", relPath, v.Message)
+			// that may exist under several subdirs (G19). The helper
+			// guards against the dir-level case where v.File == d, which
+			// would otherwise duplicate the path (C22).
+			fmt.Fprintf(stderr, "Error: %s: %s\n", displayFmtPath(path, d, v.File), v.Message)
 			anyError = true
 		}
 		for _, f := range files {
@@ -239,10 +259,7 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			}
 			anyDirty = true
 			absFile := filepath.Join(d, f.Name)
-			relPath, relErr := filepath.Rel(path, absFile)
-			if relErr != nil {
-				relPath = absFile
-			}
+			relPath := displayFmtPath(path, d, f.Name)
 			fmt.Fprintln(stdout, relPath)
 			if !check {
 				if err := checker.WriteFormatted(absFile, formatted); err != nil {
@@ -318,6 +335,35 @@ func checksFilterWithout(filter checker.CheckSet, code string) checker.CheckSet 
 		}
 	}
 	return out
+}
+
+// displayFmtPath formats the path embedded in an fmt-subcommand violation
+// for human-friendly stderr output, relative to the user-supplied root
+// when possible.
+//
+// vFile is normally a basename (file-level violations like E001 carry just
+// the .tf filename), in which case we join it under dir and relativize.
+// However, ParseDir can also emit a directory-level E000 where vFile == dir
+// (the directory path itself, not a filename) — e.g. a TOCTOU race where
+// a recursively-walked subdir becomes unreadable between WalkDir scheduling
+// and ParseDir reading it. Naively joining dir + vFile in that case yields
+// "<dir>/<dir>" (C22). We detect that and absolute-path cases and treat
+// vFile as already-a-path. Falls back to the absolute path when filepath.Rel
+// can't compute one (e.g. different drives on Windows).
+func displayFmtPath(rootArg, dir, vFile string) string {
+	var abs string
+	switch {
+	case vFile == "" || vFile == dir:
+		abs = dir
+	case filepath.IsAbs(vFile):
+		abs = vFile
+	default:
+		abs = filepath.Join(dir, vFile)
+	}
+	if rel, err := filepath.Rel(rootArg, abs); err == nil {
+		return rel
+	}
+	return abs
 }
 
 // collectFmtDirs returns directories to scan. With recursive=false this is

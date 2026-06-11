@@ -80,6 +80,12 @@ func TestE001_FilePopulatedEvenWhenSubjectNil(t *testing.T) {
 		if v.File == "" {
 			t.Errorf("E001 violation has empty File: %+v", v)
 		}
+		// G23: even if d.Detail is empty (some hclsyntax token-level
+		// errors only populate Summary), Message must never be empty
+		// or the violation is impossible to diagnose.
+		if v.Message == "" {
+			t.Errorf("E001 violation has empty Message: %+v", v)
+		}
 	}
 }
 

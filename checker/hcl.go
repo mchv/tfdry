@@ -133,7 +133,7 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 			// time failures with no position), which would otherwise leave
 			// File empty and prevent downstream consumers from grouping or
 			// addressing the error to its source file (G20).
-			v := Violation{Code: "E001", Severity: "error", File: e.Name(), Message: d.Detail}
+			v := Violation{Code: "E001", Severity: "error", File: e.Name(), Message: diagMessage(d)}
 			if d.Subject != nil {
 				v.Line = d.Subject.Start.Line
 			}
@@ -147,4 +147,23 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 		return parseResult{}
 	}
 	return parseResult{file: &ParsedFile{Name: e.Name(), Body: body, Src: src}}
+}
+
+// diagMessage returns a non-empty user-facing message for an HCL diagnostic.
+// hclsyntax token-/lex-level errors sometimes populate only d.Summary and
+// leave d.Detail empty; the original code used d.Detail directly, producing
+// E001 violations with empty Message which made syntax errors hard to
+// diagnose (G23). Order of preference: Detail, then Summary, then a sentinel
+// so consumers never see an empty Message.
+func diagMessage(d *hcl.Diagnostic) string {
+	if d == nil {
+		return "(no diagnostic message)"
+	}
+	if d.Detail != "" {
+		return d.Detail
+	}
+	if d.Summary != "" {
+		return d.Summary
+	}
+	return "(no diagnostic message)"
 }

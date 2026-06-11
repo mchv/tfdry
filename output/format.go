@@ -68,10 +68,13 @@ func WriteJSON(w io.Writer, r Report) error {
 }
 
 // WriteHuman writes r to w in a human-readable format with severity icons.
-func WriteHuman(w io.Writer, r Report) {
+// Returns any error encountered while writing to w. C25: callers should
+// propagate this so a stdout failure (closed pipe, full disk) maps to a
+// non-zero exit code, consistent with the JSON output path.
+func WriteHuman(w io.Writer, r Report) error {
 	if len(r.Violations) == 0 {
-		io.WriteString(w, "✓ No violations found.\n")
-		return
+		_, err := io.WriteString(w, "✓ No violations found.\n")
+		return err
 	}
 	// Build into a local buffer that grows lazily, then write once. Avoids
 	// the 4 KB upfront allocation that bufio.NewWriter would impose for
@@ -104,7 +107,8 @@ func WriteHuman(w io.Writer, r Report) {
 	b.WriteString(" error(s), ")
 	b.WriteString(strconv.Itoa(r.Summary.Warnings))
 	b.WriteString(" warning(s)\n")
-	w.Write(b.Bytes())
+	_, err := w.Write(b.Bytes())
+	return err
 }
 
 // WriteChecksJSON writes the list of available checks as 2-space-indented JSON
