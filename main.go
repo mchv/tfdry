@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/mchv/tfdry/checker"
 	"github.com/mchv/tfdry/output"
@@ -110,6 +112,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	// C27: symmetric to C19 — --json / --fix / --checks= are lint-path
+	// flags and don't apply to the `fmt` subcommand. fmt has its own
+	// stdout contract (prints filenames) and exit codes (3 for -check),
+	// always rewrites in non-check mode, and only does formatting (no
+	// individual check filtering). Silently ignoring these flags would
+	// leave the user thinking they took effect.
+	if subcmd == "fmt" {
+		if jsonFlag {
+			fmt.Fprintln(stderr, "tfdry: --json is not valid with the fmt subcommand")
+			return 2
+		}
+		if fixFlag {
+			fmt.Fprintln(stderr, "tfdry: --fix is not valid with the fmt subcommand")
+			return 2
+		}
+		if checksFilter != nil {
+			fmt.Fprintln(stderr, "tfdry: --checks= is not valid with the fmt subcommand")
+			return 2
+		}
+	}
 
 	switch subcmd {
 	case "describe":
@@ -138,7 +160,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if shouldFix {
 		runFilter = checksFilterWithout(checksFilter, "E008")
 	}
-	violations = append(violations, checker.Run(files, runFilter, dir)...)
+	// C28: CheckSet uses an empty/nil map as the implicit "all enabled"
+	// sentinel. If the user passed `--checks=E008 --fix`, removing E008
+	// from a single-element filter yields an empty CheckSet — which Run
+	// would interpret as "run everything", silently subverting the
+	// user's filter. Detect that case (originally non-empty filter that
+	// emptied out via exclusion) and skip Run entirely.
+	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
+	if !skipRun {
+		violations = append(violations, checker.Run(files, runFilter, dir)...)
+	}
 
 	if shouldFix {
 		_, fixViolations := checker.FixFormat(files, dir)
@@ -296,6 +327,36 @@ func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
+		return 2
+	}
+	// G24: parse for syntax errors before formatting. Directory mode
+	// surfaces parse errors via E001/exit 2; without this check, single-
+	// file mode would silently format invalid HCL (best-effort token
+	// reshuffling), exit 0, and leave the user thinking the file is
+	// fine. Parse failure → exit 2 with a stderr message identifying
+	// the file and the diagnostic.
+	if _, diags := hclsyntax.ParseConfig(src, filepath.Base(path), hcl.Pos{Line: 1, Column: 1}); diags.HasErrors() {
+		for _, d := range diags {
+			if d.Severity != hcl.DiagError {
+				continue
+			}
+			line := 0
+			if d.Subject != nil {
+				line = d.Subject.Start.Line
+			}
+			msg := d.Detail
+			if msg == "" {
+				msg = d.Summary
+			}
+			if msg == "" {
+				msg = "parse error"
+			}
+			if line > 0 {
+				fmt.Fprintf(stderr, "Error: %s:%d: %s\n", path, line, msg)
+			} else {
+				fmt.Fprintf(stderr, "Error: %s: %s\n", path, msg)
+			}
+		}
 		return 2
 	}
 	formatted := hclwrite.Format(src)

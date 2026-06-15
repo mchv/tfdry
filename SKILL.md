@@ -91,7 +91,7 @@ tfdry describe --json
 
 - tfdry does not execute Terraform code. It parses `.tf` files with hclsyntax/hclwrite — no `terraform validate`, no plan/apply, no module install.
 - tfdry makes no network requests.
-- Symlinked path arguments to `tfdry fmt` are rejected, and symlinked `.tf` files inside a scanned directory are skipped (`O_NOFOLLOW` open). Both prevent surprising file rewrites through symlinks.
+- Symlinked path arguments to `tfdry fmt` are rejected. On Unix-like systems, symlinked `.tf` files inside a scanned directory are also skipped via `O_NOFOLLOW`. **Windows is best-effort**: without `O_NOFOLLOW` the symlink-to-regular-file case is silently followed (symlinks pointing to directories or devices are still rejected by a post-open `IsRegular` check). Both behaviours aim to prevent surprising file rewrites through symlinks.
 - Output fields (filenames, local names, error messages) are sanitized for ANSI escape sequences and Unicode bidi-override / isolate-control characters before writing to stdout/JSON, mitigating terminal-injection attacks via crafted `.tf` content.
 - File reads are capped at 10 MiB per `.tf` file; oversized files are skipped with an `E000` violation.
 - tfdry does **not** sandbox path arguments. Relative paths (`./infra`, `../shared`), absolute paths, and module `source = "../foo"` references are accepted as given (matching terraform's behaviour). Run tfdry inside the directory or container scope you intend to validate.

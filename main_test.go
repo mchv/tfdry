@@ -170,6 +170,68 @@ func TestRun_FixSuccessfullyFixed_NoE008InOutput(t *testing.T) {
 	}
 }
 
+// C28: when `--checks=E008 --fix` is used, the filter has only E008.
+// `checksFilterWithout(filter, "E008")` returns an empty CheckSet.
+// CheckSet.Enabled() treats empty as "all enabled" (the implicit
+// sentinel), so without a guard the initial Run pass would run ALL
+// checks, defeating the user's explicit `--checks=E008` filter and
+// emitting violations the user asked NOT to see (e.g. E002 duplicates,
+// E003 undefined refs from a file that's intentionally a fragment).
+// The fix is to skip Run entirely when the filtered set is empty AND
+// the original was non-empty.
+func TestRun_FixWithChecksOnlyE008_DoesNotRunOtherChecks(t *testing.T) {
+	// File has a duplicate-local (would trigger E002) AND is unformatted
+	// (E008). User asked for ONLY E008, so E002 must NOT be reported.
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": "locals{a=\"x\"}\nlocals { a = \"y\" }\n",
+	})
+	code, stdout, stderr := runCLI("--checks=E008", "--fix", "--json", dir)
+	if code != 0 {
+		t.Fatalf("expected exit 0 (only E008 enabled, file fixed), got %d (stderr=%q stdout=%q)",
+			code, stderr, stdout)
+	}
+	var got struct {
+		Violations []struct {
+			Code string `json:"code"`
+			File string `json:"file"`
+		} `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	for _, v := range got.Violations {
+		// Only E008 (and E000, parse violations) may appear. E002 must NOT.
+		if v.Code != "E008" && v.Code != "E000" && v.Code != "E001" {
+			t.Errorf("unexpected violation code %s emitted with --checks=E008: %+v", v.Code, v)
+		}
+	}
+}
+
+// Regression guard for the inverse: --checks=E001,E008 --fix must still
+// run E001 (it's in the filter) but not E002 etc. and must still fix E008.
+func TestRun_FixWithMultiChecksIncludingE008_OnlyRunsRequested(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": "locals{a=\"x\"}\nlocals { a = \"y\" }\n",
+	})
+	code, stdout, _ := runCLI("--checks=E001,E008", "--fix", "--json", dir)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	var got struct {
+		Violations []struct {
+			Code string `json:"code"`
+		} `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	for _, v := range got.Violations {
+		if v.Code == "E002" {
+			t.Errorf("E002 must NOT appear when only E001+E008 are enabled: %s", stdout)
+		}
+	}
+}
+
 // ── --checks= edge cases ─────────────────────────────────────────────────────
 
 func TestRun_ChecksEmpty_ExitTwo(t *testing.T) {
@@ -528,8 +590,39 @@ func TestRun_FmtFlagsWithFmtSubcommand_StillWork(t *testing.T) {
 	}
 }
 
-// Known flags, the bare dir argument, and the `--` end-of-flags marker should
-// all keep working.
+// C27: --json/--fix/--checks= are lint-path flags that don't apply to
+// the fmt subcommand. The previous behaviour silently ignored them.
+// Symmetric to C19 (-check / -recursive being rejected outside fmt):
+// flags that don't apply to the chosen subcommand should reject early
+// with exit 2 instead of letting the user think they applied.
+func TestRun_LintFlagsWithFmtSubcommand_ExitTwo(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"a.tf": fmtCleanTF})
+	cases := [][]string{
+		// --json doesn't apply (fmt has its own stdout contract: filenames).
+		{"fmt", "--json", dir},
+		{"--json", "fmt", dir},
+		// --fix doesn't apply (fmt always rewrites or runs -check).
+		{"fmt", "--fix", dir},
+		{"--fix", "fmt", dir},
+		// --checks= filters individual checks; fmt only does E008.
+		{"fmt", "--checks=E001", dir},
+		{"--checks=E008", "fmt", dir},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			code, _, stderr := runCLI(args...)
+			if code != 2 {
+				t.Errorf("fmt with lint flag %v should exit 2, got %d (stderr=%q)",
+					args, code, stderr)
+			}
+			if stderr == "" {
+				t.Errorf("expected an error message on stderr explaining the rejection; got empty")
+			}
+		})
+	}
+}
+
+// Known flags and the bare dir argument should all keep working.
 func TestRun_KnownFlagsStillWork(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `locals {
@@ -776,6 +869,46 @@ func TestRun_FmtCheck_SingleCleanFile_NoOutputExitZero(t *testing.T) {
 	}
 }
 
+// G24: single-file fmt should report HCL syntax errors before formatting,
+// matching the directory-mode behaviour (which surfaces parse errors via
+// E001 with exit 2). Without this, `tfdry fmt bad.tf` would silently exit
+// 0 even when bad.tf has invalid HCL — the user is left thinking the
+// file was successfully formatted when it wasn't.
+func TestRun_Fmt_SingleFileWithSyntaxError_ExitTwo(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"bad.tf": `resource "x" "y" { @@@`, // invalid HCL
+	})
+	path := filepath.Join(dir, "bad.tf")
+	code, _, stderr := runCLI("fmt", path)
+	if code != 2 {
+		t.Errorf("fmt <bad-syntax-file> should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+	if stderr == "" {
+		t.Error("expected an error message on stderr explaining the syntax error")
+	}
+	// The original bad content must NOT have been overwritten.
+	contents, _ := os.ReadFile(path)
+	if string(contents) != `resource "x" "y" { @@@` {
+		t.Errorf("bad-syntax file was modified despite parse failure: %q", contents)
+	}
+}
+
+// Same for fmt -check: a syntax-broken file is a tool error (exit 2),
+// not a "would change" condition (exit 3).
+func TestRun_FmtCheck_SingleFileWithSyntaxError_ExitTwo(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"bad.tf": `resource "x" "y" { @@@`,
+	})
+	path := filepath.Join(dir, "bad.tf")
+	code, _, stderr := runCLI("fmt", "-check", path)
+	if code != 2 {
+		t.Errorf("fmt -check <bad-syntax-file> should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+	if stderr == "" {
+		t.Error("expected an error message on stderr explaining the syntax error")
+	}
+}
+
 // fmt on a non-existent path: exit 2 with a useful error message.
 func TestRun_Fmt_NonExistentPath_ExitTwo(t *testing.T) {
 	dir := writeTFDir(t, nil)
@@ -1017,5 +1150,14 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	// false claims, not to having a Security section.
 	if !strings.Contains(s, "## Security") {
 		t.Error("SKILL.md should retain a Security section describing the actual posture")
+	}
+	// C26: the symlink bullet must qualify Windows behaviour. The
+	// O_NOFOLLOW protection only applies on Unix-like systems; on
+	// Windows oNoFollow=0 and the symlink-to-regular-file case is
+	// silently followed (see checker/nofollow_windows.go). Without
+	// this qualification, the bullet overpromises cross-platform
+	// symlink skipping.
+	if !strings.Contains(s, "Windows") {
+		t.Error("SKILL.md symlink bullet must qualify Windows behaviour (C26)")
 	}
 }

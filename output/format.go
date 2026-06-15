@@ -178,7 +178,13 @@ func humanPreGrow(n int) int {
 //   - APC: ESC _ ... <ESC \>
 //   - Single-char ESC sequences (e.g. ESC c reset, ESC = keypad mode)
 //
-// All control characters except '\t' and '\n' are also stripped.
+// All control characters are stripped — INCLUDING `\n` and `\t` (C30).
+// Filenames on Unix can legitimately contain newlines/tabs, but in
+// attacker-controlled values they enable line-injection attacks
+// (forging fake violation lines in human output, breaking TSV
+// consumers, injecting newlines into JSON-decoded fields). Report
+// scaffolding (separators, summary lines) is added by WriteHuman
+// AFTER sanitize and is not affected.
 func sanitize(s string) string {
 	const (
 		stNormal    = iota
@@ -198,17 +204,21 @@ func sanitize(s string) string {
 				state = stEsc
 				continue
 			}
-			// Strip Cc (control) characters EXCEPT \t/\n which are legitimate
-			// horizontal/vertical whitespace in our reports. Also strip Cf
-			// (format) characters in the Bidi-override and isolate-control
-			// ranges — these are not caught by unicode.IsControl (which only
-			// covers Cc) but enable Trojan Source attacks (CVE-2021-42574)
-			// where U+202E etc. visually re-orders trailing text. Filenames
-			// and local names from a malicious .tf file can carry these.
+			// Strip Cc (control) characters. We previously preserved \t/\n
+			// as "legitimate whitespace in our reports", but that
+			// assumption only holds for report SCAFFOLDING (separators,
+			// summary line) — not for the attacker-controlled VALUES
+			// (File, Message) that go through this function. Strip them
+			// to prevent line-injection attacks from crafted filenames
+			// (C30). Also strip Cf (format) characters in the Bidi-
+			// override and isolate-control ranges — these are not
+			// caught by unicode.IsControl (which only covers Cc) but
+			// enable Trojan Source attacks (CVE-2021-42574) where U+202E
+			// etc. visually re-orders trailing text.
 			if isBidiOverride(r) {
 				continue
 			}
-			if unicode.IsControl(r) && r != '\t' && r != '\n' {
+			if unicode.IsControl(r) {
 				continue
 			}
 			b.WriteRune(r)

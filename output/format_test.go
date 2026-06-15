@@ -125,6 +125,89 @@ func TestSanitize_ANSIEscapeStripped(t *testing.T) {
 	}
 }
 
+// C30: filenames on Unix can contain `\n` and `\t`. An attacker who
+// controls a .tf file name (or a local name embedded in an error
+// message) could inject newlines that forge fake violation lines in
+// human output, or inject \n/\t into JSON-decoded fields that
+// downstream consumers print verbatim. sanitize() previously preserved
+// \n and \t as "legitimate whitespace in our reports", but that
+// assumption only holds for the report SCAFFOLDING (separators,
+// summary line) — not for attacker-controlled VALUES.
+//
+// Strips \n/\t from violation File and Message fields. Both human and
+// JSON paths must be free of these characters in field values.
+func TestSanitize_StripsNewlineAndTabInjection(t *testing.T) {
+	t.Parallel()
+	const fakeLine = "FAKE [E001] forged.tf:1  injected error"
+	vs := []checker.Violation{
+		// Newline-injected filename — forges a second violation line in human output.
+		{Code: "E003", Severity: "error",
+			File:    "main.tf\n✗  [E001] " + fakeLine,
+			Line:    1,
+			Message: "ok"},
+		// Tab-injected filename — could break TSV consumers / forge column boundaries.
+		{Code: "E003", Severity: "error",
+			File:    "main.tf\tfoo",
+			Line:    2,
+			Message: "ok"},
+		// Newline-injected message — forges a fake follow-up line.
+		{Code: "E003", Severity: "error",
+			File:    "main.tf",
+			Line:    3,
+			Message: "real error\n✗  [E001] " + fakeLine},
+	}
+	r := output.NewReport("/dir", vs)
+
+	// Human output: must NOT contain raw \n / \t inside the rendered values.
+	// The KEY invariant is that each violation produces exactly one line
+	// (no line injection). The forged TEXT content may still appear (it's
+	// part of the user's data, even if attacker-controlled), but it can
+	// no longer fake a separate violation line — strings like "✗  [E001]"
+	// will visibly run on after the previous line's content, making the
+	// injection obvious rather than convincing.
+	var buf bytes.Buffer
+	if err := output.WriteHuman(&buf, r); err != nil {
+		t.Fatalf("WriteHuman: %v", err)
+	}
+	human := buf.String()
+	// 3 violation lines + blank separator + summary line = 5 newlines.
+	// If \n leaked through sanitize, this would be 7+.
+	humanLines := strings.Count(human, "\n")
+	if humanLines != 5 {
+		t.Errorf("expected 5 newlines in human output (3 violations + blank + summary), got %d:\n%s",
+			humanLines, human)
+	}
+	// No raw tab character anywhere in the rendered output.
+	if strings.Contains(human, "\t") {
+		t.Errorf("tab character leaked into human output: %q", human)
+	}
+
+	// JSON output: must NOT contain literal \n or \t INSIDE field values.
+	// JSON itself uses newlines as structural whitespace, so we look at
+	// each violation's File and Message fields after decoding.
+	var got struct {
+		Violations []struct {
+			File    string `json:"file"`
+			Message string `json:"message"`
+		} `json:"violations"`
+	}
+	var jbuf bytes.Buffer
+	if err := output.WriteJSON(&jbuf, r); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	if err := json.Unmarshal(jbuf.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jbuf.String())
+	}
+	for i, v := range got.Violations {
+		if strings.ContainsAny(v.File, "\n\t") {
+			t.Errorf("violations[%d].file contains \\n or \\t after sanitize: %q", i, v.File)
+		}
+		if strings.ContainsAny(v.Message, "\n\t") {
+			t.Errorf("violations[%d].message contains \\n or \\t after sanitize: %q", i, v.Message)
+		}
+	}
+}
+
 // TestSanitize_TerminalInjection exercises every escape-sequence shape that
 // can affect a terminal: CSI, OSC (BEL- and ST-terminated), DCS, SOS, PM, APC.
 // All of these can be produced by an attacker via crafted .tf file names or
@@ -183,12 +266,6 @@ func TestSanitize_TerminalInjection(t *testing.T) {
 			input:    "x\x1bcy",
 			mustNot:  []string{"\x1b"},
 			mustHave: []string{"x", "y"},
-		},
-		{
-			name:     "control chars dropped except tab/newline",
-			input:    "good\x00bad\x07more\ttab\nline",
-			mustNot:  []string{"\x00", "\x07"},
-			mustHave: []string{"goodbadmore", "\t", "\n"},
 		},
 		{
 			name:     "no escapes pass through unchanged",
