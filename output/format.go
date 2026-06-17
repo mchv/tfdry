@@ -107,7 +107,12 @@ func WriteHuman(w io.Writer, r Report) error {
 	b.WriteString(" error(s), ")
 	b.WriteString(strconv.Itoa(r.Summary.Warnings))
 	b.WriteString(" warning(s)\n")
-	_, err := w.Write(b.Bytes())
+	// C33: use bytes.Buffer.WriteTo rather than w.Write(b.Bytes()). The
+	// io.Writer contract requires non-nil error on short write, but real
+	// implementations sometimes break that. WriteTo detects n != len(p)
+	// and surfaces io.ErrShortWrite, so a partial write doesn't slip
+	// through as silent success.
+	_, err := b.WriteTo(w)
 	return err
 }
 

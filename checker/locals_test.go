@@ -18,13 +18,22 @@ func TestInferFuncReturnType(t *testing.T) {
 		{"trimspace", TypeString},
 		{"replace", TypeString},
 		{"substr", TypeString},
+		// G25: more well-known string-returning functions.
+		{"file", TypeString},
+		{"templatefile", TypeString},
+		{"jsonencode", TypeString},
+		{"base64encode", TypeString},
+		{"base64decode", TypeString},
+		{"uuid", TypeString},
+		{"timestamp", TypeString},
 		// Number returns
 		{"tonumber", TypeNumber},
 		{"length", TypeNumber},
 		{"index", TypeNumber},
 		// Bool returns
 		{"tobool", TypeBool},
-		// Object returns
+		// Object returns (TypeObject is "any non-scalar" in our type system,
+		// so list-returning functions like keys/values map here too).
 		{"tolist", TypeObject},
 		{"toset", TypeObject},
 		{"flatten", TypeObject},
@@ -33,6 +42,9 @@ func TestInferFuncReturnType(t *testing.T) {
 		{"tomap", TypeObject},
 		{"merge", TypeObject},
 		{"zipmap", TypeObject},
+		// G25: keys/values return lists → TypeObject in our minimal type system.
+		{"keys", TypeObject},
+		{"values", TypeObject},
 		// Default → Unknown
 		{"unknown_func", TypeUnknown},
 		{"", TypeUnknown},

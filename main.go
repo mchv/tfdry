@@ -210,13 +210,17 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 	// fully succeeds or fully fails — keeps "describe" output atomic
 	// from a stdout consumer's perspective and lets us detect the
 	// failure with one error check.
+	//
+	// C32: use bytes.Buffer.WriteTo rather than stdout.Write(b.Bytes())
+	// so a spec-violating Writer that silently short-writes (returns
+	// n < len(p) with nil error) still surfaces io.ErrShortWrite.
 	var b bytes.Buffer
 	fmt.Fprintln(&b, "tfdry checks:")
 	fmt.Fprintln(&b)
 	for _, c := range checks {
 		fmt.Fprintf(&b, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
 	}
-	if _, err := stdout.Write(b.Bytes()); err != nil {
+	if _, err := b.WriteTo(stdout); err != nil {
 		fmt.Fprintln(stderr, "tfdry: error writing output:", err)
 		return 2
 	}

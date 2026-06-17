@@ -1123,6 +1123,57 @@ func TestRun_DescribeText_PropagatesWriteError(t *testing.T) {
 	}
 }
 
+// shortWriter simulates an io.Writer that breaks the spec: returns n < len(p)
+// with a nil error. The io.Writer contract requires non-nil error on short
+// write, but real-world implementations sometimes break that. The fix uses
+// bytes.Buffer.WriteTo which detects the violation and surfaces
+// io.ErrShortWrite, so output failures aren't silently swallowed (C32, C33).
+type shortWriter struct{ accept int }
+
+func (s shortWriter) Write(p []byte) (int, error) {
+	if s.accept >= len(p) {
+		return len(p), nil
+	}
+	return s.accept, nil // short write WITHOUT error — spec violation
+}
+
+// C32: runDescribe text mode should detect a short-write-without-error and
+// return exit 2 (consistent with the JSON path and human-output path which
+// already do via the writer's own error chain). The previous code used
+// `stdout.Write(b.Bytes())` and only checked the returned error, so a
+// spec-violating Writer that silently truncated would slip through and
+// report success.
+func TestRun_DescribeText_DetectsShortWrite(t *testing.T) {
+	stdout := shortWriter{accept: 5} // accept first 5 bytes only
+	var stderr bytes.Buffer
+	code := run([]string{"describe"}, stdout, &stderr)
+	if code != 2 {
+		t.Errorf("describe (text) with short-writing stdout should exit 2, got %d (stderr=%q)",
+			code, stderr.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected an error message on stderr explaining the short write")
+	}
+}
+
+// C33: same property for the main human-output path. WriteHuman previously
+// used `w.Write(b.Bytes())` which couldn't surface short writes either.
+func TestRun_MainHuman_DetectsShortWrite(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
+	stdout := shortWriter{accept: 5}
+	var stderr bytes.Buffer
+	code := run([]string{dir}, stdout, &stderr)
+	if code != 2 {
+		t.Errorf("human output with short-writing stdout should exit 2, got %d (stderr=%q)",
+			code, stderr.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected an error message on stderr explaining the short write")
+	}
+}
+
+// ── SKILL.md regression guards ───────────────────────────────────────────────
+
 // C24: SKILL.md should not carry security claims that don't match what
 // tfdry actually implements. Specifically, the previous claim "All path
 // arguments are validated. Path traversal attempts are rejected." was

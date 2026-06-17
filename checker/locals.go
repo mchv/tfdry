@@ -99,16 +99,34 @@ func inferExprType(expr hclsyntax.Expression) VarType {
 }
 
 // inferFuncReturnType returns the return type for well-known Terraform functions.
+//
+// The list intentionally covers only the functions tfdry sees most often in
+// practice (locals, module inputs). Adding more pure-typed functions here
+// directly improves E004 (non-scalar in interpolation) and E006 (module
+// input type mismatch) precision by reducing TypeUnknown returns. Functions
+// that would return TypeUnknown for "depends on the input" reasons (e.g.
+// `lookup`, `coalesce`, `try`) are intentionally omitted.
 func inferFuncReturnType(name string) VarType {
 	switch name {
-	case "tostring", "format", "join", "lower", "upper", "trimspace", "replace", "substr":
+	// Pure scalar-returning string functions.
+	case "tostring", "format", "join", "lower", "upper", "trimspace", "replace", "substr",
+		// G25: well-known string-returning functions used widely in
+		// terraform code (file/template I/O, encoding, identifiers).
+		"file", "templatefile", "jsonencode",
+		"base64encode", "base64decode",
+		"uuid", "timestamp":
 		return TypeString
 	case "tonumber", "length", "index":
 		return TypeNumber
 	case "tobool":
 		return TypeBool
+	// Non-scalar (object/list/map/set) returns. TypeObject is the catch-all
+	// non-scalar in our minimal type system, so list-returning functions
+	// (keys/values) map here too.
 	case "tolist", "toset", "flatten", "concat", "setunion",
-		"tomap", "merge", "zipmap":
+		"tomap", "merge", "zipmap",
+		// G25: keys/values return lists — non-scalar.
+		"keys", "values":
 		return TypeObject
 	default:
 		return TypeUnknown
