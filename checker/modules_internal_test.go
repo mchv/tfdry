@@ -63,3 +63,30 @@ func TestStringLiteralValue_NullStringInTemplateDoesNotPanic(t *testing.T) {
 		t.Errorf("stringLiteralValue(template{null string}) = %q, want empty string", got)
 	}
 }
+
+// G28: parseModuleVarSchemas writes to its `cache` argument
+// (`cache[moduleDir] = nil` on early-out paths, `cache[moduleDir] = schemas`
+// on success). If the caller passes a nil map — which is the natural way
+// to bypass caching from a test or a one-shot caller — those writes panic.
+// Lazy-init a local cache when the caller passes nil.
+func TestParseModuleVarSchemas_NilCacheDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("parseModuleVarSchemas panicked with nil cache: %v", r)
+		}
+	}()
+	// Use t.TempDir so the dir exists but contains no .tf files.
+	// Both branches (cache hit, then later miss) need to handle nil.
+	dir := t.TempDir()
+	if got := parseModuleVarSchemas(dir, nil); got == nil {
+		// Empty map is fine for an empty dir; nil would mean "couldn't
+		// read it", which is wrong for an empty-but-readable dir. The
+		// fix should return an empty map.
+		t.Errorf("parseModuleVarSchemas(empty dir, nil cache) returned nil, want empty map")
+	}
+	// Second call also passes nil — must not panic on the cache lookup.
+	if got := parseModuleVarSchemas(dir, nil); got == nil {
+		t.Errorf("parseModuleVarSchemas (second call, nil cache) returned nil")
+	}
+}

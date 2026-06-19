@@ -44,6 +44,9 @@ func FormatFile(path string, src []byte) error {
 // already produced `formatted` via hclwrite.Format. Useful when a previous
 // step in the pipeline (e.g. dirtiness detection in `tfdry fmt`) has
 // already computed the formatted form, so we don't recompute it here.
+//
+// Atomicity vs metadata preservation: see [writeFormatted] godoc for the
+// tradeoff (mode bits preserved; ownership / ACLs / xattrs reset on rename).
 func WriteFormatted(path string, formatted []byte) error {
 	_, err := writeFormatted(path, formatted)
 	return err
@@ -93,6 +96,26 @@ func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violation
 // Uses O_NOFOLLOW open to atomically reject symlinks and obtain real
 // permissions in one syscall (mirrors the pattern in hcl.go:parseOne).
 // Returns (true, nil) on success, (false, err) on error.
+//
+// Atomicity tradeoff (C37): the implementation uses CreateTemp + Rename
+// rather than an in-place truncating write. This guarantees the file is
+// never observed in a half-written state — a power loss or SIGKILL mid-
+// write leaves either the original content or the formatted content,
+// never a truncated-and-empty .tf file that would break `terraform plan`.
+//
+// The cost is that Rename replaces the inode. Mode bits are preserved
+// (we chmod the temp to match the original), but the following
+// metadata is NOT preserved across the rename:
+//   - File ownership (uid/gid) — temp is owned by the running user
+//   - POSIX ACLs (where the filesystem supports them)
+//   - Extended attributes (xattrs)
+//   - Some filesystem-specific flags (e.g. immutable, append-only)
+//
+// In practice this matches what `terraform fmt`, `gofmt`, and `git`
+// already do for the same reason: source files in version control are
+// the dominant use case, where atomic safety beats metadata preservation.
+// Users who rely on group-shared trees or extended ACLs should be aware
+// that running `tfdry fmt` may strip those attributes on rewrite.
 func writeFormatted(path string, formatted []byte) (bool, error) {
 	// Cross-platform symlink rejection (G14): on Windows oNoFollow == 0 means
 	// O_NOFOLLOW is a no-op and OpenFile silently follows symlinks. Without

@@ -69,6 +69,13 @@ func (s TypeSchema) label() string {
 // variable name → TypeSchema. Returns nil if the directory can't be read.
 // Results are cached in the provided cache map (keyed by moduleDir).
 func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSchema) map[string]TypeSchema {
+	// G28: tolerate a nil cache. Later code writes to cache[moduleDir]
+	// (both early-out paths and the success path), which would panic on
+	// a nil map. Lazy-init a local cache so callers that don't care
+	// about result memoisation (tests, one-shot callers) can pass nil.
+	if cache == nil {
+		cache = make(map[string]map[string]TypeSchema)
+	}
 	if cached, ok := cache[moduleDir]; ok {
 		return cached
 	}

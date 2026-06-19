@@ -39,6 +39,12 @@ type Summary struct {
 // JSON path needs the same protection as the human path. Sanitizing once
 // at the constructor keeps both writers consistent and lets the human
 // writer skip per-field re-sanitization.
+//
+// C38: Report.Directory is also sanitized — the caller-supplied path can
+// contain control / ANSI / Bidi-override characters on Unix and would
+// otherwise leak into the JSON "directory" field, enabling the same
+// terminal- and line-injection attacks that C30 / C36 mitigated for the
+// human and fmt-subcommand paths.
 func NewReport(dir string, violations []checker.Violation) Report {
 	if violations == nil {
 		violations = make([]checker.Violation, 0)
@@ -57,7 +63,7 @@ func NewReport(dir string, violations []checker.Violation) Report {
 			s.Warnings++
 		}
 	}
-	return Report{TfdryVersion: Version, Directory: dir, Violations: clean, Summary: s}
+	return Report{TfdryVersion: Version, Directory: sanitize(dir), Violations: clean, Summary: s}
 }
 
 // WriteJSON writes r to w as indented JSON.

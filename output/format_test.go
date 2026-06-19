@@ -70,6 +70,49 @@ func TestWriteJSON_StripsTerminalInjection(t *testing.T) {
 	}
 }
 
+// C38: Report.Directory is taken directly from the caller-supplied path
+// and was not sanitized — unlike Violation.File / Violation.Message which
+// NewReport already cleans (C21). On Unix, directory paths can contain
+// ANSI escapes / Bidi-override / control characters, which then leak
+// straight into the JSON output's "directory" field. Same terminal- and
+// line-injection threat as C30 (newline injection) and C36 (fmt output);
+// closing the remaining hole in C21's coverage.
+func TestNewReport_SanitizesDirectoryField(t *testing.T) {
+	t.Parallel()
+	const rlo = "\u202E"
+	dirty := "evil" + rlo + "/dir\x1b[31m\x07\nFAKE_LINE"
+	r := output.NewReport(dirty, nil)
+
+	// The Directory field on the Report must be sanitized before any
+	// downstream rendering. Asserting on the field itself (not just the
+	// JSON output) makes the invariant impossible to bypass — every
+	// future Writer reading r.Directory benefits.
+	for _, s := range []string{"\u202E", "\x1b", "\x07", "\n"} {
+		if strings.Contains(r.Directory, s) {
+			t.Errorf("Report.Directory contains forbidden char %q after sanitize: %q",
+				s, r.Directory)
+		}
+	}
+
+	// And the same property must hold in the rendered JSON: encoding/json
+	// would otherwise escape \u202E etc. to \\u202E, which still renders
+	// as a control sequence when downstream tools decode and print it.
+	var buf bytes.Buffer
+	if err := output.WriteJSON(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	for _, s := range []string{
+		"\u202E", "\\u202E", "\\u202e",
+		"\x1b", "\\u001B", "\\u001b",
+		"\x07", "\\u0007",
+	} {
+		if strings.Contains(got, s) {
+			t.Errorf("JSON output must not contain %q (full output: %q)", s, got)
+		}
+	}
+}
+
 func TestNewReport_SummaryCounting(t *testing.T) {
 	vs := []checker.Violation{
 		{Code: "E001", Severity: "error"},
