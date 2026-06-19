@@ -1042,6 +1042,79 @@ variable "config" {
 	}
 }
 
+// G27: resolveExprType should follow transitive local references with
+// cycle detection. Without recursion, `local.b -> local.a -> 1` resolves
+// to TypeUnknown at local.b (because local.b's expression is a
+// ScopeTraversalExpr, not a literal), and E006 is silently skipped even
+// though the type IS resolvable. After fix, the chain resolves through
+// the locals map until a literal is reached.
+func TestE006_TransitiveLocalChain_DetectsMismatch(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+locals {
+  a = 1
+  b = local.a
+  c = local.b
+}
+module "m" {
+  source = "./modules/m"
+  v      = local.c
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `
+variable "v" {
+  type = string
+}
+`,
+		},
+	)
+	vs := runDir(t, dir)
+	if !hasCode(vs, "E006") {
+		t.Fatalf("expected E006 (number transitively passed as string), got %v", codes(vs))
+	}
+}
+
+// G27: cycle detection — `local.a = local.b`, `local.b = local.a` must NOT
+// recurse infinitely. resolveExprType should bail out via the cycle map and
+// return TypeUnknown without crashing or stack-overflowing.
+func TestE006_TransitiveLocalCycle_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `
+locals {
+  a = local.b
+  b = local.a
+}
+module "m" {
+  source = "./modules/m"
+  v      = local.a
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `
+variable "v" {
+  type = string
+}
+`,
+		},
+	)
+	// The strong invariant: doesn't panic / hang. With cycle detection,
+	// resolveExprType returns TypeUnknown for both ends of the cycle,
+	// and E006 is skipped (correct conservative behaviour).
+	vs := runDir(t, dir)
+	if hasCode(vs, "E006") {
+		t.Errorf("unexpected E006 for cyclic locals — should be TypeUnknown, got %v", codes(vs))
+	}
+}
+
 // ── E007: unknown module input key ───────────────────────────────────────────
 
 // E007: passing an input key that doesn't exist in the module's variables.tf.

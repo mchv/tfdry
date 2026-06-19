@@ -162,12 +162,28 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 		return TypeSchema{Kind: SchemaUnknown}
 
 	case *hclsyntax.FunctionCallExpr:
+		// HCL type keywords like `string` / `number` / `bool` are
+		// ScopeTraversalExpr in well-formed type constraints
+		// (`type = string`). If they parse as FunctionCallExpr, the
+		// constraint is malformed (e.g. `type = string(bad)`). Same
+		// fail-safe stance as list/set/map below: return Unknown so
+		// downstream compareExprToSchema doesn't emit misleading E006
+		// against a broken declaration (C35).
 		switch e.Name {
 		case "string":
+			if len(e.Args) != 0 {
+				return TypeSchema{Kind: SchemaUnknown}
+			}
 			return TypeSchema{Kind: SchemaString}
 		case "number":
+			if len(e.Args) != 0 {
+				return TypeSchema{Kind: SchemaUnknown}
+			}
 			return TypeSchema{Kind: SchemaNumber}
 		case "bool":
+			if len(e.Args) != 0 {
+				return TypeSchema{Kind: SchemaUnknown}
+			}
 			return TypeSchema{Kind: SchemaBool}
 		case "list", "set":
 			// Malformed list()/set() (zero args) or list(a, b) (too many args)
@@ -238,7 +254,10 @@ func parseObjectSchema(e *hclsyntax.FunctionCallExpr) TypeSchema {
 func objectKeyName(expr hclsyntax.Expression) string {
 	switch e := expr.(type) {
 	case *hclsyntax.LiteralValueExpr:
-		if e.Val.Type().FriendlyName() == "string" {
+		// G26: cty.NullVal(cty.String) reports FriendlyName "string" but
+		// AsString panics on null. HCL string literals don't normally
+		// parse as typed-null, but the defensive check costs nothing.
+		if e.Val.Type().FriendlyName() == "string" && !e.Val.IsNull() {
 			return e.Val.AsString()
 		}
 	case *hclsyntax.TemplateExpr:
@@ -517,11 +536,17 @@ func unwrapExpr(expr hclsyntax.Expression) hclsyntax.Expression {
 	return expr
 }
 
-// resolveExprType infers the type of an expression, resolving local.X references
-// through the locals map when direct inference returns TypeUnknown.
+// resolveExprType infers the type of an expression, resolving local.X
+// references through the locals map when direct inference returns
+// TypeUnknown. Transitive chains (local.b → local.a → 1) are resolved by
+// recursing through the referenced local's expression with cycle detection,
+// matching the same pattern used by varTypeToSchemaKind (G27).
 func resolveExprType(expr hclsyntax.Expression, locals map[string]LocalInfo) VarType {
-	t := inferExprType(expr)
-	if t != TypeUnknown {
+	return resolveExprTypeRecursive(expr, locals, nil)
+}
+
+func resolveExprTypeRecursive(expr hclsyntax.Expression, locals map[string]LocalInfo, seen map[string]struct{}) VarType {
+	if t := inferExprType(expr); t != TypeUnknown {
 		return t
 	}
 	ref, ok := expr.(*hclsyntax.ScopeTraversalExpr)
@@ -532,8 +557,28 @@ func resolveExprType(expr hclsyntax.Expression, locals map[string]LocalInfo) Var
 	if !ok {
 		return TypeUnknown
 	}
-	if li, defined := locals[attr.Name]; defined {
+	// Lazy init + cycle detection — a chain like local.a → local.b →
+	// local.a must terminate with TypeUnknown rather than recurse forever.
+	if seen == nil {
+		seen = make(map[string]struct{})
+	}
+	if _, cycle := seen[attr.Name]; cycle {
+		return TypeUnknown
+	}
+	seen[attr.Name] = struct{}{}
+	li, defined := locals[attr.Name]
+	if !defined {
+		return TypeUnknown
+	}
+	// Prefer the cached Type when known (literal/template/etc).
+	if li.Type != TypeUnknown {
 		return li.Type
+	}
+	// Otherwise recurse through the referenced local's expression — this
+	// is the case for transitive refs whose Type came back Unknown at
+	// build time because they pointed at another local.
+	if li.Expr != nil {
+		return resolveExprTypeRecursive(li.Expr, locals, seen)
 	}
 	return TypeUnknown
 }
@@ -548,12 +593,15 @@ func stringLiteralValue(expr hclsyntax.Expression) string {
 	switch e := expr.(type) {
 	case *hclsyntax.TemplateExpr:
 		if len(e.Parts) == 1 {
-			if lit, ok := e.Parts[0].(*hclsyntax.LiteralValueExpr); ok && lit.Val.Type().FriendlyName() == "string" {
+			// G26: defensive null check — see objectKeyName.
+			if lit, ok := e.Parts[0].(*hclsyntax.LiteralValueExpr); ok &&
+				lit.Val.Type().FriendlyName() == "string" && !lit.Val.IsNull() {
 				return lit.Val.AsString()
 			}
 		}
 	case *hclsyntax.LiteralValueExpr:
-		if e.Val.Type().FriendlyName() == "string" {
+		// G26: defensive null check — see objectKeyName.
+		if e.Val.Type().FriendlyName() == "string" && !e.Val.IsNull() {
 			return e.Val.AsString()
 		}
 	case *hclsyntax.TemplateWrapExpr:

@@ -171,6 +171,14 @@ func humanPreGrow(n int) int {
 	return want
 }
 
+// Sanitize is the exported alias for the package-internal sanitize helper.
+// Use it from outside the output package — e.g. the fmt subcommand in main.go
+// — when emitting attacker-influenced strings (filenames, HCL diagnostic
+// text) directly to stdout/stderr without going through NewReport (C36).
+func Sanitize(s string) string {
+	return sanitize(s)
+}
+
 // sanitize removes ANSI escape sequences and control characters to prevent
 // terminal injection via malicious content in .tf file names or local names.
 //

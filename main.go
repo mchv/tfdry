@@ -281,7 +281,14 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			// that may exist under several subdirs (G19). The helper
 			// guards against the dir-level case where v.File == d, which
 			// would otherwise duplicate the path (C22).
-			fmt.Fprintf(stderr, "Error: %s: %s\n", displayFmtPath(path, d, v.File), v.Message)
+			//
+			// C36: filenames and HCL diagnostic text can contain ANSI
+			// escapes / Bidi-override / newline characters from
+			// attacker-controlled .tf content. Sanitize before printing
+			// to prevent terminal-injection / line-injection in fmt output.
+			fmt.Fprintf(stderr, "Error: %s: %s\n",
+				output.Sanitize(displayFmtPath(path, d, v.File)),
+				output.Sanitize(v.Message))
 			anyError = true
 		}
 		for _, f := range files {
@@ -294,7 +301,9 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			}
 			anyDirty = true
 			absFile := filepath.Join(d, f.Name)
-			relPath := displayFmtPath(path, d, f.Name)
+			// C36: same sanitization for the dirty-file path printed to
+			// stdout (the user-facing list of formatted files).
+			relPath := output.Sanitize(displayFmtPath(path, d, f.Name))
 			fmt.Fprintln(stdout, relPath)
 			if !check {
 				if err := checker.WriteFormatted(absFile, formatted); err != nil {
@@ -340,6 +349,10 @@ func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
 	// fine. Parse failure → exit 2 with a stderr message identifying
 	// the file and the diagnostic.
 	if _, diags := hclsyntax.ParseConfig(src, filepath.Base(path), hcl.Pos{Line: 1, Column: 1}); diags.HasErrors() {
+		// C36: sanitize path and message before printing — both can
+		// carry attacker-controlled control / Bidi characters from the
+		// caller-supplied path or HCL diagnostic text.
+		safePath := output.Sanitize(path)
 		for _, d := range diags {
 			if d.Severity != hcl.DiagError {
 				continue
@@ -355,10 +368,11 @@ func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
 			if msg == "" {
 				msg = "parse error"
 			}
+			msg = output.Sanitize(msg)
 			if line > 0 {
-				fmt.Fprintf(stderr, "Error: %s:%d: %s\n", path, line, msg)
+				fmt.Fprintf(stderr, "Error: %s:%d: %s\n", safePath, line, msg)
 			} else {
-				fmt.Fprintf(stderr, "Error: %s: %s\n", path, msg)
+				fmt.Fprintf(stderr, "Error: %s: %s\n", safePath, msg)
 			}
 		}
 		return 2
@@ -367,12 +381,16 @@ func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
 	if bytes.Equal(src, formatted) {
 		return 0
 	}
-	fmt.Fprintln(stdout, path)
+	// C36: sanitize the file path before printing to stdout — the path
+	// came from the user's argv but could legitimately contain control
+	// chars on Unix (filenames are byte strings).
+	safePath := output.Sanitize(path)
+	fmt.Fprintln(stdout, safePath)
 	if check {
 		return 3
 	}
 	if err := checker.WriteFormatted(path, formatted); err != nil {
-		fmt.Fprintln(stderr, "Error formatting", path+":", err)
+		fmt.Fprintln(stderr, "Error formatting", safePath+":", err)
 		return 2
 	}
 	return 0

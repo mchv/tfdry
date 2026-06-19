@@ -127,6 +127,17 @@ func TestParseTypeSchema(t *testing.T) {
 		{"set(a, b) too many args → unknown", "x = set(string, number)", SchemaUnknown},
 		{"map() no args → unknown", "x = map()", SchemaUnknown},
 		{"map(a, b) too many args → unknown", "x = map(string, number)", SchemaUnknown},
+
+		// C35: same fail-safe stance for primitives. `string`/`number`/`bool`
+		// are TYPE KEYWORDS in HCL, not function calls — they should appear
+		// as ScopeTraversalExpr. If they parse as FunctionCallExpr, the
+		// type constraint is malformed (e.g. `type = string(bad)`). Returning
+		// the matching scalar Schema would let downstream compareExprToSchema
+		// emit misleading E006 against a broken declaration.
+		{"string(bad) malformed → unknown", "x = string(bad)", SchemaUnknown},
+		{"string() with arg → unknown", `x = string("foo")`, SchemaUnknown},
+		{"number(1) malformed → unknown", "x = number(1)", SchemaUnknown},
+		{"bool(true) malformed → unknown", "x = bool(true)", SchemaUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

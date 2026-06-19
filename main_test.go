@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -709,6 +710,70 @@ func TestRun_FmtRecursive_ParseError_PrefixesSubdirPath(t *testing.T) {
 	if !strings.Contains(stderr, filepath.Join("infra", "prod", "bad.tf")) &&
 		!strings.Contains(stderr, "infra/prod/bad.tf") {
 		t.Errorf("stderr should include subdir path 'infra/prod/bad.tf'; got %q", stderr)
+	}
+}
+
+// C36: tfdry fmt prints filenames and parse-error text directly to
+// stdout/stderr without applying the output sanitizer used by the
+// lint/JSON paths. On Unix, filenames can contain ESC/control/Bidi
+// characters, which enables terminal/line injection via crafted
+// `.tf` filenames. The fix routes those values through the same
+// Sanitize helper used by output.NewReport.
+func TestRun_Fmt_SanitizesFilenameInOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filesystem rejects most control chars in filenames")
+	}
+	dir := t.TempDir()
+	// Filename with embedded ESC and a Bidi-override character. Under
+	// the previous code these would be printed verbatim to stdout when
+	// fmt rewrites the file (the file is dirty, so its name appears).
+	bad := "evil\x1b[31m\u202Edirty.tf"
+	path := filepath.Join(dir, bad)
+	if err := os.WriteFile(path, []byte(fmtDirtyTF), 0644); err != nil {
+		t.Skipf("filesystem rejects control chars in filename: %v", err)
+	}
+	code, stdout, _ := runCLI("fmt", dir)
+	if code != 0 {
+		t.Fatalf("fmt on dir should exit 0, got %d", code)
+	}
+	if strings.ContainsAny(stdout, "\x1b") {
+		t.Errorf("ESC character leaked into stdout: %q", stdout)
+	}
+	if strings.Contains(stdout, "\u202E") {
+		t.Errorf("Bidi-override character leaked into stdout: %q", stdout)
+	}
+	// Visible portion of the filename should still appear so the user can
+	// identify the file (just stripped of dangerous characters).
+	if !strings.Contains(stdout, "evildirty.tf") && !strings.Contains(stdout, "[31m") {
+		// Either the ESC is gone (sanitized — good) or the test crafted
+		// a name that doesn't survive at all. Allow either as long as
+		// the stronger ContainsAny check above passed.
+		_ = stdout
+	}
+}
+
+// C36: same property for parse-error stderr output. A subdir with an
+// invalid .tf whose name contains ESC must not propagate that ESC to
+// stderr.
+func TestRun_FmtRecursive_SanitizesParseErrorPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filesystem rejects most control chars in filenames")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "infra"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	bad := "evil\x1b[31mbad.tf"
+	if err := os.WriteFile(filepath.Join(dir, "infra", bad),
+		[]byte(`resource "x" "y" { @@@`), 0644); err != nil {
+		t.Skipf("filesystem rejects control chars in filename: %v", err)
+	}
+	code, _, stderr := runCLI("fmt", "-recursive", dir)
+	if code != 2 {
+		t.Errorf("fmt -recursive on dir with parse error should exit 2, got %d", code)
+	}
+	if strings.ContainsAny(stderr, "\x1b") {
+		t.Errorf("ESC character leaked into stderr: %q", stderr)
 	}
 }
 

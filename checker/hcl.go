@@ -126,20 +126,7 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 
 	parsed, diags := hclsyntax.ParseConfig(src, e.Name(), hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
-		var vs []Violation
-		for _, d := range diags {
-			// Always populate File from the directory entry name — file-level
-			// or global HCL diagnostics may have d.Subject == nil (e.g. lex-
-			// time failures with no position), which would otherwise leave
-			// File empty and prevent downstream consumers from grouping or
-			// addressing the error to its source file (G20).
-			v := Violation{Code: "E001", Severity: "error", File: e.Name(), Message: diagMessage(d)}
-			if d.Subject != nil {
-				v.Line = d.Subject.Start.Line
-			}
-			vs = append(vs, v)
-		}
-		return parseResult{violations: vs}
+		return parseResult{violations: parseDiagsToViolations(diags, e.Name())}
 	}
 
 	body, ok := parsed.Body.(*hclsyntax.Body)
@@ -147,6 +134,30 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 		return parseResult{}
 	}
 	return parseResult{file: &ParsedFile{Name: e.Name(), Body: body, Src: src}}
+}
+
+// parseDiagsToViolations converts an hcl.Diagnostics slice into E001
+// violations. Only hcl.DiagError-severity diagnostics are emitted; warnings
+// (e.g. deprecation notices from hclsyntax) are skipped so they don't
+// inflate the error count or exit code. C34 — matches runFmtFile (G24)
+// which already filters to error-severity only.
+//
+// The File field is always populated from `filename` (which the caller
+// passes as e.Name()) so file-level diagnostics with d.Subject == nil
+// still carry a usable origin (G20).
+func parseDiagsToViolations(diags hcl.Diagnostics, filename string) []Violation {
+	var vs []Violation
+	for _, d := range diags {
+		if d.Severity != hcl.DiagError {
+			continue
+		}
+		v := Violation{Code: "E001", Severity: "error", File: filename, Message: diagMessage(d)}
+		if d.Subject != nil {
+			v.Line = d.Subject.Start.Line
+		}
+		vs = append(vs, v)
+	}
+	return vs
 }
 
 // diagMessage returns a non-empty user-facing message for an HCL diagnostic.
