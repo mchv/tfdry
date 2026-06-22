@@ -1276,4 +1276,16 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	if !strings.Contains(s, "Windows") {
 		t.Error("SKILL.md symlink bullet must qualify Windows behaviour (C26)")
 	}
+	// C39: the "never modifies files unless --fix" invariant is misleading
+	// because the `fmt` subcommand rewrites files by default (without
+	// -check). The line must NOT contain a blanket "never modifies"
+	// claim — it must qualify the fmt subcommand's write behaviour.
+	if strings.Contains(s, "tfdry never modifies files unless `--fix` is passed.") {
+		t.Error("SKILL.md still contains the misleading blanket invariant (C39); the fmt subcommand also writes")
+	}
+	// And the qualified replacement should call out that `tfdry fmt`
+	// (without -check) rewrites in place, so users aren't surprised.
+	if !strings.Contains(s, "tfdry fmt") {
+		t.Error("SKILL.md should mention `tfdry fmt` write behaviour explicitly (C39)")
+	}
 }

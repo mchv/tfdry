@@ -8,8 +8,8 @@ Everything runs inside a container with pinned versions so results are reproduci
 
 | Comparison | Why |
 |------------|-----|
-| `tfdry --checks=E008` vs `terraform fmt -check` | Closest apples-to-apples for read-only formatting check |
-| `tfdry fmt` vs `terraform fmt` (write mode, dirty input) | Apples-to-apples for the rewrite path; refreshes input per run |
+| `tfdry fmt -check` vs `terraform fmt -check -recursive` | Closest apples-to-apples for read-only formatting check; both exit 3 on dirt |
+| `tfdry fmt` vs `terraform fmt -recursive` (write mode, dirty input) | Apples-to-apples for the rewrite path; refreshes input per run |
 | `tfdry` (all checks) vs `terraform validate` | Different scopes but both are "is this code OK?" tools |
 | Scaling across small/medium/large | How each tool scales with directory size |
 | `tfdry` human vs JSON output | Cost of JSON encoding |

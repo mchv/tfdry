@@ -380,7 +380,14 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 		case SchemaList, SchemaSet:
 			if tup, ok := unwrapExpr(expr).(*hclsyntax.TupleConsExpr); ok {
 				for i, elemExpr := range tup.Exprs {
-					compareExprToSchema(file, line,
+					// C42: use the element's own line for multi-line
+					// literals so the violation points at the offending
+					// item, not the parent attribute.
+					elemLine := line
+					if r := elemExpr.StartRange(); r.Start.Line > 0 {
+						elemLine = r.Start.Line
+					}
+					compareExprToSchema(file, elemLine,
 						fmt.Sprintf("%s[%d]", context, i),
 						elemExpr, *schema.Elem, locals, checks, out)
 				}
@@ -393,7 +400,13 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 					if key == "" {
 						key = "?"
 					}
-					compareExprToSchema(file, line,
+					// C43: same as C42 — point at the value expression's
+					// line for multi-line object literals.
+					valLine := line
+					if r := item.ValueExpr.StartRange(); r.Start.Line > 0 {
+						valLine = r.Start.Line
+					}
+					compareExprToSchema(file, valLine,
 						fmt.Sprintf("%s[%q]", context, key),
 						item.ValueExpr, *schema.Elem, locals, checks, out)
 				}

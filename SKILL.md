@@ -8,8 +8,10 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
 
 ## Invariants
 
-- **tfdry never modifies files unless `--fix` is passed.** Without `--fix` it is purely read-only.
-- **`--fix` only rewrites files to fix formatting (E008).** It never modifies files for any other check.
+- **The lint path is purely read-only.** `tfdry [dir]` and `tfdry --json [dir]` never modify files.
+- **Only two flows write to disk**, both opt-in and obvious from the command:
+  - `tfdry --fix [dir]` — rewrites files to fix formatting (E008) only. Never modifies files for any other check.
+  - `tfdry fmt [path]` — rewrites unformatted files in place (default), unless `-check` is passed (read-only, exit 3 on dirt).
 - **Exit codes are strict:**
   - `0` — no violations found (or all violations were fixed by `--fix`)
   - `1` — one or more violations found

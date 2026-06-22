@@ -1115,6 +1115,92 @@ variable "v" {
 	}
 }
 
+// C42: list/set element type mismatches should report the line of the
+// offending element, not the parent attribute. With multi-line list
+// literals the parent line is misleading — the user has to scan through
+// the literal to find which element is wrong. tup.Exprs[i].StartRange()
+// gives the precise location.
+func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `module "m" {
+  source = "./modules/m"
+  names = [
+    "alpha",
+    "beta",
+    42,
+    "delta",
+  ]
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "names" { type = list(string) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	var got *checker.Violation
+	for i := range vs {
+		if vs[i].Code == "E006" {
+			got = &vs[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected E006 for list element mismatch, got %v", codes(vs))
+	}
+	// The `42` literal is on line 6 of main.tf (1-indexed: blank/module/source/names/alpha/beta/42).
+	// The attribute `names = [...]` starts on line 4. Anything reporting
+	// line 4 is the bug; line 6 is the fix.
+	if got.Line != 6 {
+		t.Errorf("expected violation Line=6 (the `42` literal), got %d — full violation: %+v",
+			got.Line, *got)
+	}
+}
+
+// C43: map element type mismatches should report the value expression's
+// line, not the parent attribute. Same reasoning as C42.
+func TestE006_MapValueMismatch_ReportsValueLine(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(t,
+		map[string]string{
+			"main.tf": `module "m" {
+  source = "./modules/m"
+  ports = {
+    http  = 80
+    https = 443
+    bad   = "not-a-number"
+    debug = 9000
+  }
+}
+`,
+		},
+		"modules/m",
+		map[string]string{
+			"variables.tf": `variable "ports" { type = map(number) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	var got *checker.Violation
+	for i := range vs {
+		if vs[i].Code == "E006" {
+			got = &vs[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected E006 for map value mismatch, got %v", codes(vs))
+	}
+	// The `bad = "not-a-number"` line is line 6 (1-indexed: module/source/ports/http/https/bad).
+	// The attribute `ports = {...}` starts on line 3.
+	if got.Line != 6 {
+		t.Errorf("expected violation Line=6 (the `bad = ...` line), got %d — full violation: %+v",
+			got.Line, *got)
+	}
+}
+
 // ── E007: unknown module input key ───────────────────────────────────────────
 
 // E007: passing an input key that doesn't exist in the module's variables.tf.

@@ -8,14 +8,17 @@ import (
 )
 
 // G26: cty.NullVal(cty.String).Type().FriendlyName() returns "string" but
-// .AsString() panics on null values. The string-extraction helpers
-// (objectKeyName, stringLiteralValue) and the LiteralValueExpr branch in
-// inferExprType all gate their AsString calls on FriendlyName == "string"
-// — without an additional !IsNull() check, a null literal would panic
-// instead of yielding an empty/unknown value. In practice HCL string
-// literals don't normally produce typed nulls during parse, but the
-// defensive check costs one extra method call and removes a panic surface
-// that downstream evaluation could otherwise reach.
+// .AsString() panics on null values. The two string-extraction helpers
+// in this package — objectKeyName and stringLiteralValue (TemplateExpr
+// and LiteralValueExpr branches) — gate their AsString calls on
+// FriendlyName == "string". Without an additional !IsNull() check, a
+// null literal would panic instead of yielding an empty value. In
+// practice HCL string literals don't normally produce typed nulls during
+// parse, but the defensive check costs one extra method call and
+// removes a panic surface that downstream evaluation could otherwise
+// reach. (Note: inferExprType in locals.go only inspects FriendlyName
+// for type detection — it never calls AsString — so it isn't part of
+// this panic surface.)
 func TestObjectKeyName_NullStringDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	// LiteralValueExpr carrying a null string. Wrapped in a deferred

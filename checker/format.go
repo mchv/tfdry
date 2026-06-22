@@ -176,9 +176,38 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return false, err
 	}
+	// C41: TOCTOU defense-in-depth. The initial Lstat/OpenFile checks
+	// established that `path` was a regular file, but between those
+	// checks and this rename, an attacker (or concurrent process) with
+	// write access to the parent directory could swap `path` for a
+	// symlink. POSIX rename(2) replaces the entry at `path` without
+	// following the symlink, so the symlink's target file is NOT
+	// modified — but the user-visible result is still a surprise (a
+	// regular file appears where the symlink used to be, instead of
+	// where the user thought their .tf file was). A final Lstat right
+	// before Rename closes the window and fails the operation when the
+	// race occurs.
+	//
+	// Production calls leave writeFormattedBeforeRename nil; tests set
+	// it to inject the swap deterministically between this hook and the
+	// Lstat below, so the race path is exercised without flaky timing.
+	if writeFormattedBeforeRename != nil {
+		writeFormattedBeforeRename(path)
+	}
+	if li, err := os.Lstat(path); err == nil && !li.Mode().IsRegular() {
+		return false, fmt.Errorf("not a regular file (raced)")
+	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return false, err
 	}
 	renamed = true
 	return true, nil
 }
+
+// writeFormattedBeforeRename is a test hook (C41). Production callers
+// must leave it nil; tests may set it to simulate a TOCTOU race by
+// swapping the target path between the initial regular-file checks and
+// the final pre-Rename Lstat. The nil check adds negligible overhead
+// (one indirect call per write) compared to the I/O cost of the actual
+// rewrite.
+var writeFormattedBeforeRename func(path string)
