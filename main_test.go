@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1291,16 +1292,33 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	}
 }
 
+// Package-level regexes used by extractRelativeLinks. Compiling once
+// (rather than on every call) avoids repeated work as the walker test
+// processes multiple template files.
+var (
+	// Inline form: [text](url) where url may include a title after whitespace.
+	inlineLinkRe = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
+	// Reference-definition form: leading whitespace, [ref]: url.
+	// (?m) so ^ matches start of every line.
+	refLinkRe = regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*([^\s]+)`)
+)
+
 // extractRelativeLinks finds every relative file-path link in markdown
-// content and returns them in order of appearance.
+// content and returns them in textual order of appearance.
 //
 // It recognises both common markdown link forms:
 //   - Inline links: [text](path) and [text](path "optional title")
 //   - Reference link definitions: [ref]: path
 //
+// Returned slice preserves the order links appear in the source text;
+// a reference definition that appears before an inline link in the
+// source comes first in the output (and vice versa).
+//
 // It filters out anything that is not a local relative file path:
 //   - Absolute URLs of any scheme (anything containing "://") —
 //     http://, https://, git://, ftp+ssh://, etc.
+//   - Protocol-relative URLs (//host/path) — absolute web links
+//     that omit the scheme; common legacy of HTTPS migration era.
 //   - mailto: links
 //   - Pure anchor links (#section)
 //
@@ -1308,31 +1326,36 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 // `../FOO.md#section` is reported as `../FOO.md`. Inline-link title
 // suffixes ("title") are also stripped.
 func extractRelativeLinks(content string) []string {
-	// Inline form: [text](url) where url may include a title after whitespace.
-	inlineRe := regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
-	// Reference-definition form: leading whitespace, [ref]: url
-	// (?m) so ^ matches start of every line.
-	refRe := regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*([^\s]+)`)
-
-	var raw []string
-	for _, m := range inlineRe.FindAllStringSubmatch(content, -1) {
-		raw = append(raw, m[1])
+	// Track both the text and the start offset so we can sort by
+	// textual position across the two regex passes.
+	type rawLink struct {
+		start int
+		text  string
 	}
-	for _, m := range refRe.FindAllStringSubmatch(content, -1) {
-		raw = append(raw, m[1])
+	var raw []rawLink
+	// FindAllStringSubmatchIndex returns [matchStart, matchEnd, g1Start, g1End, ...]
+	// for each match. We sort by matchStart (m[0]) to preserve appearance order.
+	for _, m := range inlineLinkRe.FindAllStringSubmatchIndex(content, -1) {
+		raw = append(raw, rawLink{start: m[0], text: content[m[2]:m[3]]})
 	}
+	for _, m := range refLinkRe.FindAllStringSubmatchIndex(content, -1) {
+		raw = append(raw, rawLink{start: m[0], text: content[m[2]:m[3]]})
+	}
+	sort.Slice(raw, func(i, j int) bool { return raw[i].start < raw[j].start })
 
 	var out []string
-	for _, link := range raw {
-		link = strings.TrimSpace(link)
+	for _, r := range raw {
+		link := strings.TrimSpace(r.text)
 		// Strip optional inline title suffix: (path "title").
 		if i := strings.IndexAny(link, " \t"); i > 0 {
 			link = link[:i]
 		}
-		// Skip absolute URLs of any scheme, mailto, and pure anchors.
-		// Using ://-containment instead of a per-scheme allowlist
-		// future-proofs against git://, ftp+ssh://, custom schemes, etc.
+		// Skip absolute URLs of any scheme, protocol-relative URLs,
+		// mailto, and pure anchors. The ://-containment check is
+		// scheme-agnostic; the //-prefix check separately catches
+		// protocol-relative URLs that omit the scheme entirely.
 		if strings.Contains(link, "://") ||
+			strings.HasPrefix(link, "//") ||
 			strings.HasPrefix(link, "mailto:") ||
 			strings.HasPrefix(link, "#") {
 			continue
@@ -1375,6 +1398,11 @@ func TestExtractRelativeLinks(t *testing.T) {
 		{"inline absolute git skipped", "see [a](git://example.com/repo.git)", nil},
 		{"inline absolute ftp skipped", "see [a](ftp://example.com)", nil},
 		{"inline absolute custom-scheme skipped", "see [a](slack://channel/123)", nil},
+		// G43 — protocol-relative URLs (//example.com/...) are absolute
+		// web links but don't contain "://". The naive containment
+		// check would let them through and then os.Stat would fail
+		// against ".github/example.com/..." or similar nonsense.
+		{"inline protocol-relative skipped", "see [a](//example.com/foo)", nil},
 		{"inline mailto skipped", "see [a](mailto:foo@example.com)", nil},
 		{"inline pure anchor skipped", "jump to [a](#section)", nil},
 		{"inline with anchor fragment stripped", "see [a](../bar.md#sec)", []string{"../bar.md"}},
@@ -1384,8 +1412,14 @@ func TestExtractRelativeLinks(t *testing.T) {
 		{"reference indented", "uses [foo][r1]\n\n  [r1]: ../bar.md", []string{"../bar.md"}},
 		{"reference absolute skipped", "uses [foo][r1]\n\n[r1]: https://example.com", nil},
 		{"reference git scheme skipped", "uses [foo][r1]\n\n[r1]: git://example.com/x.git", nil},
+		{"reference protocol-relative skipped", "uses [foo][r1]\n\n[r1]: //example.com/x", nil},
 		// Mixed: inline + reference in same content.
 		{"both styles", "see [a](../a.md) and [b][r]\n\n[r]: ../b.md", []string{"../a.md", "../b.md"}},
+		// C57 — godoc promises "order of appearance"; a reference
+		// definition placed BEFORE an inline link must come first in
+		// the result, not be silently relegated to last because of
+		// the implementation order.
+		{"reference before inline preserves textual order", "[r]: ../first.md\n\nthen [link](../second.md)", []string{"../first.md", "../second.md"}},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -1404,7 +1438,6 @@ func TestExtractRelativeLinks(t *testing.T) {
 	}
 }
 
-// TestGitHubTemplates_RelativeLinksResolve is a doc-invariant regression
 // resolveDocLink returns the on-disk path that a markdown link in a
 // doc file resolves to, mimicking how GitHub renders relative links.
 //
@@ -1436,6 +1469,11 @@ func resolveDocLink(docPath, repoRoot, link string) string {
 // relative links resolve against the doc's directory, "/X" links
 // resolve against the repo root. Sub-cases cover the corner Gemini
 // G41 flagged on PR #2.
+//
+// Test inputs and expectations are written with forward slashes for
+// readability; filepath.FromSlash converts them to the host
+// separator at compare time so the test passes on Windows
+// (backslash) and POSIX (slash) alike.
 func TestResolveDocLink(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -1457,9 +1495,13 @@ func TestResolveDocLink(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := resolveDocLink(tc.docPath, tc.repoRoot, tc.link)
-			if got != tc.want {
+			// FromSlash makes the expected path use the host's
+			// separator (\ on Windows, / on POSIX) so the test
+			// passes on either OS without forking expectations.
+			want := filepath.FromSlash(tc.want)
+			if got != want {
 				t.Errorf("resolveDocLink(%q, %q, %q) = %q, want %q",
-					tc.docPath, tc.repoRoot, tc.link, got, tc.want)
+					tc.docPath, tc.repoRoot, tc.link, got, want)
 			}
 		})
 	}
