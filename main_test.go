@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1406,51 +1405,136 @@ func TestExtractRelativeLinks(t *testing.T) {
 }
 
 // TestGitHubTemplates_RelativeLinksResolve is a doc-invariant regression
-// guard for the .github/ templates. It scans every YAML and Markdown
-// file under .github/ for both inline and reference-style markdown
-// links via extractRelativeLinks, then verifies that each relative-path
-// target resolves to a file that exists on disk.
+// resolveDocLink returns the on-disk path that a markdown link in a
+// doc file resolves to, mimicking how GitHub renders relative links.
+//
+// GitHub treats markdown link paths in two distinct ways:
+//   - Paths starting with "/" are *repository-root* relative — they
+//     resolve to <repo>/<path> regardless of where the doc lives.
+//   - All other paths are *doc-relative* — they resolve relative to
+//     the directory containing the doc file.
+//
+// docPath is the path to the doc file containing the link.
+// repoRoot is the directory the test treats as the repository root
+// (typically "." when tests run from the package directory).
+// link is the markdown link as written, with anchors and titles
+// already stripped by extractRelativeLinks.
+//
+// Gemini G41 reported the original walker used filepath.Join on every
+// link, which silently mishandles "/X" by stripping the leading slash
+// during the join — so a future template with [link](/TODO.md) would
+// falsely fail the resolution check against ".github/ISSUE_TEMPLATE/
+// TODO.md" instead of "<repo>/TODO.md".
+func resolveDocLink(docPath, repoRoot, link string) string {
+	if strings.HasPrefix(link, "/") {
+		return filepath.Join(repoRoot, strings.TrimPrefix(link, "/"))
+	}
+	return filepath.Join(filepath.Dir(docPath), link)
+}
+
+// TestResolveDocLink pins the doc-link resolution behaviour: bare
+// relative links resolve against the doc's directory, "/X" links
+// resolve against the repo root. Sub-cases cover the corner Gemini
+// G41 flagged on PR #2.
+func TestResolveDocLink(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		docPath  string
+		repoRoot string
+		link     string
+		want     string
+	}{
+		{"bare-relative up-two", ".github/ISSUE_TEMPLATE/bug_report.yml", ".", "../../TODO.md", "TODO.md"},
+		{"bare-relative up-one", ".github/CONTRIBUTING.md", ".", "../README.md", "README.md"},
+		{"bare-relative sibling", "docs/foo.md", ".", "bar.md", "docs/bar.md"},
+		{"root-relative repo .", ".github/ISSUE_TEMPLATE/bug_report.yml", ".", "/TODO.md", "TODO.md"},
+		{"root-relative repo abs", ".github/ISSUE_TEMPLATE/bug_report.yml", "/repo", "/TODO.md", "/repo/TODO.md"},
+		{"root-relative nested", ".github/PULL_REQUEST_TEMPLATE.md", ".", "/docs/guide.md", "docs/guide.md"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveDocLink(tc.docPath, tc.repoRoot, tc.link)
+			if got != tc.want {
+				t.Errorf("resolveDocLink(%q, %q, %q) = %q, want %q",
+					tc.docPath, tc.repoRoot, tc.link, got, tc.want)
+			}
+		})
+	}
+}
+
+// gitHubTemplateFiles returns the set of GitHub template files the
+// invariant test should check. Deliberately narrow: only files that
+// GitHub treats as templates, never the wider .github/ tree (which
+// will eventually contain workflows whose run-scripts can include
+// "[text](path)"-shaped strings that aren't markdown links — see PR
+// B1).
+//
+// New templates added to .github/ISSUE_TEMPLATE/ are auto-picked up.
+// Adding other template locations (e.g. .github/DISCUSSION_TEMPLATE/)
+// means extending this function.
+func gitHubTemplateFiles() []string {
+	var files []string
+	if _, err := os.Stat(".github/PULL_REQUEST_TEMPLATE.md"); err == nil {
+		files = append(files, ".github/PULL_REQUEST_TEMPLATE.md")
+	}
+	if entries, err := os.ReadDir(".github/ISSUE_TEMPLATE"); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			ext := filepath.Ext(e.Name())
+			if ext != ".yml" && ext != ".yaml" && ext != ".md" {
+				continue
+			}
+			files = append(files, filepath.Join(".github/ISSUE_TEMPLATE", e.Name()))
+		}
+	}
+	return files
+}
+
+// TestGitHubTemplates_RelativeLinksResolve is a doc-invariant regression
+// guard for the .github/ templates. It enumerates the known template
+// files (issue templates + the PR template — see gitHubTemplateFiles),
+// extracts every inline and reference-style markdown link via
+// extractRelativeLinks, and verifies that each relative-path target
+// resolves to a file that exists on disk.
+//
+// Scope is intentionally narrow (Copilot C56): walking the entire
+// .github/ tree would eventually catch workflow YAML files added in
+// PR B1, whose run-scripts can contain "[text](path)"-shaped strings
+// that aren't real markdown links.
+//
+// The resolution step uses resolveDocLink so both bare relative
+// ("../../TODO.md") and repo-root-relative ("/TODO.md") link forms
+// are handled correctly (Gemini G41).
 //
 // This catches the class of bug Gemini reported on PR #2 (G37/G38)
 // where templates linked to "../blob/main/X" — a confused mix of a
 // relative file path and GitHub's web-URL "blob/main" pattern. The
 // resolved path lands inside .github/ instead of the repo root and
-// produces a 404 when GitHub renders the template.
-//
-// It also catches the smaller class of bug where a template links to
-// a file the project hasn't created yet (e.g. a SECURITY.md reference
-// before SECURITY.md exists in the tree).
+// produces a 404 when GitHub renders the template. It also catches
+// the smaller class of bug where a template links to a file the
+// project hasn't created yet.
 func TestGitHubTemplates_RelativeLinksResolve(t *testing.T) {
 	t.Parallel()
-	templatesDir := ".github"
-	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
-		t.Skip(".github/ not present (running outside a checkout)")
+	files := gitHubTemplateFiles()
+	if len(files) == 0 {
+		t.Skip("no GitHub template files present (running outside a checkout)")
 	}
-
-	err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		ext := filepath.Ext(path)
-		if ext != ".yml" && ext != ".yaml" && ext != ".md" {
-			return nil
-		}
+	for _, path := range files {
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			t.Errorf("read %s: %v", path, err)
+			continue
 		}
 		for _, link := range extractRelativeLinks(string(content)) {
-			abs := filepath.Join(filepath.Dir(path), link)
+			abs := resolveDocLink(path, ".", link)
 			if _, err := os.Stat(abs); err != nil {
 				t.Errorf("%s: relative link %q resolves to %q which does not exist on disk", path, link, abs)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", templatesDir, err)
 	}
 }
