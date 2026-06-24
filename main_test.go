@@ -1292,13 +1292,124 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	}
 }
 
+// extractRelativeLinks finds every relative file-path link in markdown
+// content and returns them in order of appearance.
+//
+// It recognises both common markdown link forms:
+//   - Inline links: [text](path) and [text](path "optional title")
+//   - Reference link definitions: [ref]: path
+//
+// It filters out anything that is not a local relative file path:
+//   - Absolute URLs of any scheme (anything containing "://") —
+//     http://, https://, git://, ftp+ssh://, etc.
+//   - mailto: links
+//   - Pure anchor links (#section)
+//
+// Anchor fragments are stripped from path links so
+// `../FOO.md#section` is reported as `../FOO.md`. Inline-link title
+// suffixes ("title") are also stripped.
+func extractRelativeLinks(content string) []string {
+	// Inline form: [text](url) where url may include a title after whitespace.
+	inlineRe := regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
+	// Reference-definition form: leading whitespace, [ref]: url
+	// (?m) so ^ matches start of every line.
+	refRe := regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*([^\s]+)`)
+
+	var raw []string
+	for _, m := range inlineRe.FindAllStringSubmatch(content, -1) {
+		raw = append(raw, m[1])
+	}
+	for _, m := range refRe.FindAllStringSubmatch(content, -1) {
+		raw = append(raw, m[1])
+	}
+
+	var out []string
+	for _, link := range raw {
+		link = strings.TrimSpace(link)
+		// Strip optional inline title suffix: (path "title").
+		if i := strings.IndexAny(link, " \t"); i > 0 {
+			link = link[:i]
+		}
+		// Skip absolute URLs of any scheme, mailto, and pure anchors.
+		// Using ://-containment instead of a per-scheme allowlist
+		// future-proofs against git://, ftp+ssh://, custom schemes, etc.
+		if strings.Contains(link, "://") ||
+			strings.HasPrefix(link, "mailto:") ||
+			strings.HasPrefix(link, "#") {
+			continue
+		}
+		// Strip anchor fragment from path link (e.g. ../FOO.md#section).
+		if i := strings.Index(link, "#"); i >= 0 {
+			link = link[:i]
+		}
+		if link == "" {
+			continue
+		}
+		out = append(out, link)
+	}
+	return out
+}
+
+// TestExtractRelativeLinks is a unit test for the link-extraction
+// helper used by TestGitHubTemplates_RelativeLinksResolve. It pins the
+// behaviour the walker test relies on: which link forms are detected
+// (inline + reference-style), and which links are correctly filtered
+// out as absolute URLs / anchors.
+//
+// Gemini G39 reported the old regex missed reference-style links
+// ([ref]: url definitions); Gemini G40 reported the old scheme check
+// only listed http/https, missing git://, ftp://, custom schemes.
+// Both cases live in the table below as explicit regression guards.
+func TestExtractRelativeLinks(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{"empty", "", nil},
+		{"plain text no links", "just some prose", nil},
+		{"inline relative", "see [foo](../foo.md)", []string{"../foo.md"}},
+		{"inline absolute https skipped", "see [a](https://example.com)", nil},
+		{"inline absolute http skipped", "see [a](http://example.com)", nil},
+		// G40 — non-http schemes must also be filtered out.
+		{"inline absolute git skipped", "see [a](git://example.com/repo.git)", nil},
+		{"inline absolute ftp skipped", "see [a](ftp://example.com)", nil},
+		{"inline absolute custom-scheme skipped", "see [a](slack://channel/123)", nil},
+		{"inline mailto skipped", "see [a](mailto:foo@example.com)", nil},
+		{"inline pure anchor skipped", "jump to [a](#section)", nil},
+		{"inline with anchor fragment stripped", "see [a](../bar.md#sec)", []string{"../bar.md"}},
+		{"inline with title stripped", `see [a](../bar.md "title")`, []string{"../bar.md"}},
+		// G39 — reference-style link definitions must also be picked up.
+		{"reference relative", "uses [foo][r1]\n\n[r1]: ../bar.md", []string{"../bar.md"}},
+		{"reference indented", "uses [foo][r1]\n\n  [r1]: ../bar.md", []string{"../bar.md"}},
+		{"reference absolute skipped", "uses [foo][r1]\n\n[r1]: https://example.com", nil},
+		{"reference git scheme skipped", "uses [foo][r1]\n\n[r1]: git://example.com/x.git", nil},
+		// Mixed: inline + reference in same content.
+		{"both styles", "see [a](../a.md) and [b][r]\n\n[r]: ../b.md", []string{"../a.md", "../b.md"}},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractRelativeLinks(tc.content)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d links %v, want %d %v", len(got), got, len(tc.want), tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("link[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 // TestGitHubTemplates_RelativeLinksResolve is a doc-invariant regression
-// guard for the .github/ templates added in PR #2 (and any future
-// templates). It scans every YAML and Markdown file under .github/ for
-// markdown links of the form [text](path), filters out absolute URLs
-// (http://, https://, mailto:) and pure anchors (#section), then
-// verifies that each remaining relative-path link resolves to a file
-// that exists on disk.
+// guard for the .github/ templates. It scans every YAML and Markdown
+// file under .github/ for both inline and reference-style markdown
+// links via extractRelativeLinks, then verifies that each relative-path
+// target resolves to a file that exists on disk.
 //
 // This catches the class of bug Gemini reported on PR #2 (G37/G38)
 // where templates linked to "../blob/main/X" — a confused mix of a
@@ -1315,10 +1426,6 @@ func TestGitHubTemplates_RelativeLinksResolve(t *testing.T) {
 	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
 		t.Skip(".github/ not present (running outside a checkout)")
 	}
-	// Markdown link pattern: [text](url). Non-greedy on text and url
-	// so we match each link separately even if multiple appear on
-	// the same line. The text part allows nested ] sparingly via [^]]+.
-	linkRe := regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 
 	err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -1335,30 +1442,7 @@ func TestGitHubTemplates_RelativeLinksResolve(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for _, m := range linkRe.FindAllStringSubmatch(string(content), -1) {
-			link := strings.TrimSpace(m[1])
-			// Strip optional title suffix: [text](url "title").
-			if i := strings.IndexAny(link, " \t"); i > 0 {
-				link = link[:i]
-			}
-			// Skip absolute URLs and anchors — they don't resolve to
-			// local files.
-			switch {
-			case strings.HasPrefix(link, "http://"),
-				strings.HasPrefix(link, "https://"),
-				strings.HasPrefix(link, "mailto:"),
-				strings.HasPrefix(link, "#"):
-				continue
-			}
-			// Strip any anchor fragment from a path link
-			// (e.g. ../../FOO.md#section).
-			if i := strings.Index(link, "#"); i >= 0 {
-				link = link[:i]
-			}
-			if link == "" {
-				continue
-			}
-			// Resolve relative to the file's own directory.
+		for _, link := range extractRelativeLinks(string(content)) {
 			abs := filepath.Join(filepath.Dir(path), link)
 			if _, err := os.Stat(abs); err != nil {
 				t.Errorf("%s: relative link %q resolves to %q which does not exist on disk", path, link, abs)
