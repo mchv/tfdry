@@ -6,8 +6,10 @@ This file tracks two things:
    item maps to a PR or a phase of the v0.1.0 plan; entries are removed
    here as each lands.
 2. **Post v0.1.0 roadmap** — work we want but won't block the first
-   release on. At v0.1.0 release time, each entry here will be converted
-   to a GitHub Issue and tracked there.
+   release on. TODO.md is the persistent roadmap; entries here are not
+   automatically migrated to GitHub Issues. An individual item becomes
+   a GitHub Issue only if and when someone starts work on it (or wants
+   to discuss it publicly).
 
 ## v0.1.0 scope
 
@@ -41,8 +43,9 @@ This file tracks two things:
 
 ## Post v0.1.0 roadmap
 
-Items deferred to a later release. Converted to GitHub Issues at v0.1.0
-release time.
+Items deferred to a later release. Tracked here as the persistent
+roadmap; an entry only graduates to a GitHub Issue when someone picks
+it up or wants to discuss it.
 
 ### Checks
 
