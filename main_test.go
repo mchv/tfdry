@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1287,5 +1289,294 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	// (without -check) rewrites in place, so users aren't surprised.
 	if !strings.Contains(s, "tfdry fmt") {
 		t.Error("SKILL.md should mention `tfdry fmt` write behaviour explicitly (C39)")
+	}
+}
+
+// Package-level regexes used by extractRelativeLinks. Compiling once
+// (rather than on every call) avoids repeated work as the walker test
+// processes multiple template files.
+var (
+	// Inline form: [text](url) where url may include a title after whitespace.
+	inlineLinkRe = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
+	// Reference-definition form: leading whitespace, [ref]: url.
+	// (?m) so ^ matches start of every line.
+	refLinkRe = regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*([^\s]+)`)
+)
+
+// extractRelativeLinks finds every relative file-path link in markdown
+// content and returns them in textual order of appearance.
+//
+// It recognises both common markdown link forms:
+//   - Inline links: [text](path) and [text](path "optional title")
+//   - Reference link definitions: [ref]: path
+//
+// Returned slice preserves the order links appear in the source text;
+// a reference definition that appears before an inline link in the
+// source comes first in the output (and vice versa).
+//
+// It filters out anything that is not a local relative file path:
+//   - Absolute URLs of any scheme (anything containing "://") —
+//     http://, https://, git://, ftp+ssh://, etc.
+//   - Protocol-relative URLs (//host/path) — absolute web links
+//     that omit the scheme; common legacy of HTTPS migration era.
+//   - mailto: links
+//   - Pure anchor links (#section)
+//
+// Anchor fragments are stripped from path links so
+// `../FOO.md#section` is reported as `../FOO.md`. Inline-link title
+// suffixes ("title") are also stripped.
+func extractRelativeLinks(content string) []string {
+	// Track both the text and the start offset so we can sort by
+	// textual position across the two regex passes.
+	type rawLink struct {
+		start int
+		text  string
+	}
+	var raw []rawLink
+	// FindAllStringSubmatchIndex returns [matchStart, matchEnd, g1Start, g1End, ...]
+	// for each match. We sort by matchStart (m[0]) to preserve appearance order.
+	for _, m := range inlineLinkRe.FindAllStringSubmatchIndex(content, -1) {
+		raw = append(raw, rawLink{start: m[0], text: content[m[2]:m[3]]})
+	}
+	for _, m := range refLinkRe.FindAllStringSubmatchIndex(content, -1) {
+		raw = append(raw, rawLink{start: m[0], text: content[m[2]:m[3]]})
+	}
+	sort.Slice(raw, func(i, j int) bool { return raw[i].start < raw[j].start })
+
+	var out []string
+	for _, r := range raw {
+		link := strings.TrimSpace(r.text)
+		// Strip optional inline title suffix: (path "title").
+		if i := strings.IndexAny(link, " \t"); i > 0 {
+			link = link[:i]
+		}
+		// Skip absolute URLs of any scheme, protocol-relative URLs,
+		// mailto, and pure anchors. The ://-containment check is
+		// scheme-agnostic; the //-prefix check separately catches
+		// protocol-relative URLs that omit the scheme entirely.
+		if strings.Contains(link, "://") ||
+			strings.HasPrefix(link, "//") ||
+			strings.HasPrefix(link, "mailto:") ||
+			strings.HasPrefix(link, "#") {
+			continue
+		}
+		// Strip anchor fragment from path link (e.g. ../FOO.md#section).
+		if i := strings.Index(link, "#"); i >= 0 {
+			link = link[:i]
+		}
+		if link == "" {
+			continue
+		}
+		out = append(out, link)
+	}
+	return out
+}
+
+// TestExtractRelativeLinks is a unit test for the link-extraction
+// helper used by TestGitHubTemplates_RelativeLinksResolve. It pins the
+// behaviour the walker test relies on: which link forms are detected
+// (inline + reference-style), and which links are correctly filtered
+// out as absolute URLs / anchors.
+//
+// Gemini G39 reported the old regex missed reference-style links
+// ([ref]: url definitions); Gemini G40 reported the old scheme check
+// only listed http/https, missing git://, ftp://, custom schemes.
+// Both cases live in the table below as explicit regression guards.
+func TestExtractRelativeLinks(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{"empty", "", nil},
+		{"plain text no links", "just some prose", nil},
+		{"inline relative", "see [foo](../foo.md)", []string{"../foo.md"}},
+		{"inline absolute https skipped", "see [a](https://example.com)", nil},
+		{"inline absolute http skipped", "see [a](http://example.com)", nil},
+		// G40 — non-http schemes must also be filtered out.
+		{"inline absolute git skipped", "see [a](git://example.com/repo.git)", nil},
+		{"inline absolute ftp skipped", "see [a](ftp://example.com)", nil},
+		{"inline absolute custom-scheme skipped", "see [a](slack://channel/123)", nil},
+		// G43 — protocol-relative URLs (//example.com/...) are absolute
+		// web links but don't contain "://". The naive containment
+		// check would let them through and then os.Stat would fail
+		// against ".github/example.com/..." or similar nonsense.
+		{"inline protocol-relative skipped", "see [a](//example.com/foo)", nil},
+		{"inline mailto skipped", "see [a](mailto:foo@example.com)", nil},
+		{"inline pure anchor skipped", "jump to [a](#section)", nil},
+		{"inline with anchor fragment stripped", "see [a](../bar.md#sec)", []string{"../bar.md"}},
+		{"inline with title stripped", `see [a](../bar.md "title")`, []string{"../bar.md"}},
+		// G39 — reference-style link definitions must also be picked up.
+		{"reference relative", "uses [foo][r1]\n\n[r1]: ../bar.md", []string{"../bar.md"}},
+		{"reference indented", "uses [foo][r1]\n\n  [r1]: ../bar.md", []string{"../bar.md"}},
+		{"reference absolute skipped", "uses [foo][r1]\n\n[r1]: https://example.com", nil},
+		{"reference git scheme skipped", "uses [foo][r1]\n\n[r1]: git://example.com/x.git", nil},
+		{"reference protocol-relative skipped", "uses [foo][r1]\n\n[r1]: //example.com/x", nil},
+		// Mixed: inline + reference in same content.
+		{"both styles", "see [a](../a.md) and [b][r]\n\n[r]: ../b.md", []string{"../a.md", "../b.md"}},
+		// C57 — godoc promises "order of appearance"; a reference
+		// definition placed BEFORE an inline link must come first in
+		// the result, not be silently relegated to last because of
+		// the implementation order.
+		{"reference before inline preserves textual order", "[r]: ../first.md\n\nthen [link](../second.md)", []string{"../first.md", "../second.md"}},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractRelativeLinks(tc.content)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d links %v, want %d %v", len(got), got, len(tc.want), tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("link[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// resolveDocLink returns the on-disk path that a markdown link in a
+// doc file resolves to, mimicking how GitHub renders relative links.
+//
+// GitHub treats markdown link paths in two distinct ways:
+//   - Paths starting with "/" are *repository-root* relative — they
+//     resolve to <repo>/<path> regardless of where the doc lives.
+//   - All other paths are *doc-relative* — they resolve relative to
+//     the directory containing the doc file.
+//
+// docPath is the path to the doc file containing the link.
+// repoRoot is the directory the test treats as the repository root
+// (typically "." when tests run from the package directory).
+// link is the markdown link as written, with anchors and titles
+// already stripped by extractRelativeLinks.
+//
+// Gemini G41 reported the original walker used filepath.Join on every
+// link, which silently mishandles "/X" by stripping the leading slash
+// during the join — so a future template with [link](/TODO.md) would
+// falsely fail the resolution check against ".github/ISSUE_TEMPLATE/
+// TODO.md" instead of "<repo>/TODO.md".
+func resolveDocLink(docPath, repoRoot, link string) string {
+	if strings.HasPrefix(link, "/") {
+		return filepath.Join(repoRoot, strings.TrimPrefix(link, "/"))
+	}
+	return filepath.Join(filepath.Dir(docPath), link)
+}
+
+// TestResolveDocLink pins the doc-link resolution behaviour: bare
+// relative links resolve against the doc's directory, "/X" links
+// resolve against the repo root. Sub-cases cover the corner Gemini
+// G41 flagged on PR #2.
+//
+// Test inputs and expectations are written with forward slashes for
+// readability; filepath.FromSlash converts them to the host
+// separator at compare time so the test passes on Windows
+// (backslash) and POSIX (slash) alike.
+func TestResolveDocLink(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		docPath  string
+		repoRoot string
+		link     string
+		want     string
+	}{
+		{"bare-relative up-two", ".github/ISSUE_TEMPLATE/bug_report.yml", ".", "../../TODO.md", "TODO.md"},
+		{"bare-relative up-one", ".github/CONTRIBUTING.md", ".", "../README.md", "README.md"},
+		{"bare-relative sibling", "docs/foo.md", ".", "bar.md", "docs/bar.md"},
+		{"root-relative repo .", ".github/ISSUE_TEMPLATE/bug_report.yml", ".", "/TODO.md", "TODO.md"},
+		{"root-relative repo abs", ".github/ISSUE_TEMPLATE/bug_report.yml", "/repo", "/TODO.md", "/repo/TODO.md"},
+		{"root-relative nested", ".github/PULL_REQUEST_TEMPLATE.md", ".", "/docs/guide.md", "docs/guide.md"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveDocLink(tc.docPath, tc.repoRoot, tc.link)
+			// FromSlash makes the expected path use the host's
+			// separator (\ on Windows, / on POSIX) so the test
+			// passes on either OS without forking expectations.
+			want := filepath.FromSlash(tc.want)
+			if got != want {
+				t.Errorf("resolveDocLink(%q, %q, %q) = %q, want %q",
+					tc.docPath, tc.repoRoot, tc.link, got, want)
+			}
+		})
+	}
+}
+
+// gitHubTemplateFiles returns the set of GitHub template files the
+// invariant test should check. Deliberately narrow: only files that
+// GitHub treats as templates, never the wider .github/ tree (which
+// will eventually contain workflows whose run-scripts can include
+// "[text](path)"-shaped strings that aren't markdown links — see PR
+// B1).
+//
+// New templates added to .github/ISSUE_TEMPLATE/ are auto-picked up.
+// Adding other template locations (e.g. .github/DISCUSSION_TEMPLATE/)
+// means extending this function.
+func gitHubTemplateFiles() []string {
+	var files []string
+	if _, err := os.Stat(".github/PULL_REQUEST_TEMPLATE.md"); err == nil {
+		files = append(files, ".github/PULL_REQUEST_TEMPLATE.md")
+	}
+	if entries, err := os.ReadDir(".github/ISSUE_TEMPLATE"); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			ext := filepath.Ext(e.Name())
+			if ext != ".yml" && ext != ".yaml" && ext != ".md" {
+				continue
+			}
+			files = append(files, filepath.Join(".github/ISSUE_TEMPLATE", e.Name()))
+		}
+	}
+	return files
+}
+
+// TestGitHubTemplates_RelativeLinksResolve is a doc-invariant regression
+// guard for the .github/ templates. It enumerates the known template
+// files (issue templates + the PR template — see gitHubTemplateFiles),
+// extracts every inline and reference-style markdown link via
+// extractRelativeLinks, and verifies that each relative-path target
+// resolves to a file that exists on disk.
+//
+// Scope is intentionally narrow (Copilot C56): walking the entire
+// .github/ tree would eventually catch workflow YAML files added in
+// PR B1, whose run-scripts can contain "[text](path)"-shaped strings
+// that aren't real markdown links.
+//
+// The resolution step uses resolveDocLink so both bare relative
+// ("../../TODO.md") and repo-root-relative ("/TODO.md") link forms
+// are handled correctly (Gemini G41).
+//
+// This catches the class of bug Gemini reported on PR #2 (G37/G38)
+// where templates linked to "../blob/main/X" — a confused mix of a
+// relative file path and GitHub's web-URL "blob/main" pattern. The
+// resolved path lands inside .github/ instead of the repo root and
+// produces a 404 when GitHub renders the template. It also catches
+// the smaller class of bug where a template links to a file the
+// project hasn't created yet.
+func TestGitHubTemplates_RelativeLinksResolve(t *testing.T) {
+	t.Parallel()
+	files := gitHubTemplateFiles()
+	if len(files) == 0 {
+		t.Skip("no GitHub template files present (running outside a checkout)")
+	}
+	for _, path := range files {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("read %s: %v", path, err)
+			continue
+		}
+		for _, link := range extractRelativeLinks(string(content)) {
+			abs := resolveDocLink(path, ".", link)
+			if _, err := os.Stat(abs); err != nil {
+				t.Errorf("%s: relative link %q resolves to %q which does not exist on disk", path, link, abs)
+			}
+		}
 	}
 }

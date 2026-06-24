@@ -1,0 +1,94 @@
+name: Bug report
+description: Report incorrect tfdry behaviour (false positive, false negative, crash, etc.)
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+        Before submitting, please make sure:
+        - You're running the latest tfdry release (`tfdry version`).
+        - The issue reproduces with stock `terraform fmt` + `terraform validate` behaviour as a comparison baseline.
+        - For security-sensitive findings, please report privately via [GitHub Security Advisories](https://github.com/mchv/tfdry/security/advisories/new) instead of opening a public issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: tfdry version
+      description: Output of `tfdry version`.
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and architecture (e.g. `darwin-arm64`, `linux-amd64`, `windows-amd64`).
+      placeholder: "darwin-arm64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: bug_kind
+    attributes:
+      label: Bug kind
+      description: What sort of bug is this?
+      options:
+        - False positive (tfdry flagged something Terraform accepts)
+        - False negative (tfdry missed something Terraform rejects)
+        - Crash or panic
+        - Wrong exit code
+        - --fix produced incorrect output
+        - Performance regression
+        - Documentation mismatch
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: tf_input
+    attributes:
+      label: Terraform input
+      description: Minimal `.tf` file(s) that reproduce the issue. Strip down to the smallest case that still reproduces.
+      render: hcl
+      placeholder: |
+        locals {
+          x = 1
+        }
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: tfdry command
+      description: The exact command you ran.
+      placeholder: "tfdry --json ./infra"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+      description: What tfdry produced (paste the full output, including exit code).
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+      description: What you expected tfdry to produce, and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Anything else relevant (related issues, prior versions that worked, `terraform validate` output for comparison, etc.).

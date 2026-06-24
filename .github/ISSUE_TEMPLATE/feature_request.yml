@@ -1,0 +1,71 @@
+name: Feature request
+description: Suggest a new check, CLI flag, or capability for tfdry
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest a feature.
+
+        Before submitting, please check:
+        - The [TODO.md roadmap](../../TODO.md) — your idea may already be on the post-v0.1.0 list.
+        - Existing issues — someone may have already proposed it.
+
+        Note: tfdry deliberately stays focused on **static checks that don't require `terraform init`** and **formatting**. Features needing provider state, network calls, or `terraform`-equivalent semantics (drift detection, plan analysis, etc.) are out of scope.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Feature kind
+      description: What sort of feature is this?
+      options:
+        - New diagnostic check (E0xx or W0xx)
+        - New CLI flag or subcommand
+        - Output format change (human or JSON)
+        - Performance / resource usage
+        - Editor / LSP integration
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this feature solve? Concrete scenario where you'd reach for it.
+      placeholder: |
+        Today, I have to run [X] to catch [Y]. tfdry could catch this statically because [Z].
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How might tfdry expose this? Be as specific as you can (CLI shape, check semantics, output format).
+      placeholder: |
+        Add a check `E0XX` that flags [...]. Triggered when [...]. Suggested message: "..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other tools or workflows you've tried; why they fell short.
+
+  - type: textarea
+    id: scope_check
+    attributes:
+      label: Scope check
+      description: |
+        Confirm this fits tfdry's scope by answering:
+        - Can this be checked from `.tf` source files alone, without `terraform init`?
+        - Does it avoid network calls and provider downloads?
+        - Is the desired behaviour deterministic for a given input?
+      placeholder: |
+        Yes — this check only inspects [...]. No init, no network.
+    validations:
+      required: true
