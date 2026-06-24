@@ -20,7 +20,7 @@ This file tracks two things:
       `CheckFormat`, `WriteFormatted`) before v0.1.0 so we ship the
       canonical Go shape. Adds cancellation checkpoints in hot loops
       and wires `signal.NotifyContext` in `main`. Test-first; covers
-      SIGINT graceful shutdown.
+      SIGINT graceful shutdown. *(In review.)*
 - [ ] **PR A3 — Lint hardening.** `gofumpt` adoption,
       `golangci-lint` config (`staticcheck`, `errcheck`, `gosec`,
       `revive`, `gocritic`, `unconvert`, `unused`, `ineffassign`,

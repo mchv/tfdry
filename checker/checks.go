@@ -6,6 +6,7 @@
 package checker
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -80,9 +81,20 @@ func ValidateCheckCodes(codes []string) error {
 	return nil
 }
 
-// Run executes all checks on the parsed files and returns all violations.
-// dir is the directory that was parsed (needed for E006 local module resolution).
-func Run(files []ParsedFile, checks CheckSet, dir string) []Violation {
+// Run executes all checks on the parsed files and returns all violations
+// plus a non-nil error if ctx was cancelled mid-pass (violations may be
+// partial in that case).
+//
+// dir is the directory that was parsed (needed for E006 local module
+// resolution). ctx is checked once before any work and once per file
+// at the top of the iteration — checks themselves run to completion
+// per file because per-expression cancellation would noticeably slow
+// the common case and the per-file granularity is enough to bound
+// worst-case latency.
+func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) ([]Violation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	locals, dupViolations := BuildLocalsMap(files)
 
 	var violations []Violation
@@ -97,6 +109,9 @@ func Run(files []ParsedFile, checks CheckSet, dir string) []Violation {
 	moduleCache := make(map[string]map[string]TypeSchema)
 
 	for _, f := range files {
+		if err := ctx.Err(); err != nil {
+			return violations, err
+		}
 		walkExpressions(f.Body, func(expr hclsyntax.Expression) {
 			switch e := expr.(type) {
 			case *hclsyntax.ScopeTraversalExpr:
@@ -149,7 +164,11 @@ func Run(files []ParsedFile, checks CheckSet, dir string) []Violation {
 	}
 
 	if checks.Enabled("E008") {
-		violations = append(violations, CheckFormat(files)...)
+		fmtViolations, err := CheckFormat(ctx, files)
+		if err != nil {
+			return violations, err
+		}
+		violations = append(violations, fmtViolations...)
 	}
 
 	if checks.Enabled("W001") {
@@ -174,7 +193,7 @@ func Run(files []ParsedFile, checks CheckSet, dir string) []Violation {
 		return a.Line < b.Line
 	})
 
-	return violations
+	return violations, nil
 }
 
 func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[string]LocalInfo) *Violation {

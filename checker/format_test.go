@@ -1,6 +1,7 @@
 package checker_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,8 +20,8 @@ func TestE008_UnformattedFile(t *testing.T) {
   bb  =  "bar"
 }
 `), 0644)
-	files, pv := checker.ParseDir(dir)
-	vs := append(pv, checker.Run(files, nil, dir)...)
+	files, pv, _ := checker.ParseDir(context.Background(), dir)
+	vs := append(pv, mustRun(context.Background(), files, nil, dir)...)
 	if !hasCode(vs, "E008") {
 		t.Fatalf("expected E008 for unformatted file, got %v", codes(vs))
 	}
@@ -34,8 +35,8 @@ func TestE008_FormattedFile_NoViolation(t *testing.T) {
   bb = "bar"
 }
 `), 0644)
-	files, pv := checker.ParseDir(dir)
-	vs := append(pv, checker.Run(files, nil, dir)...)
+	files, pv, _ := checker.ParseDir(context.Background(), dir)
+	vs := append(pv, mustRun(context.Background(), files, nil, dir)...)
 	if hasCode(vs, "E008") {
 		t.Fatalf("unexpected E008 for already-formatted file: %v", codes(vs))
 	}
@@ -45,7 +46,7 @@ func TestE008_FormattedFile_NoViolation(t *testing.T) {
 func TestE008_SyntaxError_Skipped(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "bad.tf"), []byte(`locals { bad syntax !!!`), 0644)
-	_, pv := checker.ParseDir(dir)
+	_, pv, _ := checker.ParseDir(context.Background(), dir)
 	if hasCode(pv, "E008") {
 		t.Fatalf("E008 must not fire on files that failed E001: %v", codes(pv))
 	}
@@ -62,7 +63,7 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
 	os.WriteFile(path, unformatted, 0644)
 
 	src, _ := os.ReadFile(path)
-	if err := checker.FormatFile(path, src); err != nil {
+	if err := checker.FormatFile(context.Background(), path, src); err != nil {
 		t.Fatalf("FormatFile error: %v", err)
 	}
 
@@ -72,7 +73,7 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
 		t.Fatal("FormatFile did not change the file content")
 	}
 	// Running again must be idempotent.
-	if err := checker.FormatFile(path, got); err != nil {
+	if err := checker.FormatFile(context.Background(), path, got); err != nil {
 		t.Fatal(err)
 	}
 	got2, _ := os.ReadFile(path)
@@ -88,7 +89,7 @@ func TestFormatFile_MissingFile_ReturnsError(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "does-not-exist.tf")
-	err := checker.FormatFile(missing, []byte(`locals { x = "y" }`))
+	err := checker.FormatFile(context.Background(), missing, []byte(`locals { x = "y" }`))
 	if err == nil {
 		t.Fatal("expected error when path does not exist, got nil")
 	}
@@ -102,7 +103,7 @@ func TestFormatFile_DirectoryPath_ReturnsError(t *testing.T) {
 	if err := os.Mkdir(subdir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	err := checker.FormatFile(subdir, []byte(`locals { x = "y" }`))
+	err := checker.FormatFile(context.Background(), subdir, []byte(`locals { x = "y" }`))
 	if err == nil {
 		t.Fatal("expected error when path is a directory, got nil")
 	}
@@ -137,7 +138,7 @@ func TestFormatFile_ReadOnlyParentDir_ReturnsError(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
 
 	src, _ := os.ReadFile(path)
-	err := checker.FormatFile(path, src)
+	err := checker.FormatFile(context.Background(), path, src)
 	if err == nil {
 		t.Fatal("expected error when parent dir is read-only, got nil")
 	}

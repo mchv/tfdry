@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -37,14 +38,24 @@ type parseResult struct {
 	violations []Violation
 }
 
-// ParseDir parses all .tf files in dir concurrently.
-// Returns parsed files and any syntax/infrastructure violations.
-func ParseDir(dir string) ([]ParsedFile, []Violation) {
+// ParseDir parses all .tf files in dir concurrently. Returns parsed files,
+// any syntax/infrastructure violations, and a non-nil error if ctx was
+// cancelled mid-walk (in which case files and violations may be partial).
+//
+// The cancellation contract: ctx is checked once before iterating the
+// directory listing, once before each per-file parse in the sequential
+// branch, and via errgroup.WithContext in the concurrent branch. A
+// cancelled ctx propagates as context.Canceled / context.DeadlineExceeded
+// — callers can use errors.Is() to detect either.
+func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	dir = filepath.Clean(dir)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, []Violation{{Code: "E000", Severity: "error", File: dir, Message: fmt.Sprintf("cannot read directory: %v", err)}}
+		return nil, []Violation{{Code: "E000", Severity: "error", File: dir, Message: fmt.Sprintf("cannot read directory: %v", err)}}, nil
 	}
 
 	// Collect eligible .tf entries (sequential, cheap).
@@ -64,18 +75,29 @@ func ParseDir(dir string) ([]ParsedFile, []Violation) {
 	const parallelThreshold = 4
 	if len(tfEntries) <= parallelThreshold {
 		for i, e := range tfEntries {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
 			results[i] = parseOne(dir, e)
 		}
 	} else {
-		g := new(errgroup.Group)
+		// errgroup.WithContext gives each goroutine a derived ctx; when the
+		// parent ctx is cancelled the workers see it and we surface the
+		// cancellation through g.Wait().
+		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(runtime.NumCPU() * 2)
 		for i, e := range tfEntries {
 			g.Go(func() error {
+				if err := gctx.Err(); err != nil {
+					return err
+				}
 				results[i] = parseOne(dir, e)
 				return nil
 			})
 		}
-		g.Wait() //nolint:errcheck — parseOne never errors; violations are in results
+		if err := g.Wait(); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	var files []ParsedFile
@@ -86,7 +108,7 @@ func ParseDir(dir string) ([]ParsedFile, []Violation) {
 			files = append(files, *r.file)
 		}
 	}
-	return files, violations
+	return files, violations, nil
 }
 
 func parseOne(dir string, e os.DirEntry) parseResult {

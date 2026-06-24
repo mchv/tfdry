@@ -3,12 +3,16 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -18,7 +22,30 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	// signal.NotifyContext gives us a cancellable ctx that fires on
+	// SIGINT (Ctrl-C) and SIGTERM. The derived ctx flows into run() and
+	// onwards into every long-running checker entry point, so an
+	// interrupted tfdry run cleanly stops at the next per-file
+	// checkpoint instead of being torn down mid-write or mid-parse.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// handleCtxErr writes a brief "interrupted" message to stderr and
+// returns the canonical signal exit code (130 = 128 + SIGINT) when err
+// is a context-cancellation error. Returns (0, false) if err is nil or
+// any non-cancellation error — letting the caller fall through to its
+// normal error path.
+func handleCtxErr(err error, stderr io.Writer) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		fmt.Fprintln(stderr, "tfdry: interrupted")
+		return 130, true
+	}
+	return 0, false
 }
 
 // run executes the CLI with the given args, writing user output to stdout and
@@ -30,9 +57,12 @@ func main() {
 //     failures during --fix or fmt), stdout broken-pipe / short-write
 //     failures (C25/C32), and parse errors in fmt subcommand
 //   - 3 = `fmt -check` found unformatted files
+//   - 130 = interrupted by signal (SIGINT/SIGTERM); checker call
+//     returned context.Canceled / context.DeadlineExceeded
 //
+// ctx is the cancellation token created by [main] via signal.NotifyContext.
 // Pure of os.Args / os.Exit / os.Stdout for testability.
-func run(args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Pre-scan: collect all flags before dispatching subcommands so that
 	// flag order relative to subcommand name doesn't matter.
 	jsonFlag := false
@@ -147,10 +177,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "tfdry", output.Version)
 		return 0
 	case "fmt":
-		return runFmt(stdout, stderr, dir, fmtCheck, fmtRecursive)
+		return runFmt(ctx, stdout, stderr, dir, fmtCheck, fmtRecursive)
 	}
 
-	files, parseViolations := checker.ParseDir(dir)
+	files, parseViolations, err := checker.ParseDir(ctx, dir)
+	if code, ok := handleCtxErr(err, stderr); ok {
+		return code
+	}
 
 	// Parse violations (E000, E001) are always emitted — not subject to --checks filtering.
 	violations := append([]checker.Violation{}, parseViolations...)
@@ -175,11 +208,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// emptied out via exclusion) and skip Run entirely.
 	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
 	if !skipRun {
-		violations = append(violations, checker.Run(files, runFilter, dir)...)
+		runViolations, err := checker.Run(ctx, files, runFilter, dir)
+		if code, ok := handleCtxErr(err, stderr); ok {
+			return code
+		}
+		violations = append(violations, runViolations...)
 	}
 
 	if shouldFix {
-		_, fixViolations := checker.FixFormat(files, dir)
+		_, fixViolations, err := checker.FixFormat(ctx, files, dir)
+		if code, ok := handleCtxErr(err, stderr); ok {
+			return code
+		}
 		violations = append(violations, fixViolations...)
 	}
 
@@ -246,7 +286,7 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 //   - 0 = success (clean, or successfully rewrote)
 //   - 2 = parse / write error / bad usage
 //   - 3 = -check found unformatted files
-func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
+func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, recursive bool) int {
 	// Reject symlinked roots up front (consistent with file-mode symlink
 	// rejection in runFmtFile, round 4). Without this, a symlinked-dir
 	// root produces inconsistent behaviour: ParseDir / os.ReadDir follows
@@ -268,7 +308,7 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			fmt.Fprintf(stderr, "tfdry fmt: -recursive cannot be used with a file path: %s\n", path)
 			return 2
 		}
-		return runFmtFile(stdout, stderr, path, check)
+		return runFmtFile(ctx, stdout, stderr, path, check)
 	}
 
 	dirs, err := collectFmtDirs(path, recursive)
@@ -281,7 +321,17 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 	anyError := false
 
 	for _, d := range dirs {
-		files, parseViolations := checker.ParseDir(d)
+		// Per-directory cancel checkpoint. The runFmt walker may cover
+		// large monorepos with hundreds of subdirs; a SIGINT mid-walk
+		// should bail before parsing the next directory.
+		if err := ctx.Err(); err != nil {
+			code, _ := handleCtxErr(err, stderr)
+			return code
+		}
+		files, parseViolations, err := checker.ParseDir(ctx, d)
+		if code, ok := handleCtxErr(err, stderr); ok {
+			return code
+		}
 		for _, v := range parseViolations {
 			// Show the path relative to the user-supplied root so a
 			// recursive run reports the subdir, not just a bare filename
@@ -313,7 +363,10 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			relPath := output.Sanitize(displayFmtPath(path, d, f.Name))
 			fmt.Fprintln(stdout, relPath)
 			if !check {
-				if err := checker.WriteFormatted(absFile, formatted); err != nil {
+				if err := checker.WriteFormatted(ctx, absFile, formatted); err != nil {
+					if code, ok := handleCtxErr(err, stderr); ok {
+						return code
+					}
 					fmt.Fprintln(stderr, "Error formatting", relPath+":", err)
 					anyError = true
 				}
@@ -339,7 +392,11 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 // symlink at os.ReadFile and exit 3 if the target was dirty, while a write
 // pass would later destroy the symlink on Windows (oNoFollow=0). Reject
 // upfront so the failure mode is identical across read/write/platforms.
-func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
+func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, check bool) int {
+	if err := ctx.Err(); err != nil {
+		code, _ := handleCtxErr(err, stderr)
+		return code
+	}
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		fmt.Fprintf(stderr, "tfdry fmt: %s: not a regular file (symlinks are not supported)\n", path)
 		return 2
@@ -396,7 +453,10 @@ func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
 	if check {
 		return 3
 	}
-	if err := checker.WriteFormatted(path, formatted); err != nil {
+	if err := checker.WriteFormatted(ctx, path, formatted); err != nil {
+		if code, ok := handleCtxErr(err, stderr); ok {
+			return code
+		}
 		fmt.Fprintln(stderr, "Error formatting", safePath+":", err)
 		return 2
 	}
