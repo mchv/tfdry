@@ -22,9 +22,16 @@ func main() {
 }
 
 // run executes the CLI with the given args, writing user output to stdout and
-// errors/diagnostics to stderr. Returns the exit code (0 = clean, 1 = errors
-// found, 2 = usage error, 3 = `fmt -check` found unformatted files). Pure of
-// os.Args / os.Exit / os.Stdout for testability.
+// errors/diagnostics to stderr. Returns the exit code:
+//   - 0 = clean (no violations found, or all fixed)
+//   - 1 = one or more violations found by the lint pass
+//   - 2 = tool error — covers usage mistakes (unknown flags, misplaced
+//     subcommand args), I/O failures (unreadable directories, write
+//     failures during --fix or fmt), stdout broken-pipe / short-write
+//     failures (C25/C32), and parse errors in fmt subcommand
+//   - 3 = `fmt -check` found unformatted files
+//
+// Pure of os.Args / os.Exit / os.Stdout for testability.
 func run(args []string, stdout, stderr io.Writer) int {
 	// Pre-scan: collect all flags before dispatching subcommands so that
 	// flag order relative to subcommand name doesn't matter.

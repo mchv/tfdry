@@ -3,11 +3,19 @@ package checker
 // VarType is a minimal type enum replacing go-cty for tfdry's needs.
 //
 // VarType represents the inferred type of a *caller-side* expression (local
-// values, attribute values), used by E003 and E005. For *module-side*
-// declared variable types — which are recursive (objects, lists, maps) —
-// see [TypeSchema] in modules.go. The two types are used together in
-// E006 module-input checking, where TypeSchema describes what a module
-// declared and VarType describes what the caller passed.
+// values, attribute values). It is used by:
+//   - E004 (non-scalar in string interpolation) — via [VarType.IsScalar]
+//     in checks.go:checkInterpolationScalar
+//   - E006 (module input type mismatch) — via [resolveExprType] in
+//     modules.go, which feeds compareExprToSchema
+//
+// E003 and E005 do not consume VarType (E003 is an existence check; E005
+// is a count/for_each block check that doesn't look at value types).
+//
+// For *module-side* declared variable types — which are recursive (objects,
+// lists, maps) — see [TypeSchema] in modules.go. The two types are used
+// together in E006 module-input checking, where TypeSchema describes what
+// a module declared and VarType describes what the caller passed.
 type VarType int
 
 const (
