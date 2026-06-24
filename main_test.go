@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -1287,5 +1289,84 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	// (without -check) rewrites in place, so users aren't surprised.
 	if !strings.Contains(s, "tfdry fmt") {
 		t.Error("SKILL.md should mention `tfdry fmt` write behaviour explicitly (C39)")
+	}
+}
+
+// TestGitHubTemplates_RelativeLinksResolve is a doc-invariant regression
+// guard for the .github/ templates added in PR #2 (and any future
+// templates). It scans every YAML and Markdown file under .github/ for
+// markdown links of the form [text](path), filters out absolute URLs
+// (http://, https://, mailto:) and pure anchors (#section), then
+// verifies that each remaining relative-path link resolves to a file
+// that exists on disk.
+//
+// This catches the class of bug Gemini reported on PR #2 (G37/G38)
+// where templates linked to "../blob/main/X" — a confused mix of a
+// relative file path and GitHub's web-URL "blob/main" pattern. The
+// resolved path lands inside .github/ instead of the repo root and
+// produces a 404 when GitHub renders the template.
+//
+// It also catches the smaller class of bug where a template links to
+// a file the project hasn't created yet (e.g. a SECURITY.md reference
+// before SECURITY.md exists in the tree).
+func TestGitHubTemplates_RelativeLinksResolve(t *testing.T) {
+	t.Parallel()
+	templatesDir := ".github"
+	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
+		t.Skip(".github/ not present (running outside a checkout)")
+	}
+	// Markdown link pattern: [text](url). Non-greedy on text and url
+	// so we match each link separately even if multiple appear on
+	// the same line. The text part allows nested ] sparingly via [^]]+.
+	linkRe := regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
+
+	err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := filepath.Ext(path)
+		if ext != ".yml" && ext != ".yaml" && ext != ".md" {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range linkRe.FindAllStringSubmatch(string(content), -1) {
+			link := strings.TrimSpace(m[1])
+			// Strip optional title suffix: [text](url "title").
+			if i := strings.IndexAny(link, " \t"); i > 0 {
+				link = link[:i]
+			}
+			// Skip absolute URLs and anchors — they don't resolve to
+			// local files.
+			switch {
+			case strings.HasPrefix(link, "http://"),
+				strings.HasPrefix(link, "https://"),
+				strings.HasPrefix(link, "mailto:"),
+				strings.HasPrefix(link, "#"):
+				continue
+			}
+			// Strip any anchor fragment from a path link
+			// (e.g. ../../FOO.md#section).
+			if i := strings.Index(link, "#"); i >= 0 {
+				link = link[:i]
+			}
+			if link == "" {
+				continue
+			}
+			// Resolve relative to the file's own directory.
+			abs := filepath.Join(filepath.Dir(path), link)
+			if _, err := os.Stat(abs); err != nil {
+				t.Errorf("%s: relative link %q resolves to %q which does not exist on disk", path, link, abs)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", templatesDir, err)
 	}
 }

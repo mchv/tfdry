@@ -5,10 +5,11 @@ Please make sure your PR:
 - Has a clear title that describes the change in <70 characters.
 - Builds on a feature branch (not main).
 - Includes tests written before the fix/feature (test-first protocol).
-- Passes `make verify` locally.
+- Passes `gofmt -d ./...` clean and `go test ./... -race` locally.
 
-For security-sensitive changes, please coordinate via the security
-disclosure flow first (see SECURITY.md).
+For security-sensitive changes, please use the [private security
+disclosure flow](https://github.com/mchv/tfdry/security/advisories/new)
+first instead of opening a public PR.
 -->
 
 ## Summary
@@ -34,7 +35,7 @@ Closes #
 <!-- How was this verified? -->
 
 - [ ] New or updated tests added (test-first — failing test written before the fix)
-- [ ] `make verify` passes locally (`gofumpt`-clean, `golangci-lint` clean, `go vet` clean, all tests pass with `-race`, cross-builds for darwin-arm64 / linux-amd64 / windows-amd64)
+- [ ] Local verification passes: `gofmt -d ./...` clean, `go vet ./...` clean, `go test ./... -race -count=1` passes, and cross-builds for `darwin-arm64` / `linux-amd64` / `windows-amd64` build cleanly with `CGO_ENABLED=0`
 - [ ] Documentation updated if behaviour or public API changed
 
 ## Risk assessment

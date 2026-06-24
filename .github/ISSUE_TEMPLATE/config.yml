@@ -4,8 +4,7 @@ contact_links:
     url: https://github.com/mchv/tfdry/security/advisories/new
     about: |
       Please report security vulnerabilities privately via GitHub Security
-      Advisories rather than opening a public issue. See SECURITY.md for
-      our disclosure policy.
+      Advisories rather than opening a public issue.
   - name: Question or discussion
     url: https://github.com/mchv/tfdry/issues?q=is%3Aissue
     about: |

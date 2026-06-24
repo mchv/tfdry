@@ -9,7 +9,7 @@ body:
         Thanks for taking the time to suggest a feature.
 
         Before submitting, please check:
-        - The [TODO.md roadmap](../blob/main/TODO.md) — your idea may already be on the post-v0.1.0 list.
+        - The [TODO.md roadmap](../../TODO.md) — your idea may already be on the post-v0.1.0 list.
         - Existing issues — someone may have already proposed it.
 
         Note: tfdry deliberately stays focused on **static checks that don't require `terraform init`** and **formatting**. Features needing provider state, network calls, or `terraform`-equivalent semantics (drift detection, plan analysis, etc.) are out of scope.

@@ -11,7 +11,7 @@ body:
         Before submitting, please make sure:
         - You're running the latest tfdry release (`tfdry version`).
         - The issue reproduces with stock `terraform fmt` + `terraform validate` behaviour as a comparison baseline.
-        - For security-sensitive findings, please follow [SECURITY.md](../blob/main/SECURITY.md) instead of opening a public issue.
+        - For security-sensitive findings, please report privately via [GitHub Security Advisories](https://github.com/mchv/tfdry/security/advisories/new) instead of opening a public issue.
 
   - type: input
     id: version
