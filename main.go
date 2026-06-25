@@ -65,6 +65,43 @@ func handleCtxErr(err error, stderr io.Writer) (int, bool) {
 	return 0, false
 }
 
+// handleFatalErr is the "any error is fatal to the run" companion to
+// handleCtxErr. It categorizes an error from a top-level orchestration
+// call (one that can't continue past an error) into a process exit
+// code, writes a user-facing message to stderr, and reports whether
+// the caller should return that code immediately.
+//
+// Three outcomes:
+//
+//	nil                          -> (0, false), no stderr — caller proceeds.
+//	context.Canceled / Deadline  -> (130, true) + "tfdry: interrupted"
+//	any other non-nil error      -> (2, true)  + "<prefix>: <err>"
+//
+// prefix is the subcommand label that scopes the error message
+// (e.g., "tfdry" for the main path, "tfdry fmt" for the fmt
+// subcommand). The cancellation message stays uniform across
+// subcommands because "tfdry: interrupted" is the existing
+// user-facing contract for exit code 130; only the non-cancellation
+// branch uses the prefix.
+//
+// Use handleFatalErr at call sites where any error from a checker
+// orchestration call (ParseDir/Run/FixFormat/ctx.Err()) is fatal —
+// there's nothing useful to continue with after the failure. Use
+// handleCtxErr directly (cancel-only) at call sites that accumulate
+// per-file errors and want to continue past non-cancellation
+// failures, like the WriteFormatted loops in runFmt/runFmtFile
+// where one unwriteable file shouldn't abort the rest of the batch.
+func handleFatalErr(err error, stderr io.Writer, prefix string) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	if code, ok := handleCtxErr(err, stderr); ok {
+		return code, true
+	}
+	fmt.Fprintln(stderr, prefix+":", err)
+	return 2, true
+}
+
 // run executes the CLI with the given args, writing user output to stdout and
 // errors/diagnostics to stderr. Returns the exit code:
 //   - 0 = clean (no violations found, or all fixed)
@@ -203,16 +240,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	files, parseViolations, err := checker.ParseDir(ctx, dir)
-	if err != nil {
-		if code, ok := handleCtxErr(err, stderr); ok {
-			return code
-		}
-		// Defensive: ParseDir currently returns only ctx.Err() cases, so
-		// this branch is unreachable today. Reaching it would indicate
-		// a future API change (e.g., propagating I/O errors). Surface
-		// as a tool error rather than silently dropping it.
-		fmt.Fprintln(stderr, "tfdry:", err)
-		return 2
+	if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+		return code
 	}
 
 	// Parse violations (E000, E001) are always emitted — not subject to --checks filtering.
@@ -239,28 +268,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
 	if !skipRun {
 		runViolations, err := checker.Run(ctx, files, runFilter, dir)
-		if err != nil {
-			if code, ok := handleCtxErr(err, stderr); ok {
-				return code
-			}
-			// Defensive: Run currently returns only ctx.Err() cases.
-			// See ParseDir handling above for rationale.
-			fmt.Fprintln(stderr, "tfdry:", err)
-			return 2
+		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+			return code
 		}
 		violations = append(violations, runViolations...)
 	}
 
 	if shouldFix {
 		_, fixViolations, err := checker.FixFormat(ctx, files, dir)
-		if err != nil {
-			if code, ok := handleCtxErr(err, stderr); ok {
-				return code
-			}
-			// Defensive: FixFormat currently returns only ctx.Err() cases.
-			// See ParseDir handling above for rationale.
-			fmt.Fprintln(stderr, "tfdry:", err)
-			return 2
+		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+			return code
 		}
 		violations = append(violations, fixViolations...)
 	}
@@ -365,27 +382,15 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 	for _, d := range dirs {
 		// Per-directory cancel checkpoint. The runFmt walker may cover
 		// large monorepos with hundreds of subdirs; a SIGINT mid-walk
-		// should bail before parsing the next directory.
-		if err := ctx.Err(); err != nil {
-			if code, ok := handleCtxErr(err, stderr); ok {
-				return code
-			}
-			// Defensive: ctx.Err() per Go's contract returns nil,
-			// context.Canceled, or context.DeadlineExceeded — reaching
-			// this branch indicates a custom-context wrapper we don't
-			// model. Surface as a tool error rather than silently
-			// continuing through the rest of the walk.
-			fmt.Fprintln(stderr, "tfdry fmt:", err)
-			return 2
+		// should bail before parsing the next directory. handleFatalErr
+		// covers both cancellation (exit 130) and the defensive
+		// non-cancellation branch (exit 2 with "tfdry fmt:" prefix).
+		if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+			return code
 		}
 		files, parseViolations, err := checker.ParseDir(ctx, d)
-		if err != nil {
-			if code, ok := handleCtxErr(err, stderr); ok {
-				return code
-			}
-			// Defensive: ParseDir currently returns only ctx.Err() cases.
-			fmt.Fprintln(stderr, "tfdry fmt:", err)
-			return 2
+		if code, ok := handleFatalErr(err, stderr, "tfdry fmt"); ok {
+			return code
 		}
 		for _, v := range parseViolations {
 			// Show the path relative to the user-supplied root so a
@@ -448,13 +453,8 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 // pass would later destroy the symlink on Windows (oNoFollow=0). Reject
 // upfront so the failure mode is identical across read/write/platforms.
 func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, check bool) int {
-	if err := ctx.Err(); err != nil {
-		if code, ok := handleCtxErr(err, stderr); ok {
-			return code
-		}
-		// Defensive: see runFmt pre-check above for the same rationale.
-		fmt.Fprintln(stderr, "tfdry fmt:", err)
-		return 2
+	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+		return code
 	}
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		fmt.Fprintf(stderr, "tfdry fmt: %s: not a regular file (symlinks are not supported)\n", path)
