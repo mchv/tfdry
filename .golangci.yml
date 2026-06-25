@@ -1,0 +1,168 @@
+# golangci-lint v2 configuration for tfdry.
+#
+# Linter set chosen per the PR A3 plan in TODO.md:
+#   staticcheck   — broad static analysis (subsumes simple, stylecheck)
+#   errcheck      — unhandled error returns
+#   gosec         — security issues (G-class findings)
+#   revive        — replacement for golint; style + lint rules
+#   gocritic      — opinionated style + perf nits
+#   unconvert     — redundant type conversions
+#   unused        — unused symbols (often dead code)
+#   ineffassign   — assigned-but-never-used variables
+#   misspell      — typos in comments/strings
+#   noctx         — net/http requests without context
+#   unparam       — unused function parameters
+#
+# Notable omissions (deliberate, not oversight):
+#   - gofmt / gofumpt as a linter: enforced via `make verify` calling
+#     `gofumpt -l .` directly, which is more honest and lets us fail
+#     fast before invoking the linter set.
+#   - depguard / forbidigo: no policy yet on banned imports; will revisit
+#     when CI lands (PR B1).
+#   - typecheck: included implicitly by golangci-lint's frontend.
+
+version: "2"
+
+run:
+  timeout: 5m
+  # Don't run on generated files (none today, but future-proof).
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - staticcheck
+    - errcheck
+    - gosec
+    - revive
+    - gocritic
+    - unconvert
+    - unused
+    - ineffassign
+    - misspell
+    - noctx
+    - unparam
+
+  settings:
+    errcheck:
+      # Excluding fmt.Fprint* calls: the only callers in tfdry are the
+      # CLI's diagnostic writes to stderr/stdout via injected io.Writer
+      # parameters. A broken writer at that point can't be meaningfully
+      # recovered (the same writer is what we'd report the failure on),
+      # and treating every diagnostic message as needing error handling
+      # produces line-noise without catching a real class of bug.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - fmt.Fprint
+
+    gosec:
+      excludes:
+        # G104: errcheck-overlap — covered by errcheck above with our
+        # opinionated exceptions.
+        - G104
+        # G304: file inclusion via variable — tfdry's whole job is reading
+        # user-supplied .tf paths; the symlink + O_NOFOLLOW guards in
+        # checker/format.go and checker/hcl.go cover the real risk.
+        - G304
+        # G306: file permissions — 0o600 / 0o644 are deliberate per
+        # writeFormatted's atomic-rename comment; we want world-readable
+        # configs on multi-user dev machines.
+        - G306
+        # G703: path traversal via taint analysis. tfdry's threat model
+        # already documents symlink rejection via os.Lstat BEFORE any
+        # read/write (see runFmt/runFmtFile entry checks and
+        # checker/hcl.go:parseOne). The G703 findings flag every
+        # path-flow into a filesystem call, but they don't model the
+        # Lstat-then-act guard that gates each one. We'd be either
+        # suppressing each with a nolint directive or accepting the
+        # noise; blanket exclude is more honest.
+        - G703
+
+    revive:
+      # Default revive rules are too noisy; enable only the ones that
+      # catch real issues without bikeshedding on Go style preferences.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          arguments:
+            # Don't require a doc comment matching the symbol name on every
+            # exported identifier — too noisy for a small CLI. Just require
+            # SOME doc comment.
+            - checkPrivateReceivers
+        - name: if-return
+        - name: increment-decrement
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+          disabled: true # handled by unparam with finer control
+        - name: redefines-builtin-id
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        # Mostly bikeshedding; let humans choose:
+        - ifElseChain
+        - hugeParam
+        - rangeValCopy
+
+    misspell:
+      # The codebase uses British English consistently in NEW prose
+      # (cancelled, behaviour, honour, recognise, neighbour, ...) but
+      # references US-spelled Go identifiers we can't rename without
+      # API churn (notably `output.Sanitize`, plus a few legacy US-spelled
+      # test names like `correctBehavior_*` that pre-date PR A1).
+      # locale=UK aligns the linter with the author's chosen prose
+      # variant; ignore-rules below cover the identifier exceptions.
+      locale: UK
+      ignore-rules:
+        - sanitize    # output.Sanitize is a public identifier we don't rename
+        - sanitized
+        - sanitizes
+        - sanitizing
+        - behavior    # used in some legacy test names; OK in both spellings
+        - initialize  # Go-stdlib-adjacent term; OK in both spellings
+        - defense     # in defense-in-depth comments; common Go usage
+        - categorizes
+        - unrecognized
+        - artifact    # standard CI/release term; not an arte-/arti- bikeshed
+
+    unparam:
+      # Surface unused params in EXPORTED functions too — the public
+      # checker API is documented and we want to keep it tight.
+      check-exported: true
+
+  exclusions:
+    rules:
+      # Test files are allowed to be a bit looser; we deliberately
+      # accept some duplication for test readability.
+      - path: _test\.go
+        linters:
+          - gosec      # tests touch /tmp, weak crypto for fixtures, etc.
+          - errcheck   # t.Helper / t.Cleanup callbacks ignore errors
+          - revive     # `package_test` naming + others
+          - unparam    # test helpers often have parameters used only by some callers
+
+issues:
+  # No artificial limit; we want to see every finding once, address each.
+  max-issues-per-linter: 0
+  max-same-issues: 0
