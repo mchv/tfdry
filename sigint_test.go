@@ -1,11 +1,17 @@
-// This test file is excluded from Windows builds entirely. The
-// SIGINT subprocess test uses syscall.SysProcAttr{Setpgid: true},
-// a Unix-only field; a runtime t.Skip("windows") inside the test
-// isn't enough because the file is still compiled. Windows SIGINT
-// coverage will be added in PR B1 using the Win32 console-signal
-// API (GenerateConsoleCtrlEvent) and its own _windows_test.go file.
+// This test file is excluded from non-Unix builds entirely. The
+// SIGINT subprocess test uses syscall.SysProcAttr{Setpgid: true}
+// and syscall.Kill(-pid, SIGINT), both of which are Unix-only API
+// surface — a runtime t.Skip inside the test isn't enough because
+// the file is still compiled. The `unix` build tag (Linux, macOS,
+// BSD, illumos, AIX) matches the actual platform constraint;
+// using `!windows` would have let the file attempt to compile on
+// Plan 9 and JS/wasm where it would also fail.
+//
+// Windows SIGINT coverage will be added in PR B1 using the Win32
+// console-signal API (GenerateConsoleCtrlEvent) and its own
+// _windows_test.go file.
 
-//go:build !windows
+//go:build unix
 
 package main_test
 

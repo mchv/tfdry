@@ -1,4 +1,15 @@
-//go:build !windows
+//go:build unix
+
+// This file provides the Unix-side oNoFollow / isSymlinkRejection
+// implementations. The `unix` build tag (Linux, macOS, BSD, illumos,
+// AIX) matches the actual syscall surface: O_NOFOLLOW, ELOOP, and
+// EMLINK are POSIX-derived and not available on Plan 9 or JS/wasm.
+// nofollow_windows.go provides the no-op Windows fallback;
+// non-Unix/non-Windows platforms intentionally fail to compile
+// (tfdry targets darwin, linux, and windows only — see TODO.md
+// "Distribution"). The Plan 9 / JS failures will be a clear
+// "undefined: oNoFollow" rather than the confusing syscall errors
+// the previous `!windows` tag produced.
 
 package checker
 

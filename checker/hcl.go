@@ -65,7 +65,9 @@ func collectResults(results []parseResult) ([]ParsedFile, []Violation) {
 // cancelled mid-walk. On cancellation, files and violations may be
 // partial — every result populated before the cancellation fired is
 // returned. Callers can use errors.Is(err, context.Canceled) or
-// context.DeadlineExceeded to detect cancellation.
+// errors.Is(err, context.DeadlineExceeded) to detect cancellation;
+// both checks must use errors.Is so wrapped sentinels (e.g.
+// errgroup's wrapped error from the concurrent branch) still match.
 //
 // The cancellation contract: ctx is checked once before iterating the
 // directory listing, once before each per-file parse in the sequential
