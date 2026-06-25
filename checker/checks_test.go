@@ -14,7 +14,7 @@ func writeFiles(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -282,10 +282,10 @@ func TestE000_AlwaysEmitted_WhenDirUnreadable(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	// Make dir unreadable so ReadDir fails.
-	if err := os.Chmod(dir, 0000); err != nil {
+	if err := os.Chmod(dir, 0o000); err != nil {
 		t.Skip("cannot chmod (running as root?)")
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0755) })
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
 
 	_, vs, _ := checker.ParseDir(context.Background(), dir)
 	if !hasCode(vs, "E000") {
@@ -363,7 +363,7 @@ func TestParseDir_UnreadableFile_EmitsE000(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "unreadable.tf")
-	if err := os.WriteFile(path, []byte(`locals { x = "y" }`), 0000); err != nil {
+	if err := os.WriteFile(path, []byte(`locals { x = "y" }`), 0o000); err != nil {
 		t.Fatal(err)
 	}
 	_, vs, _ := checker.ParseDir(context.Background(), dir)
@@ -580,10 +580,10 @@ func TestParseDir_DotDotInDirName_NotRejected(t *testing.T) {
 	// Create a dir whose name contains ".." as substring but not as a segment.
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "my..project")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "y" }`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "y" }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, vs, _ := checker.ParseDir(context.Background(), dir)
@@ -631,11 +631,11 @@ func TestParseDir_DotDotSegment_Allowed(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	subdir := filepath.Join(parent, "sub")
-	if err := os.MkdirAll(subdir, 0755); err != nil {
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(parent, "main.tf"),
-		[]byte(`locals { x = "y" }`), 0644); err != nil {
+		[]byte(`locals { x = "y" }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Reach `parent` from `subdir` via raw `..` path (string concat avoids
@@ -657,7 +657,7 @@ func TestParseDir_SymlinkSkipped(t *testing.T) {
 	dir := t.TempDir()
 	// Create a real file and a symlink to it.
 	real := filepath.Join(dir, "real.tf")
-	if err := os.WriteFile(real, []byte(`locals { x = "y" }`), 0644); err != nil {
+	if err := os.WriteFile(real, []byte(`locals { x = "y" }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "link.tf")
@@ -748,16 +748,16 @@ func writeModuleFiles(t *testing.T, callerFiles map[string]string, moduleDir str
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range callerFiles {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	modPath := filepath.Join(dir, moduleDir)
-	if err := os.MkdirAll(modPath, 0755); err != nil {
+	if err := os.MkdirAll(modPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for name, content := range moduleFiles {
-		if err := os.WriteFile(filepath.Join(modPath, name), []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(modPath, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -773,7 +773,8 @@ func runDir(t *testing.T, dir string) []checker.Violation {
 // E006: passing a list where module expects a string → violation.
 func TestE006_ListPassedWhereStringExpected(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals { items = ["a", "b"] }
@@ -801,7 +802,8 @@ variable "name" {
 // E006: passing a string where module expects a string → no violation.
 func TestE006_StringPassedWhereStringExpected_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals { env = "prod" }
@@ -829,7 +831,8 @@ variable "name" {
 // E006: unresolvable type (var.something) → skip, no false positive.
 func TestE006_UnresolvableType_NoFalsePositive(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "vpc" {
@@ -860,7 +863,8 @@ variable "name" {
 // that variable (treat as SchemaUnknown).
 func TestE006_UnknownTraversalType_NoFalsePositive(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "vpc" {
@@ -903,7 +907,8 @@ func TestE006_MalformedContainerType_NoFalsePositive(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dir := writeModuleFiles(t,
+			dir := writeModuleFiles(
+				t,
 				map[string]string{
 					"main.tf": `
 module "m" {
@@ -946,7 +951,8 @@ func TestE007_MalformedObjectType_NoFalsePositive(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dir := writeModuleFiles(t,
+			dir := writeModuleFiles(
+				t,
 				map[string]string{
 					"main.tf": `
 module "m" {
@@ -978,7 +984,8 @@ variable "v" {
 // E006: module with no variables.tf → no violation (skip gracefully).
 func TestE006_NoVariablesTf_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "vpc" {
@@ -1018,7 +1025,8 @@ module "vpc" {
 // E006: object passed where object expected → no violation.
 func TestE006_ObjectPassedWhereObjectExpected_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals { cfg = { key = "val" } }
@@ -1051,7 +1059,8 @@ variable "config" {
 // the locals map until a literal is reached.
 func TestE006_TransitiveLocalChain_DetectsMismatch(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals {
@@ -1085,7 +1094,8 @@ variable "v" {
 // return TypeUnknown without crashing or stack-overflowing.
 func TestE006_TransitiveLocalCycle_DoesNotPanic(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals {
@@ -1123,7 +1133,8 @@ variable "v" {
 // gives the precise location.
 func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `module "m" {
   source = "./modules/m"
@@ -1165,7 +1176,8 @@ func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
 // line, not the parent attribute. Same reasoning as C42.
 func TestE006_MapValueMismatch_ReportsValueLine(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `module "m" {
   source = "./modules/m"
@@ -1207,7 +1219,8 @@ func TestE006_MapValueMismatch_ReportsValueLine(t *testing.T) {
 // E007: passing an input key that doesn't exist in the module's variables.tf.
 func TestE007_UnknownInputKey(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "vpc" {
@@ -1234,7 +1247,8 @@ variable "lambda_function_association" { type = map(string) }
 // E007: all keys valid → no violation.
 func TestE007_AllKeysValid_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "vpc" {
@@ -1259,7 +1273,8 @@ module "vpc" {
 // E006 deep: list passed where object field expects a map.
 func TestE006_NestedObjectFieldTypeMismatch(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals {
@@ -1293,7 +1308,8 @@ variable "behavior" {
 // E006 deep: correct nested types → no violation.
 func TestE006_NestedObjectFieldCorrect_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals { region = "us-east-1" }
@@ -1325,7 +1341,8 @@ variable "behavior" {
 // E006 deep: unknown key inside nested object → E007.
 func TestE007_NestedObjectUnknownKey(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "cdn" {
@@ -1357,7 +1374,8 @@ variable "behavior" {
 // optional() fields: type still checked when present.
 func TestE006_OptionalFieldWrongType(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals { flag = { a = 1 } }
@@ -1387,7 +1405,8 @@ variable "enabled" {
 // Bug#1: varTypeToSchemaKind must not infinite-loop on cyclic locals.
 func TestVarTypeToSchemaKind_CyclicLocals_NoPanic(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals {
@@ -1436,12 +1455,12 @@ func TestFixFormat_WriteError_ReturnsE000(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "readonly")
-	os.MkdirAll(dir, 0755)
-	os.WriteFile(filepath.Join(dir, "main.tf"), []byte("locals {\na=\"foo\"\n}\n"), 0644)
-	if err := os.Chmod(dir, 0555); err != nil {
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "main.tf"), []byte("locals {\na=\"foo\"\n}\n"), 0o644)
+	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Skip("cannot chmod:", err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0755) })
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
 
 	files, _, _ := checker.ParseDir(context.Background(), dir)
 	_, vs, _ := checker.FixFormat(context.Background(), files, dir)
@@ -1474,13 +1493,13 @@ func TestFormatFile_PreservesPermissions(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.tf")
-	os.WriteFile(path, []byte("locals {\na=\"foo\"\n}\n"), 0600)
+	os.WriteFile(path, []byte("locals {\na=\"foo\"\n}\n"), 0o600)
 	src, _ := os.ReadFile(path)
 	if err := checker.FormatFile(context.Background(), path, src); err != nil {
 		t.Fatal(err)
 	}
 	fi, _ := os.Stat(path)
-	if fi.Mode().Perm() != 0600 {
+	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("FormatFile changed permissions: got %o, want 0600", fi.Mode().Perm())
 	}
 }
@@ -1518,10 +1537,10 @@ func TestCheckModuleInputs_ParentRelativeModule_TypeMismatch_E006(t *testing.T) 
 	// that lives outside proj/ — exactly the layout that used to be skipped.
 	projDir := filepath.Join(root, "proj")
 	sharedDir := filepath.Join(root, "shared", "vpc")
-	if err := os.MkdirAll(projDir, 0755); err != nil {
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(sharedDir, 0755); err != nil {
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	mainTF := `
@@ -1531,11 +1550,11 @@ module "vpc" {
   name   = local.items   # caller passes a list where module wants string
 }
 `
-	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	moduleVars := `variable "name" { type = string }`
-	if err := os.WriteFile(filepath.Join(sharedDir, "variables.tf"), []byte(moduleVars), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(sharedDir, "variables.tf"), []byte(moduleVars), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1553,10 +1572,10 @@ func TestCheckModuleInputs_ParentRelativeModule_Clean(t *testing.T) {
 
 	projDir := filepath.Join(root, "proj")
 	sharedDir := filepath.Join(root, "shared", "vpc")
-	if err := os.MkdirAll(projDir, 0755); err != nil {
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(sharedDir, 0755); err != nil {
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	mainTF := `
@@ -1565,11 +1584,11 @@ module "vpc" {
   name   = "production"
 }
 `
-	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	moduleVars := `variable "name" { type = string }`
-	if err := os.WriteFile(filepath.Join(sharedDir, "variables.tf"), []byte(moduleVars), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(sharedDir, "variables.tf"), []byte(moduleVars), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1589,10 +1608,10 @@ func TestCheckModuleInputs_SiblingDir_UnknownInput_E007(t *testing.T) {
 	// Project at <root>/proj, sibling at <root>/proj-evil with a module file.
 	projDir := filepath.Join(root, "proj")
 	siblingDir := filepath.Join(root, "proj-evil")
-	if err := os.MkdirAll(projDir, 0755); err != nil {
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(siblingDir, 0755); err != nil {
+	if err := os.MkdirAll(siblingDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// proj/main.tf references ../proj-evil with input "name"
@@ -1602,12 +1621,12 @@ module "neighbour" {
   name   = "x"
 }
 `
-	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(projDir, "main.tf"), []byte(mainTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// sibling declares "other", not "name" → caller-side "name" is unknown.
 	siblingVars := `variable "other" {}`
-	if err := os.WriteFile(filepath.Join(siblingDir, "variables.tf"), []byte(siblingVars), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(siblingDir, "variables.tf"), []byte(siblingVars), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1626,11 +1645,11 @@ func TestCheckModuleInputs_DotDotPrefixedChildName_Allowed(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	moduleDir := filepath.Join(root, "..hidden")
-	if err := os.MkdirAll(moduleDir, 0755); err != nil {
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(moduleDir, "variables.tf"),
-		[]byte(`variable "name" { type = string }`), 0644); err != nil {
+		[]byte(`variable "name" { type = string }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mainTF := `
@@ -1639,7 +1658,7 @@ module "child" {
   name   = "x"
 }
 `
-	if err := os.WriteFile(filepath.Join(root, "main.tf"), []byte(mainTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "main.tf"), []byte(mainTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1659,7 +1678,7 @@ func TestFixFormat_RewritesFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.tf")
 	unformatted := []byte("locals {\na=\"foo\"\n}\n")
-	os.WriteFile(path, unformatted, 0644)
+	os.WriteFile(path, unformatted, 0o644)
 
 	files, _, _ := checker.ParseDir(context.Background(), dir)
 	_, vs, _ := checker.FixFormat(context.Background(), files, dir)
@@ -1678,7 +1697,7 @@ func TestFixFormat_SkipsFormattedFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.tf")
 	formatted := []byte("locals {\n  a = \"foo\"\n}\n")
-	os.WriteFile(path, formatted, 0644)
+	os.WriteFile(path, formatted, 0o644)
 	fi1, _ := os.Stat(path)
 
 	files, _, _ := checker.ParseDir(context.Background(), dir)
@@ -1693,7 +1712,8 @@ func TestFixFormat_SkipsFormattedFiles(t *testing.T) {
 // E006: number literal passed where string expected.
 func TestE006_NumberPassedWhereStringExpected(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1716,7 +1736,8 @@ module "m" {
 // E006: tuple literal at top-level map(string) variable.
 func TestE006_TuplePassedToMapVariable(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1741,7 +1762,8 @@ module "m" {
 // list(string) with a non-string element must fire E006.
 func TestE006_ListOfString_WithNumberElement(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1764,7 +1786,8 @@ module "m" {
 // set(string) with a non-string element must fire E006.
 func TestE006_SetOfString_WithBoolElement(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1787,7 +1810,8 @@ module "m" {
 // map(number) with a non-number value must fire E006.
 func TestE006_MapOfNumber_WithStringValue(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1810,7 +1834,8 @@ module "m" {
 // Element type matches: no violation.
 func TestE006_ListOfString_AllStrings_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1833,7 +1858,8 @@ module "m" {
 // Element type matches in map: no violation.
 func TestE006_MapOfNumber_AllNumbers_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1856,7 +1882,8 @@ module "m" {
 // list(any): elements with mixed types must NOT fire (any = no checking).
 func TestE006_ListOfAny_MixedTypes_NoViolation(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1879,7 +1906,8 @@ module "m" {
 // Element is a local with unresolvable type → no false positive.
 func TestE006_ListOfString_UnresolvableLocalElement_NoFalsePositive(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals {
@@ -1905,7 +1933,8 @@ module "m" {
 // parseTypeSchema: set(string) and map(number) parsed correctly.
 func TestParseTypeSchema_SetAndMap(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -1935,7 +1964,8 @@ variable "weights" { type = map(number) }
 // Bug#1: Terraform meta-arguments in module blocks must NOT produce E007.
 func TestE007_MetaArguments_NoFalsePositive(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -2000,8 +2030,8 @@ func TestValidateCheckCodes_AllKnownCodesAccepted(t *testing.T) {
 func TestFixFormat_FixedMapContainsRewrittenFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.tf"), []byte("locals {\na=\"foo\"\n}\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "b.tf"), []byte("locals {\n  b = \"bar\"\n}\n"), 0644) // already formatted
+	os.WriteFile(filepath.Join(dir, "a.tf"), []byte("locals {\na=\"foo\"\n}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.tf"), []byte("locals {\n  b = \"bar\"\n}\n"), 0o644) // already formatted
 
 	files, _, _ := checker.ParseDir(context.Background(), dir)
 	fixed, vs, _ := checker.FixFormat(context.Background(), files, dir)
@@ -2019,7 +2049,8 @@ func TestFixFormat_FixedMapContainsRewrittenFiles(t *testing.T) {
 // Missing: resolveExprType locals indirection for E006.
 func TestE006_LocalReferenceResolved(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals { items = ["a", "b"] }
@@ -2045,10 +2076,10 @@ func TestParseModuleVarSchemas_SymlinkDir_Skipped(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	realMod := t.TempDir()
-	os.WriteFile(filepath.Join(realMod, "variables.tf"), []byte(`variable "x" { type = string }`), 0644)
+	os.WriteFile(filepath.Join(realMod, "variables.tf"), []byte(`variable "x" { type = string }`), 0o644)
 
 	linkMod := filepath.Join(dir, "modules", "m")
-	os.MkdirAll(filepath.Join(dir, "modules"), 0755)
+	os.MkdirAll(filepath.Join(dir, "modules"), 0o755)
 	if err := os.Symlink(realMod, linkMod); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
@@ -2057,7 +2088,7 @@ module "m" {
   source = "./modules/m"
   y      = "unknown"
 }
-`), 0644)
+`), 0o644)
 
 	files, _, _ := checker.ParseDir(context.Background(), dir)
 	vs, _ := checker.Run(context.Background(), files, nil, dir)
@@ -2096,7 +2127,7 @@ func TestFormatFile_Symlink_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real.tf")
 	link := filepath.Join(dir, "link.tf")
-	os.WriteFile(real, []byte("locals {\n  a = \"x\"\n}\n"), 0644)
+	os.WriteFile(real, []byte("locals {\n  a = \"x\"\n}\n"), 0o644)
 	if err := os.Symlink(real, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
@@ -2113,7 +2144,8 @@ func TestFormatFile_Symlink_ReturnsError(t *testing.T) {
 func TestIsLocalSource_SlashDot(t *testing.T) {
 	t.Parallel()
 	// "./" is a local source and must be caught by the traversal guard.
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 variable "x" { type = string }
@@ -2142,7 +2174,8 @@ module "self" {
 // (exercises objectKeyName's TemplateExpr/LiteralValueExpr branches).
 func TestE007_QuotedSchemaKeys_NoFalsePositive(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -2175,7 +2208,8 @@ variable "config" {
 // T9: with quoted-key schema, a genuinely unknown caller key still produces E007.
 func TestE007_QuotedSchemaKeys_StillCatchesUnknownKey(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 module "m" {
@@ -2211,7 +2245,8 @@ variable "config" {
 // any change in semantics is caught.
 func TestE007_ParenthesisedSchemaKey_TreatedAsDynamic(t *testing.T) {
 	t.Parallel()
-	dir := writeModuleFiles(t,
+	dir := writeModuleFiles(
+		t,
 		map[string]string{
 			"main.tf": `
 locals { keyname = "name" }

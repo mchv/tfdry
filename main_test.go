@@ -28,7 +28,7 @@ func writeTFDir(t *testing.T, files map[string]string) string {
 	dir := t.TempDir()
 	for name, content := range files {
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -371,8 +371,10 @@ func TestRun_DefaultDirIsCurrent(t *testing.T) {
 
 // ── fmt subcommand (mirrors terraform fmt) ───────────────────────────────────
 
-const fmtDirtyTF = "locals {\n  a=\"b\"\n   c =   \"d\"\n}\n"
-const fmtCleanTF = "locals {\n  a = \"b\"\n  c = \"d\"\n}\n"
+const (
+	fmtDirtyTF = "locals {\n  a=\"b\"\n   c =   \"d\"\n}\n"
+	fmtCleanTF = "locals {\n  a = \"b\"\n  c = \"d\"\n}\n"
+)
 
 func TestRun_Fmt_RewritesUnformattedFile_PrintsName_ExitZero(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})
@@ -429,21 +431,21 @@ func TestRun_FmtCheck_Clean_ExitZero(t *testing.T) {
 func TestRun_FmtRecursive_FormatsNestedFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Top-level dirty.
-	if err := os.WriteFile(filepath.Join(dir, "dirty.tf"), []byte(fmtDirtyTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "dirty.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Nested dirty in subdir/.
-	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "subdir", "nested.tf"), []byte(fmtDirtyTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "subdir", "nested.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Deeper.
-	if err := os.MkdirAll(filepath.Join(dir, "subdir", "deep"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "subdir", "deep"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "subdir", "deep", "deep.tf"), []byte(fmtDirtyTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "subdir", "deep", "deep.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	code, stdout, _ := runCLI("fmt", "-recursive", dir)
@@ -466,10 +468,10 @@ func TestRun_FmtRecursive_FormatsNestedFiles(t *testing.T) {
 func TestRun_FmtRecursive_SkipsHiddenDirs(t *testing.T) {
 	dir := t.TempDir()
 	for _, sub := range []string{".terraform", ".git", ".hidden"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, sub, "x.tf"), []byte(fmtDirtyTF), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, sub, "x.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -492,13 +494,13 @@ func TestRun_FmtRecursive_SkipsHiddenDirs(t *testing.T) {
 
 func TestRun_FmtRecursiveCheck_DirtyInSubdir_ExitThree(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "clean.tf"), []byte(fmtCleanTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "clean.tf"), []byte(fmtCleanTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "subdir", "nested.tf"), []byte(fmtDirtyTF), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "subdir", "nested.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	code, stdout, _ := runCLI("fmt", "-recursive", "-check", dir)
@@ -696,12 +698,12 @@ func TestRun_ExtrasAfterSubcommand_ExitTwo(t *testing.T) {
 // filename exists under multiple subdirs the message is ambiguous.
 func TestRun_FmtRecursive_ParseError_PrefixesSubdirPath(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "infra", "prod"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "infra", "prod"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// Invalid HCL in a deep subdir.
 	if err := os.WriteFile(filepath.Join(dir, "infra", "prod", "bad.tf"),
-		[]byte(`resource "x" "y" { @@@`), 0644); err != nil {
+		[]byte(`resource "x" "y" { @@@`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	code, _, stderr := runCLI("fmt", "-recursive", dir)
@@ -732,7 +734,7 @@ func TestRun_Fmt_SanitizesFilenameInOutput(t *testing.T) {
 	// fmt rewrites the file (the file is dirty, so its name appears).
 	bad := "evil\x1b[31m\u202Edirty.tf"
 	path := filepath.Join(dir, bad)
-	if err := os.WriteFile(path, []byte(fmtDirtyTF), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(fmtDirtyTF), 0o644); err != nil {
 		t.Skipf("filesystem rejects control chars in filename: %v", err)
 	}
 	code, stdout, _ := runCLI("fmt", dir)
@@ -763,12 +765,12 @@ func TestRun_FmtRecursive_SanitizesParseErrorPath(t *testing.T) {
 		t.Skip("Windows filesystem rejects most control chars in filenames")
 	}
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "infra"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "infra"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	bad := "evil\x1b[31mbad.tf"
 	if err := os.WriteFile(filepath.Join(dir, "infra", bad),
-		[]byte(`resource "x" "y" { @@@`), 0644); err != nil {
+		[]byte(`resource "x" "y" { @@@`), 0o644); err != nil {
 		t.Skipf("filesystem rejects control chars in filename: %v", err)
 	}
 	code, _, stderr := runCLI("fmt", "-recursive", dir)

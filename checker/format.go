@@ -112,7 +112,8 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 		}
 		path := filepath.Join(dir, f.Name)
 		if ok, werr := writeFormatted(path, formatted); werr != nil {
-			violations = append(violations,
+			violations = append(
+				violations,
 				Violation{
 					Code:     "E000",
 					Severity: "error",

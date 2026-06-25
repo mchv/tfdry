@@ -137,7 +137,7 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 			fmt.Fprintf(&b, "  x_%d_%d = \"value-%d-%d\"\n", i, j, i, j)
 		}
 		b.WriteString("}\n")
-		if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

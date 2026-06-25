@@ -148,7 +148,7 @@ func TestParseDir_ParallelBranch_NoRace(t *testing.T) {
 		// it ends up in the correct results slot.
 		path := filepath.Join(dir, fmt.Sprintf("file_%02d.tf", i))
 		content := fmt.Sprintf(`locals { idx_%02d = "marker_%02d" }`+"\n", i, i)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -40,7 +40,8 @@ func TestNewReport_NilViolations_EmptyJSONArray(t *testing.T) {
 func TestWriteJSON_StripsTerminalInjection(t *testing.T) {
 	const rlo = "\u202E"
 	vs := []checker.Violation{
-		{Code: "E001", Severity: "error",
+		{
+			Code: "E001", Severity: "error",
 			File:    "evil" + rlo + "fn.tf\x1b[31m",
 			Message: "msg" + rlo + "rest\x1b]0;TITLE\x07",
 		},
@@ -184,20 +185,26 @@ func TestSanitize_StripsNewlineAndTabInjection(t *testing.T) {
 	const fakeLine = "FAKE [E001] forged.tf:1  injected error"
 	vs := []checker.Violation{
 		// Newline-injected filename — forges a second violation line in human output.
-		{Code: "E003", Severity: "error",
+		{
+			Code: "E003", Severity: "error",
 			File:    "main.tf\n✗  [E001] " + fakeLine,
 			Line:    1,
-			Message: "ok"},
+			Message: "ok",
+		},
 		// Tab-injected filename — could break TSV consumers / forge column boundaries.
-		{Code: "E003", Severity: "error",
+		{
+			Code: "E003", Severity: "error",
 			File:    "main.tf\tfoo",
 			Line:    2,
-			Message: "ok"},
+			Message: "ok",
+		},
 		// Newline-injected message — forges a fake follow-up line.
-		{Code: "E003", Severity: "error",
+		{
+			Code: "E003", Severity: "error",
 			File:    "main.tf",
 			Line:    3,
-			Message: "real error\n✗  [E001] " + fakeLine},
+			Message: "real error\n✗  [E001] " + fakeLine,
+		},
 	}
 	r := output.NewReport("/dir", vs)
 

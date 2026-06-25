@@ -29,7 +29,7 @@ func tfDir(b testing.TB, n, m int) string {
 		for j := range m {
 			buf = fmt.Appendf(buf, "output \"out_%d_%d\" { value = local.local_%d_%d }\n", i, j, i, j)
 		}
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), buf, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), buf, 0o644); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -42,7 +42,7 @@ func tfDirUnformatted(b testing.TB, n int) string {
 	dir := b.TempDir()
 	for i := range n {
 		content := fmt.Sprintf("locals {\na=\"value-%d\"\n}\n", i)
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), []byte(content), 0o644); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -54,13 +54,13 @@ func tfDirWithModule(b testing.TB, n int) string {
 	b.Helper()
 	dir := b.TempDir()
 	modDir := filepath.Join(dir, "modules", "m")
-	if err := os.MkdirAll(modDir, 0755); err != nil {
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
 		b.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(modDir, "variables.tf"), []byte(`
 variable "name" { type = string }
 variable "count" { type = number }
-`), 0644); err != nil {
+`), 0o644); err != nil {
 		b.Fatal(err)
 	}
 	for i := range n {
@@ -71,7 +71,7 @@ module "m%d" {
   count  = %d
 }
 `, i, i, i)
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.tf", i)), []byte(content), 0o644); err != nil {
 			b.Fatal(err)
 		}
 	}
