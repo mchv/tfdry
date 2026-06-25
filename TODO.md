@@ -15,12 +15,12 @@ This file tracks two things:
 
 - [x] **PR A1 — TODO triage + GitHub templates.** Restructure this file
       and add issue/PR templates. (This PR.)
-- [ ] **PR A2 — `context.Context` API sweep.** Thread `ctx` through all
-      public API entry points (`ParseDir`, `Run`, `RunModuleChecks`,
-      `CheckFormat`, `WriteFormatted`) before v0.1.0 so we ship the
-      canonical Go shape. Adds cancellation checkpoints in hot loops
-      and wires `signal.NotifyContext` in `main`. Test-first; covers
-      SIGINT graceful shutdown. *(In review.)*
+- [x] **PR A2 — `context.Context` API sweep.** Threaded `ctx` through all
+      public API entry points (`ParseDir`, `Run`, `CheckFormat`,
+      `FixFormat`, `WriteFormatted`, `FormatFile`) before v0.1.0 to ship
+      the canonical Go shape. Added cancellation checkpoints in hot
+      loops and wired `signal.NotifyContext` in `main`. Test-first;
+      covers SIGINT graceful shutdown. (#3 — 7 review rounds.)
 - [ ] **PR A2 follow-up — E000 exit-code routing.** The README and
       `SKILL.md` contract documents exit 2 for tool/infrastructure
       failures (E000: unreadable directories, write failures, malformed
@@ -37,7 +37,7 @@ This file tracks two things:
 - [ ] **PR A3 — Lint hardening.** `gofumpt` adoption,
       `golangci-lint` config (`staticcheck`, `errcheck`, `gosec`,
       `revive`, `gocritic`, `unconvert`, `unused`, `ineffassign`,
-      `misspell`, `noctx`, `unparam`), `govulncheck` in CI.
+      `misspell`, `noctx`, `unparam`), `govulncheck` in CI. *(In review.)*
 - [ ] **PR A4 — Review-marker cleanup.** Scrub `C##` / `G##`
       review-finding prefixes from inline comments while preserving the
       reasoning. ~133 hits across 11 files.

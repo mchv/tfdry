@@ -2,7 +2,14 @@ BINARY  := tfdry
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags="-s -w -X github.com/mchv/tfdry/output.Version=$(VERSION)"
 
-.PHONY: help build test bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
+# Tool versions are pinned in the install targets so contributors can
+# bootstrap a clean environment with `make tools` before running
+# `make verify`. CI (PR B1) installs the same versions in its runner.
+GOFUMPT_VERSION       := latest
+GOLANGCI_LINT_VERSION := latest
+GOVULNCHECK_VERSION   := latest
+
+.PHONY: help build test verify tools fmt fmt-check lint vet vuln cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -14,6 +21,51 @@ build: ## Build the tfdry binary into ./tfdry.
 
 test: ## Run unit tests across all packages.
 	go test ./...
+
+# ----- Verification pipeline ------------------------------------------------
+# `make verify` is the canonical pre-PR check. Mirrors what CI will run
+# in PR B1's pipeline. Composed of fine-grained sub-targets so contributors
+# can run pieces in isolation when debugging a specific finding.
+
+verify: fmt-check vet lint test-race vuln cross-build ## Run the full pre-PR verification pipeline.
+
+tools: ## Install the dev tools used by `make verify` (gofumpt, golangci-lint, govulncheck) into GOPATH/bin.
+	go install mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+fmt: ## Apply gofumpt formatting in place. Use this to fix `make fmt-check` failures.
+	gofumpt -w .
+
+fmt-check: ## Verify gofumpt formatting is clean. Fails with a diff if not.
+	@out=$$(gofumpt -l . 2>&1); \
+	if [ -n "$$out" ]; then \
+		echo "Files need gofumpt formatting:"; \
+		echo "$$out"; \
+		echo ""; \
+		echo "Run 'make fmt' to fix."; \
+		exit 1; \
+	fi
+
+vet: ## Run go vet.
+	go vet ./...
+
+lint: ## Run golangci-lint with the project's config.
+	golangci-lint run ./...
+
+test-race: ## Run tests with the race detector + a fresh build (no cache).
+	go test ./... -race -count=1
+
+vuln: ## Run govulncheck against the project's call graph.
+	govulncheck ./...
+
+cross-build: ## Build for every supported target to catch GOOS/GOARCH issues.
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64  go build -o /dev/null .
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64  go build -o /dev/null .
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64  go build -o /dev/null .
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64  go build -o /dev/null .
+
+# ----- Benchmarks -----------------------------------------------------------
 
 bench: ## Run all Go benchmarks once with allocation stats.
 	go test ./... -bench=. -benchtime=5s -benchmem -count=1 -run='^$$'
