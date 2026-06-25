@@ -18,6 +18,12 @@ package checker
 // a module declared and VarType describes what the caller passed.
 type VarType int
 
+// VarType is the coarse-grained classification tfdry assigns to a
+// Terraform variable's `type = ...` expression for the purposes of
+// type-conformance checks (E007). The zero value TypeUnknown signals
+// that the type couldn't be resolved (e.g., remote module reference,
+// unparsable type literal) and gates downstream checks so they skip
+// rather than emit spurious violations.
 const (
 	TypeUnknown VarType = iota // unresolvable — skip checks
 	TypeString

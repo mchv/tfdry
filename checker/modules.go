@@ -13,6 +13,11 @@ import (
 // SchemaKind is the kind of a TypeSchema node.
 type SchemaKind int
 
+// SchemaKind enumerates the recognised kinds of a Terraform type
+// expression. The zero value SchemaUnknown signals an unresolvable
+// schema (e.g., a remote module reference we didn't load, an unparsable
+// type literal) and gates downstream checks so they skip rather than
+// emit spurious E007 violations.
 const (
 	SchemaUnknown SchemaKind = iota // unresolvable — skip checks
 	SchemaString
@@ -367,7 +372,7 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 	}
 	if schema.Kind == SchemaObject {
 		if obj, ok := unwrapExpr(expr).(*hclsyntax.ObjectConsExpr); ok {
-			compareObjectToSchema(file, line, context, obj, schema, locals, checks, out)
+			compareObjectToSchema(file, context, obj, schema, locals, checks, out)
 			return
 		}
 	}
@@ -524,7 +529,12 @@ func kindIsSequence(k SchemaKind) bool {
 }
 
 // compareObjectToSchema checks each key of an object literal against a SchemaObject.
-func compareObjectToSchema(file string, line int, context string, obj *hclsyntax.ObjectConsExpr, schema TypeSchema, locals map[string]LocalInfo, checks CheckSet, out *[]Violation) {
+//
+// The function uses each item's own KeyExpr.StartRange() for the
+// per-key violation line — the caller's parse line is irrelevant
+// once we're inside the object literal — so no `line` parameter
+// is needed (caught by unparam in PR A3).
+func compareObjectToSchema(file, context string, obj *hclsyntax.ObjectConsExpr, schema TypeSchema, locals map[string]LocalInfo, checks CheckSet, out *[]Violation) {
 	for _, item := range obj.Items {
 		key := objectKeyName(item.KeyExpr)
 		if key == "" {

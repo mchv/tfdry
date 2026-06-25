@@ -1,9 +1,11 @@
 package checker_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,7 +27,7 @@ func run(t *testing.T, files map[string]string) []checker.Violation {
 	t.Helper()
 	dir := writeFiles(t, files)
 	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
-	violations := append(parseViolations, mustRun(context.Background(), parsed, nil, dir)...)
+	violations := slices.Concat(parseViolations, mustRun(context.Background(), parsed, nil, dir))
 	return violations
 }
 
@@ -319,7 +321,7 @@ output "o3" { value = local.typo3 }
 	// Re-run on same content via a fresh dir to get a second ordering.
 	dir2 := writeFiles(t, files)
 	parsed2, pv2, _ := checker.ParseDir(context.Background(), dir2)
-	second := append(pv2, mustRun(context.Background(), parsed2, nil, dir2)...)
+	second := slices.Concat(pv2, mustRun(context.Background(), parsed2, nil, dir2))
 
 	if len(first) != len(second) {
 		t.Fatalf("run lengths differ: %d vs %d", len(first), len(second))
@@ -641,6 +643,9 @@ func TestParseDir_DotDotSegment_Allowed(t *testing.T) {
 	// Reach `parent` from `subdir` via raw `..` path (string concat avoids
 	// filepath.Join's automatic cleaning, so the path actually contains
 	// a `..` segment when ParseDir sees it).
+	//
+	//nolint:gocritic // intentional: filepath.Join would collapse "subdir/.."
+	// to the parent dir and defeat the test's premise.
 	relPath := subdir + string(os.PathSeparator) + ".."
 	files, vs, _ := checker.ParseDir(context.Background(), relPath)
 	if hasCode(vs, "E000") {
@@ -656,12 +661,12 @@ func TestParseDir_SymlinkSkipped(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	// Create a real file and a symlink to it.
-	real := filepath.Join(dir, "real.tf")
-	if err := os.WriteFile(real, []byte(`locals { x = "y" }`), 0o644); err != nil {
+	realPath := filepath.Join(dir, "real.tf")
+	if err := os.WriteFile(realPath, []byte(`locals { x = "y" }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "link.tf")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
 	files, vs, _ := checker.ParseDir(context.Background(), dir)
@@ -707,7 +712,7 @@ func TestParseViolations_AlwaysEmitted_WithRestrictiveChecks(t *testing.T) {
 	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
 	// Run with only E005 — parse violations must still be present.
 	runViolations, _ := checker.Run(context.Background(), parsed, checker.CheckSet{"E005": {}}, dir)
-	all := append(parseViolations, runViolations...)
+	all := slices.Concat(parseViolations, runViolations)
 	if !hasCode(all, "E001") {
 		t.Fatalf("expected E001 even with restrictive --checks, got %v", codes(all))
 	}
@@ -1686,7 +1691,7 @@ func TestFixFormat_RewritesFiles(t *testing.T) {
 		t.Fatalf("expected no violations, got %v", vs)
 	}
 	got, _ := os.ReadFile(path)
-	if string(got) == string(unformatted) {
+	if bytes.Equal(got, unformatted) {
 		t.Fatal("FixFormat did not rewrite the file")
 	}
 }
@@ -1701,7 +1706,9 @@ func TestFixFormat_SkipsFormattedFiles(t *testing.T) {
 	fi1, _ := os.Stat(path)
 
 	files, _, _ := checker.ParseDir(context.Background(), dir)
-	checker.FixFormat(context.Background(), files, dir) //nolint:errcheck
+	//nolint:errcheck // we don't care about the err here; the test
+	// only inspects the file's mtime after the no-op FixFormat pass.
+	checker.FixFormat(context.Background(), files, dir)
 
 	fi2, _ := os.Stat(path)
 	if !fi2.ModTime().Equal(fi1.ModTime()) {
@@ -2125,13 +2132,13 @@ module "self" {
 func TestFormatFile_Symlink_ReturnsError(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	real := filepath.Join(dir, "real.tf")
+	realPath := filepath.Join(dir, "real.tf")
 	link := filepath.Join(dir, "link.tf")
-	os.WriteFile(real, []byte("locals {\n  a = \"x\"\n}\n"), 0o644)
-	if err := os.Symlink(real, link); err != nil {
+	os.WriteFile(realPath, []byte("locals {\n  a = \"x\"\n}\n"), 0o644)
+	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
-	src, _ := os.ReadFile(real)
+	src, _ := os.ReadFile(realPath)
 	if err := checker.FormatFile(context.Background(), link, src); err == nil {
 		t.Fatal("expected error when formatting a symlink path, got nil")
 	}

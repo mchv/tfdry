@@ -1,10 +1,12 @@
 package checker_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,7 +23,7 @@ func TestE008_UnformattedFile(t *testing.T) {
 }
 `), 0o644)
 	files, pv, _ := checker.ParseDir(context.Background(), dir)
-	vs := append(pv, mustRun(context.Background(), files, nil, dir)...)
+	vs := slices.Concat(pv, mustRun(context.Background(), files, nil, dir))
 	if !hasCode(vs, "E008") {
 		t.Fatalf("expected E008 for unformatted file, got %v", codes(vs))
 	}
@@ -36,7 +38,7 @@ func TestE008_FormattedFile_NoViolation(t *testing.T) {
 }
 `), 0o644)
 	files, pv, _ := checker.ParseDir(context.Background(), dir)
-	vs := append(pv, mustRun(context.Background(), files, nil, dir)...)
+	vs := slices.Concat(pv, mustRun(context.Background(), files, nil, dir))
 	if hasCode(vs, "E008") {
 		t.Fatalf("unexpected E008 for already-formatted file: %v", codes(vs))
 	}
@@ -69,7 +71,7 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
 
 	got, _ := os.ReadFile(path)
 	// After formatting, a = "foo" should be properly spaced.
-	if string(got) == string(unformatted) {
+	if bytes.Equal(got, unformatted) {
 		t.Fatal("FormatFile did not change the file content")
 	}
 	// Running again must be idempotent.
@@ -77,7 +79,7 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got2, _ := os.ReadFile(path)
-	if string(got) != string(got2) {
+	if !bytes.Equal(got, got2) {
 		t.Fatal("FormatFile is not idempotent")
 	}
 }

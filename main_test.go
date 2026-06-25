@@ -16,10 +16,10 @@ import (
 
 // runCLI invokes the package-level run() function with captured stdout/stderr.
 // Returns exit code, stdout, stderr.
-func runCLI(args ...string) (int, string, string) {
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), args, &stdout, &stderr)
-	return code, stdout.String(), stderr.String()
+func runCLI(args ...string) (code int, stdout, stderr string) {
+	var stdoutBuf, stderrBuf bytes.Buffer
+	code = run(context.Background(), args, &stdoutBuf, &stderrBuf)
+	return code, stdoutBuf.String(), stderrBuf.String()
 }
 
 // writeTFDir creates a temp dir with the given files and returns its path.
@@ -1010,9 +1010,9 @@ func TestRun_Fmt_RecursiveOnFile_ExitTwo(t *testing.T) {
 // symlinks consistently across platforms before any I/O against the target.
 func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
-	real := filepath.Join(dir, "real.tf")
+	realPath := filepath.Join(dir, "real.tf")
 	link := filepath.Join(dir, "link.tf")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
 
@@ -1037,7 +1037,7 @@ func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 	}
 
 	// The target file must still contain the dirty content.
-	target, _ := os.ReadFile(real)
+	target, _ := os.ReadFile(realPath)
 	if string(target) != fmtDirtyTF {
 		t.Fatalf("symlink target was modified through the symlink; got %q", string(target))
 	}
@@ -1047,9 +1047,9 @@ func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 // follows, no exit-3 false positive, just a usage error).
 func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
-	real := filepath.Join(dir, "real.tf")
+	realPath := filepath.Join(dir, "real.tf")
 	link := filepath.Join(dir, "link.tf")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
 	code, _, stderr := runCLI("fmt", "-check", link)
@@ -1303,7 +1303,7 @@ var (
 	inlineLinkRe = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 	// Reference-definition form: leading whitespace, [ref]: url.
 	// (?m) so ^ matches start of every line.
-	refLinkRe = regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*([^\s]+)`)
+	refLinkRe = regexp.MustCompile(`(?m)^\s*\[[^\]]+\]:\s*(\S+)`)
 )
 
 // extractRelativeLinks finds every relative file-path link in markdown
@@ -1534,7 +1534,7 @@ func gitHubTemplateFiles() []string {
 			if ext != ".yml" && ext != ".yaml" && ext != ".md" {
 				continue
 			}
-			files = append(files, filepath.Join(".github/ISSUE_TEMPLATE", e.Name()))
+			files = append(files, filepath.Join(".github", "ISSUE_TEMPLATE", e.Name()))
 		}
 	}
 	return files

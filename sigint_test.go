@@ -22,7 +22,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -61,11 +60,16 @@ func tfdryBin(t *testing.T) string {
 		}
 		// Leak the dir on test process exit — t.Cleanup is per-test so
 		// can't safely remove a binary shared via sync.Once.
+		// No ".exe" suffix needed: this file is //go:build unix, so
+		// runtime.GOOS is always one of linux/darwin/bsd/illumos/aix.
 		bin := filepath.Join(dir, "tfdry")
-		if runtime.GOOS == "windows" {
-			bin += ".exe"
-		}
-		cmd := exec.Command("go", "build", "-o", bin, ".")
+		// exec.CommandContext (not exec.Command) to satisfy the noctx
+		// linter; we don't actually want to cancel this build mid-flight
+		// (it's a one-shot setup helper), so context.Background is
+		// appropriate. The go build itself is fast (~1-2s); a stuck
+		// build would manifest as the whole test timing out via
+		// `go test -timeout`, not a missing cancellation point here.
+		cmd := exec.CommandContext(context.Background(), "go", "build", "-o", bin, ".")
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			tfdryBinErr = fmt.Errorf("go build: %w\n%s", err, out)
@@ -96,9 +100,10 @@ func tfdryBin(t *testing.T) string {
 // We feed tfdry a directory containing many .tf files so the lint pass
 // has enough work to still be running when we deliver the signal.
 func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows os.Interrupt to a child process is delivered via different APIs; covered separately when Windows CI lands in PR B1")
-	}
+	// No need for an in-test runtime.GOOS=="windows" Skip — the file
+	// has a //go:build unix constraint at the top, so this test only
+	// compiles on Unix-likes in the first place. Windows SIGINT
+	// coverage will land in PR B1 with its own _windows_test.go.
 
 	bin := tfdryBin(t)
 

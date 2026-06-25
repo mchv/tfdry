@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,7 +129,7 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	//      symlink in some implementations. Either way, otherTarget's
 	//      content must be unchanged.
 	final, _ := os.ReadFile(otherTarget)
-	if string(final) != string(original) {
+	if !bytes.Equal(final, original) {
 		t.Errorf("symlink target file was modified despite C41 check; got %q want %q",
 			string(final), string(original))
 	}
