@@ -127,8 +127,15 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	stderr := new(strings.Builder)
 	cmd.Stderr = stderr
 	cmd.Stdout = nil // discard
-	// Put the child in its own process group so our SIGINT goes to the
-	// tfdry process specifically, not the test harness.
+	// Put the child in its own process group (PGID = child PID).
+	// Setpgid:true affects which signals reach the child, not which
+	// signals reach the harness: with the child in its own group, a
+	// terminal-driven SIGINT delivered to the test harness's foreground
+	// process group (e.g. when a developer hits Ctrl-C during `go test`)
+	// does NOT cascade to the child. It also makes the negative-PID
+	// kill below meaningful — `syscall.Kill(-pid, sig)` sends to the
+	// whole group, so any future subprocess that tfdry spawns (LSP
+	// child, watch-mode helpers, etc.) would also receive the signal.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
@@ -157,8 +164,26 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	// the parent, or a Unix-socket ping). Tracked alongside PR B1's
 	// Windows SIGINT coverage.
 	time.Sleep(500 * time.Millisecond)
-	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
-		t.Fatalf("cmd.Process.Signal: %v", err)
+	// Send to the entire process group via negative PID (works because
+	// Setpgid:true above made the child a group leader with PGID = its
+	// own PID). Two reasons this is preferable to cmd.Process.Signal:
+	//
+	//   1. Future-proofs the test for when tfdry spawns subprocesses
+	//      (LSP child, watch-mode helpers, terraform subprocess wrap):
+	//      they all share the child's PGID and will receive the signal.
+	//      cmd.Process.Signal would only signal the immediate child.
+	//   2. Makes the Setpgid:true above semantically meaningful for the
+	//      kill path, not just the harness-isolation path.
+	//
+	// A non-nil error here means the subprocess exited before we got
+	// to signal it — i.e., the workload finished within the sleep
+	// budget. Fail loudly with diagnostic context so the failure mode
+	// is obvious rather than getting masked as a generic "process
+	// already finished" error.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGINT); err != nil {
+		t.Fatalf("syscall.Kill(-%d, SIGINT): subprocess exited before signal could be delivered "+
+			"(workload of %d files × %d locals + %dms sleep too small for this machine, or process startup took longer than expected): %v",
+			cmd.Process.Pid, fileCount, localsPerFile, 500, err)
 	}
 
 	err := cmd.Wait()

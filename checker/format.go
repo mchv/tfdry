@@ -87,11 +87,18 @@ func WriteFormatted(ctx context.Context, path string, formatted []byte) error {
 // the top of the iteration so a SIGINT mid-fix bails before opening
 // the next file rather than after every individual rewrite.
 func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]bool, []Violation, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
-	}
+	// Initialize fixed before the ctx check so every exit path returns a
+	// non-nil map. Callers using FixFormat's partial-results contract may
+	// want to read/extend the map even on cancellation, and `m[k] = v` on
+	// a nil map panics — see TestFixFormat_EntryCancelReturnsNonNilMap.
+	// The violations slice stays as Go-idiomatic nil for "no results"
+	// (slice operations are safe on nil); only the map needs special
+	// handling because of its assign-panic-on-nil semantics.
 	fixed := make(map[string]bool)
 	var violations []Violation
+	if err := ctx.Err(); err != nil {
+		return fixed, violations, err
+	}
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
 			return fixed, violations, err

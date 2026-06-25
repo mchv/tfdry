@@ -129,6 +129,42 @@ func TestFixFormat_RespectsContext(t *testing.T) {
 	}
 }
 
+// TestFixFormat_EntryCancelReturnsNonNilMap pins the partial-results
+// contract specifically at the entry-cancel boundary. Before this test,
+// FixFormat returned (nil, nil, ctx.Err()) when ctx was already cancelled
+// at the entry check, but (non-nil-map, violations, ctx.Err()) when
+// cancellation fired mid-loop. The inconsistency forced callers to
+// nil-check the map even when they only wanted to range/inspect partial
+// results (range over nil map is a no-op, but direct map assignment
+// would panic — and the "partial results" promise implies the map can
+// be extended by the caller for accumulation patterns).
+//
+// The fix is to initialize the map before the entry check so every
+// FixFormat exit path returns a non-nil map. The violations slice
+// stays as a Go-idiomatic nil for "no results" (slice operations are
+// safe on nil).
+func TestFixFormat_EntryCancelReturnsNonNilMap(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Pre-cancel before any work.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	fixed, violations, err := checker.FixFormat(ctx, nil, dir)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if fixed == nil {
+		t.Errorf("fixed map = nil at entry-cancel; partial-results contract requires non-nil map for consistency with mid-loop cancel path")
+	}
+	if len(fixed) != 0 {
+		t.Errorf("fixed map = %v, want empty (no work was done)", fixed)
+	}
+	// violations being nil is acceptable — slice operations are safe
+	// on nil and Go convention treats nil/empty slices interchangeably.
+	_ = violations
+}
+
 // TestParseDir_ContextBackground_NoRegression confirms the happy path
 // (context.Background passed) still produces the same parse output as
 // before the ctx sweep. Without this guard, a cancellation-checkpoint
