@@ -38,15 +38,39 @@ type parseResult struct {
 	violations []Violation
 }
 
+// collectResults flattens the per-file parseResult slice into the
+// public (files, violations) shape ParseDir returns. Nil-file entries
+// (parse failed; violations populated instead) are skipped from files
+// but their violations propagate. Empty slots (parseOne never ran due
+// to cancellation) contribute nothing.
+//
+// Used in both ParseDir's success path and its two cancellation
+// paths — when ctx fires mid-walk we still return whatever results
+// the loop already populated, so callers see partial output rather
+// than (nil, nil) alongside the cancellation error.
+func collectResults(results []parseResult) ([]ParsedFile, []Violation) {
+	var files []ParsedFile
+	var violations []Violation
+	for _, r := range results {
+		violations = append(violations, r.violations...)
+		if r.file != nil {
+			files = append(files, *r.file)
+		}
+	}
+	return files, violations
+}
+
 // ParseDir parses all .tf files in dir concurrently. Returns parsed files,
 // any syntax/infrastructure violations, and a non-nil error if ctx was
-// cancelled mid-walk (in which case files and violations may be partial).
+// cancelled mid-walk. On cancellation, files and violations may be
+// partial — every result populated before the cancellation fired is
+// returned. Callers can use errors.Is(err, context.Canceled) or
+// context.DeadlineExceeded to detect cancellation.
 //
 // The cancellation contract: ctx is checked once before iterating the
 // directory listing, once before each per-file parse in the sequential
 // branch, and via errgroup.WithContext in the concurrent branch. A
-// cancelled ctx propagates as context.Canceled / context.DeadlineExceeded
-// — callers can use errors.Is() to detect either.
+// cancelled ctx propagates as context.Canceled / context.DeadlineExceeded.
 func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -76,7 +100,9 @@ func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error
 	if len(tfEntries) <= parallelThreshold {
 		for i, e := range tfEntries {
 			if err := ctx.Err(); err != nil {
-				return nil, nil, err
+				// Return what we've parsed so far rather than discarding it.
+				files, violations := collectResults(results[:i])
+				return files, violations, err
 			}
 			results[i] = parseOne(dir, e)
 		}
@@ -96,18 +122,15 @@ func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error
 			})
 		}
 		if err := g.Wait(); err != nil {
-			return nil, nil, err
+			// Workers that ran to completion before the cancellation
+			// populated their slot in results; surface those partial
+			// results rather than dropping them on the floor.
+			files, violations := collectResults(results)
+			return files, violations, err
 		}
 	}
 
-	var files []ParsedFile
-	var violations []Violation
-	for _, r := range results {
-		violations = append(violations, r.violations...)
-		if r.file != nil {
-			files = append(files, *r.file)
-		}
-	}
+	files, violations := collectResults(results)
 	return files, violations, nil
 }
 

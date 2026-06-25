@@ -325,8 +325,15 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 		// large monorepos with hundreds of subdirs; a SIGINT mid-walk
 		// should bail before parsing the next directory.
 		if err := ctx.Err(); err != nil {
-			code, _ := handleCtxErr(err, stderr)
-			return code
+			if code, ok := handleCtxErr(err, stderr); ok {
+				return code
+			}
+			// Defensive: a non-nil ctx.Err() that isn't a cancellation
+			// would indicate a custom-context implementation we don't
+			// model. Surface as a tool error rather than silently exiting
+			// with the zero code handleCtxErr returns for the unhandled case.
+			fmt.Fprintln(stderr, "tfdry fmt:", err)
+			return 2
 		}
 		files, parseViolations, err := checker.ParseDir(ctx, d)
 		if code, ok := handleCtxErr(err, stderr); ok {
@@ -394,8 +401,14 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 // upfront so the failure mode is identical across read/write/platforms.
 func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, check bool) int {
 	if err := ctx.Err(); err != nil {
-		code, _ := handleCtxErr(err, stderr)
-		return code
+		if code, ok := handleCtxErr(err, stderr); ok {
+			return code
+		}
+		// Defensive: a non-nil ctx.Err() that isn't a cancellation
+		// would indicate a custom-context implementation we don't model.
+		// Surface as a tool error.
+		fmt.Fprintln(stderr, "tfdry fmt:", err)
+		return 2
 	}
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		fmt.Fprintf(stderr, "tfdry fmt: %s: not a regular file (symlinks are not supported)\n", path)

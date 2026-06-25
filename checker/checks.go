@@ -165,10 +165,14 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 
 	if checks.Enabled("E008") {
 		fmtViolations, err := CheckFormat(ctx, files)
+		// Append BEFORE checking err — CheckFormat may have collected
+		// partial fmt violations before cancellation fired, and dropping
+		// them would silently undermine the partial-results contract
+		// documented on Run.
+		violations = append(violations, fmtViolations...)
 		if err != nil {
 			return violations, err
 		}
-		violations = append(violations, fmtViolations...)
 	}
 
 	if checks.Enabled("W001") {
