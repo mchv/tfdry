@@ -27,9 +27,17 @@ func main() {
 	// onwards into every long-running checker entry point, so an
 	// interrupted tfdry run cleanly stops at the next per-file
 	// checkpoint instead of being torn down mid-write or mid-parse.
+	//
+	// stop() must run before os.Exit because os.Exit terminates the
+	// process immediately and skips deferred functions — `defer stop()`
+	// here would never fire. Capture run()'s exit code, call stop()
+	// explicitly to unregister the signal handlers (restoring default
+	// signal behaviour as documented on signal.NotifyContext), then
+	// exit with the captured code.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr))
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
 // handleCtxErr is the cancellation-only branch of run()'s error handling.

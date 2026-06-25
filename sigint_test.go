@@ -100,7 +100,7 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	// parser busy for ~1s so the SIGINT lands reliably during the lint
 	// pass rather than after it. tfdry is fast: 5000 tiny files can
 	// complete in under 50ms on Apple Silicon. Empirical sweep showed
-	// 4000 files × 50 locals each + 200ms pre-signal sleep gives 10/10
+	// 4000 files × 50 locals each + 500ms pre-signal sleep gives 10/10
 	// reliable interrupt-mid-work behaviour. The exact content is
 	// irrelevant — we only need parser work, not specific check
 	// outputs.
@@ -138,11 +138,25 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	// Give the binary enough time to (a) finish Go runtime startup,
 	// (b) call signal.NotifyContext, and (c) enter the parse loop.
 	// Empirical sweep on Apple Silicon: 100ms is occasionally racy
-	// against runtime startup (1/10 trials), 200ms is 10/10 reliable.
+	// against runtime startup (1/10 trials), 200ms is 10/10 reliable
+	// locally. We use 500ms here as CI-headroom: GitHub Actions
+	// runners can be 2-3× slower than a developer laptop on
+	// process-startup-bound workloads, and the consequence of an
+	// under-budget sleep is the process exiting with -1 (terminated
+	// by signal during Go startup) instead of 130, which causes
+	// false-positive test failures. The extra 300ms is paid once
+	// per test invocation and is invisible to a developer running
+	// the full suite locally.
+	//
 	// If scheduling delays the process so much that work completes
 	// before the signal arrives, the process would exit 0 and the
 	// assertion below would correctly catch the false positive.
-	time.Sleep(200 * time.Millisecond)
+	//
+	// Future: replace the time-based handshake with a structured
+	// "ready" signal from the binary (e.g., a stderr line read by
+	// the parent, or a Unix-socket ping). Tracked alongside PR B1's
+	// Windows SIGINT coverage.
+	time.Sleep(500 * time.Millisecond)
 	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
 		t.Fatalf("cmd.Process.Signal: %v", err)
 	}
