@@ -2,6 +2,7 @@ package checker
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -155,7 +156,7 @@ func TestParseDir_ParallelBranch_NoRace(t *testing.T) {
 	// Run ParseDir many times to expose any goroutine ordering bugs.
 	const iterations = 50
 	for it := 0; it < iterations; it++ {
-		files, violations := ParseDir(dir)
+		files, violations, _ := ParseDir(context.Background(), dir)
 		if len(violations) != 0 {
 			t.Fatalf("iteration %d: unexpected violations: %v", it, violations)
 		}

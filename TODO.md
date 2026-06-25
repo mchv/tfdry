@@ -20,7 +20,20 @@ This file tracks two things:
       `CheckFormat`, `WriteFormatted`) before v0.1.0 so we ship the
       canonical Go shape. Adds cancellation checkpoints in hot loops
       and wires `signal.NotifyContext` in `main`. Test-first; covers
-      SIGINT graceful shutdown.
+      SIGINT graceful shutdown. *(In review.)*
+- [ ] **PR A2 follow-up — E000 exit-code routing.** The README and
+      `SKILL.md` contract documents exit 2 for tool/infrastructure
+      failures (E000: unreadable directories, write failures, malformed
+      input not produced by checks), but `main.go` currently maps any
+      `Severity=="error"` violation — including E000 — to exit 1. Surfaced
+      as Copilot C73 during PR A2 review and deferred to keep PR A2
+      scoped to the context.Context sweep. Should land before v0.1.0.
+      Test plan: a regression test for each E000 site
+      (`E000` synthesis points in `checker/hcl.go`, `checker/format.go`,
+      `checker/modules.go`) verifying exit 2; update `main.go` to route
+      E000 to exit 2 and the rest of severity=error to exit 1; refresh
+      README/`SKILL.md` to point at the new behaviour as the canonical
+      contract.
 - [ ] **PR A3 — Lint hardening.** `gofumpt` adoption,
       `golangci-lint` config (`staticcheck`, `errcheck`, `gosec`,
       `revive`, `gocritic`, `unconvert`, `unused`, `ineffassign`,

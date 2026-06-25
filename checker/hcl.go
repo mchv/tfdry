@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -37,14 +38,50 @@ type parseResult struct {
 	violations []Violation
 }
 
-// ParseDir parses all .tf files in dir concurrently.
-// Returns parsed files and any syntax/infrastructure violations.
-func ParseDir(dir string) ([]ParsedFile, []Violation) {
+// collectResults flattens the per-file parseResult slice into the
+// public (files, violations) shape ParseDir returns. Nil-file entries
+// (parse failed; violations populated instead) are skipped from files
+// but their violations propagate. Empty slots (parseOne never ran due
+// to cancellation) contribute nothing.
+//
+// Used in both ParseDir's success path and its two cancellation
+// paths — when ctx fires mid-walk we still return whatever results
+// the loop already populated, so callers see partial output rather
+// than (nil, nil) alongside the cancellation error.
+func collectResults(results []parseResult) ([]ParsedFile, []Violation) {
+	var files []ParsedFile
+	var violations []Violation
+	for _, r := range results {
+		violations = append(violations, r.violations...)
+		if r.file != nil {
+			files = append(files, *r.file)
+		}
+	}
+	return files, violations
+}
+
+// ParseDir parses all .tf files in dir concurrently. Returns parsed files,
+// any syntax/infrastructure violations, and a non-nil error if ctx was
+// cancelled mid-walk. On cancellation, files and violations may be
+// partial — every result populated before the cancellation fired is
+// returned. Callers can use errors.Is(err, context.Canceled) or
+// errors.Is(err, context.DeadlineExceeded) to detect cancellation;
+// both checks must use errors.Is so wrapped sentinels (e.g.
+// errgroup's wrapped error from the concurrent branch) still match.
+//
+// The cancellation contract: ctx is checked once before iterating the
+// directory listing, once before each per-file parse in the sequential
+// branch, and via errgroup.WithContext in the concurrent branch. A
+// cancelled ctx propagates as context.Canceled / context.DeadlineExceeded.
+func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	dir = filepath.Clean(dir)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, []Violation{{Code: "E000", Severity: "error", File: dir, Message: fmt.Sprintf("cannot read directory: %v", err)}}
+		return nil, []Violation{{Code: "E000", Severity: "error", File: dir, Message: fmt.Sprintf("cannot read directory: %v", err)}}, nil
 	}
 
 	// Collect eligible .tf entries (sequential, cheap).
@@ -64,29 +101,50 @@ func ParseDir(dir string) ([]ParsedFile, []Violation) {
 	const parallelThreshold = 4
 	if len(tfEntries) <= parallelThreshold {
 		for i, e := range tfEntries {
+			if err := ctx.Err(); err != nil {
+				// Return what we've parsed so far rather than discarding it.
+				files, violations := collectResults(results[:i])
+				return files, violations, err
+			}
 			results[i] = parseOne(dir, e)
 		}
 	} else {
-		g := new(errgroup.Group)
+		// errgroup.WithContext gives each goroutine a derived ctx; when the
+		// parent ctx is cancelled the workers see it and we surface the
+		// cancellation through g.Wait().
+		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(runtime.NumCPU() * 2)
 		for i, e := range tfEntries {
+			// Pre-dispatch cancel check (G62). Without this, g.Go below
+			// blocks the dispatcher on the SetLimit semaphore for every
+			// remaining file even after cancellation has fired —
+			// e.g. with 10 000 files and cancel at file 100, we'd still
+			// spawn ~9 900 doomed goroutines that immediately return.
+			// Checking here lets us break the dispatcher loop early.
+			// The worker's own gctx.Err() check below stays for the
+			// race between dispatcher's read and the worker's start.
+			if err := gctx.Err(); err != nil {
+				break
+			}
 			g.Go(func() error {
+				if err := gctx.Err(); err != nil {
+					return err
+				}
 				results[i] = parseOne(dir, e)
 				return nil
 			})
 		}
-		g.Wait() //nolint:errcheck — parseOne never errors; violations are in results
-	}
-
-	var files []ParsedFile
-	var violations []Violation
-	for _, r := range results {
-		violations = append(violations, r.violations...)
-		if r.file != nil {
-			files = append(files, *r.file)
+		if err := g.Wait(); err != nil {
+			// Workers that ran to completion before the cancellation
+			// populated their slot in results; surface those partial
+			// results rather than dropping them on the floor.
+			files, violations := collectResults(results)
+			return files, violations, err
 		}
 	}
-	return files, violations
+
+	files, violations := collectResults(results)
+	return files, violations, nil
 }
 
 func parseOne(dir string, e os.DirEntry) parseResult {

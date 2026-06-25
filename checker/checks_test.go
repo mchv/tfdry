@@ -1,6 +1,7 @@
 package checker_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,8 +24,8 @@ func writeFiles(t *testing.T, files map[string]string) string {
 func run(t *testing.T, files map[string]string) []checker.Violation {
 	t.Helper()
 	dir := writeFiles(t, files)
-	parsed, parseViolations := checker.ParseDir(dir)
-	violations := append(parseViolations, checker.Run(parsed, nil, dir)...)
+	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
+	violations := append(parseViolations, mustRun(context.Background(), parsed, nil, dir)...)
 	return violations
 }
 
@@ -246,9 +247,9 @@ locals { unused = "foo" }
 output "o" { value = local.typo }
 `,
 	})
-	parsed, _ := checker.ParseDir(dir)
+	parsed, _, _ := checker.ParseDir(context.Background(), dir)
 	cs := checker.CheckSet{"E003": {}}
-	vs := checker.Run(parsed, cs, dir)
+	vs, _ := checker.Run(context.Background(), parsed, cs, dir)
 	for _, v := range vs {
 		if v.Code != "E003" {
 			t.Fatalf("expected only E003, got %v", v.Code)
@@ -286,7 +287,7 @@ func TestE000_AlwaysEmitted_WhenDirUnreadable(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(dir, 0755) })
 
-	_, vs := checker.ParseDir(dir)
+	_, vs, _ := checker.ParseDir(context.Background(), dir)
 	if !hasCode(vs, "E000") {
 		t.Fatalf("expected E000 for unreadable dir, got %v", codes(vs))
 	}
@@ -317,8 +318,8 @@ output "o3" { value = local.typo3 }
 	first := run(t, files)
 	// Re-run on same content via a fresh dir to get a second ordering.
 	dir2 := writeFiles(t, files)
-	parsed2, pv2 := checker.ParseDir(dir2)
-	second := append(pv2, checker.Run(parsed2, nil, dir2)...)
+	parsed2, pv2, _ := checker.ParseDir(context.Background(), dir2)
+	second := append(pv2, mustRun(context.Background(), parsed2, nil, dir2)...)
 
 	if len(first) != len(second) {
 		t.Fatalf("run lengths differ: %d vs %d", len(first), len(second))
@@ -365,7 +366,7 @@ func TestParseDir_UnreadableFile_EmitsE000(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`locals { x = "y" }`), 0000); err != nil {
 		t.Fatal(err)
 	}
-	_, vs := checker.ParseDir(dir)
+	_, vs, _ := checker.ParseDir(context.Background(), dir)
 	var e000 *checker.Violation
 	for i := range vs {
 		if vs[i].Code == "E000" {
@@ -585,7 +586,7 @@ func TestParseDir_DotDotInDirName_NotRejected(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "y" }`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	_, vs := checker.ParseDir(dir)
+	_, vs, _ := checker.ParseDir(context.Background(), dir)
 	for _, v := range vs {
 		if v.Code == "E000" && strings.Contains(v.Message, "'..'") {
 			t.Fatalf("false positive: legitimate dir name rejected: %v", v.Message)
@@ -641,7 +642,7 @@ func TestParseDir_DotDotSegment_Allowed(t *testing.T) {
 	// filepath.Join's automatic cleaning, so the path actually contains
 	// a `..` segment when ParseDir sees it).
 	relPath := subdir + string(os.PathSeparator) + ".."
-	files, vs := checker.ParseDir(relPath)
+	files, vs, _ := checker.ParseDir(context.Background(), relPath)
 	if hasCode(vs, "E000") {
 		t.Fatalf("unexpected E000 for legitimate '..' path %q: %v", relPath, codes(vs))
 	}
@@ -663,7 +664,7 @@ func TestParseDir_SymlinkSkipped(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
-	files, vs := checker.ParseDir(dir)
+	files, vs, _ := checker.ParseDir(context.Background(), dir)
 	// No E000 for the symlink — it should be silently skipped.
 	for _, v := range vs {
 		if v.Code == "E000" {
@@ -691,7 +692,7 @@ func TestParseDir_FileTooLarge_EmitsE000(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	_, vs := checker.ParseDir(dir)
+	_, vs, _ := checker.ParseDir(context.Background(), dir)
 	if !hasCode(vs, "E000") {
 		t.Fatalf("expected E000 for oversized file, got %v", codes(vs))
 	}
@@ -703,9 +704,9 @@ func TestParseViolations_AlwaysEmitted_WithRestrictiveChecks(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
 		"bad.tf": `resource "x" "y" { bad syntax !!!`,
 	})
-	parsed, parseViolations := checker.ParseDir(dir)
+	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
 	// Run with only E005 — parse violations must still be present.
-	runViolations := checker.Run(parsed, checker.CheckSet{"E005": {}}, dir)
+	runViolations, _ := checker.Run(context.Background(), parsed, checker.CheckSet{"E005": {}}, dir)
 	all := append(parseViolations, runViolations...)
 	if !hasCode(all, "E001") {
 		t.Fatalf("expected E001 even with restrictive --checks, got %v", codes(all))
@@ -765,8 +766,8 @@ func writeModuleFiles(t *testing.T, callerFiles map[string]string, moduleDir str
 
 func runDir(t *testing.T, dir string) []checker.Violation {
 	t.Helper()
-	parsed, parseViolations := checker.ParseDir(dir)
-	return append(parseViolations, checker.Run(parsed, nil, dir)...)
+	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
+	return append(parseViolations, mustRun(context.Background(), parsed, nil, dir)...)
 }
 
 // E006: passing a list where module expects a string → violation.
@@ -1442,8 +1443,8 @@ func TestFixFormat_WriteError_ReturnsE000(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(dir, 0755) })
 
-	files, _ := checker.ParseDir(dir)
-	_, vs := checker.FixFormat(files, dir)
+	files, _, _ := checker.ParseDir(context.Background(), dir)
+	_, vs, _ := checker.FixFormat(context.Background(), files, dir)
 	if !hasCode(vs, "E000") {
 		t.Errorf("expected E000 when write fails, got %v", codes(vs))
 	}
@@ -1460,9 +1461,9 @@ func TestRun_FixNotCalledWhenE008Excluded(t *testing.T) {
 	dir := writeFiles(t, map[string]string{
 		"main.tf": "locals {\na=\"foo\"\n}\n",
 	})
-	files, _ := checker.ParseDir(dir)
+	files, _, _ := checker.ParseDir(context.Background(), dir)
 	cs := checker.CheckSet{"E003": {}}
-	vs := checker.Run(files, cs, dir)
+	vs, _ := checker.Run(context.Background(), files, cs, dir)
 	if hasCode(vs, "E008") {
 		t.Fatalf("E008 must not appear when excluded via CheckSet: %v", codes(vs))
 	}
@@ -1475,7 +1476,7 @@ func TestFormatFile_PreservesPermissions(t *testing.T) {
 	path := filepath.Join(dir, "main.tf")
 	os.WriteFile(path, []byte("locals {\na=\"foo\"\n}\n"), 0600)
 	src, _ := os.ReadFile(path)
-	if err := checker.FormatFile(path, src); err != nil {
+	if err := checker.FormatFile(context.Background(), path, src); err != nil {
 		t.Fatal(err)
 	}
 	fi, _ := os.Stat(path)
@@ -1660,8 +1661,8 @@ func TestFixFormat_RewritesFiles(t *testing.T) {
 	unformatted := []byte("locals {\na=\"foo\"\n}\n")
 	os.WriteFile(path, unformatted, 0644)
 
-	files, _ := checker.ParseDir(dir)
-	_, vs := checker.FixFormat(files, dir)
+	files, _, _ := checker.ParseDir(context.Background(), dir)
+	_, vs, _ := checker.FixFormat(context.Background(), files, dir)
 	if len(vs) != 0 {
 		t.Fatalf("expected no violations, got %v", vs)
 	}
@@ -1680,8 +1681,8 @@ func TestFixFormat_SkipsFormattedFiles(t *testing.T) {
 	os.WriteFile(path, formatted, 0644)
 	fi1, _ := os.Stat(path)
 
-	files, _ := checker.ParseDir(dir)
-	checker.FixFormat(files, dir)
+	files, _, _ := checker.ParseDir(context.Background(), dir)
+	checker.FixFormat(context.Background(), files, dir) //nolint:errcheck
 
 	fi2, _ := os.Stat(path)
 	if !fi2.ModTime().Equal(fi1.ModTime()) {
@@ -2002,8 +2003,8 @@ func TestFixFormat_FixedMapContainsRewrittenFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "a.tf"), []byte("locals {\na=\"foo\"\n}\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "b.tf"), []byte("locals {\n  b = \"bar\"\n}\n"), 0644) // already formatted
 
-	files, _ := checker.ParseDir(dir)
-	fixed, vs := checker.FixFormat(files, dir)
+	files, _, _ := checker.ParseDir(context.Background(), dir)
+	fixed, vs, _ := checker.FixFormat(context.Background(), files, dir)
 	if len(vs) != 0 {
 		t.Fatalf("unexpected violations: %v", vs)
 	}
@@ -2058,8 +2059,8 @@ module "m" {
 }
 `), 0644)
 
-	files, _ := checker.ParseDir(dir)
-	vs := checker.Run(files, nil, dir)
+	files, _, _ := checker.ParseDir(context.Background(), dir)
+	vs, _ := checker.Run(context.Background(), files, nil, dir)
 	// Symlinked module dir must be skipped — no E007 for unknown input.
 	for _, v := range vs {
 		if v.Code == "E007" {
@@ -2100,7 +2101,7 @@ func TestFormatFile_Symlink_ReturnsError(t *testing.T) {
 		t.Skip("cannot create symlink:", err)
 	}
 	src, _ := os.ReadFile(real)
-	if err := checker.FormatFile(link, src); err == nil {
+	if err := checker.FormatFile(context.Background(), link, src); err == nil {
 		t.Fatal("expected error when formatting a symlink path, got nil")
 	}
 }

@@ -1,6 +1,7 @@
 package checker_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,7 +88,7 @@ func BenchmarkParseDir(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				f, v := checker.ParseDir(dir)
+				f, v, _ := checker.ParseDir(context.Background(), dir)
 				sink = f
 				sink = v
 			}
@@ -102,7 +103,7 @@ func BenchmarkBuildLocalsMap(b *testing.B) {
 	for _, locals := range []int{10, 50, 200} {
 		b.Run(fmt.Sprintf("locals=%d", locals), func(b *testing.B) {
 			dir := tfDir(b, 5, locals/5)
-			files, _ := checker.ParseDir(dir)
+			files, _, _ := checker.ParseDir(context.Background(), dir)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
@@ -121,12 +122,12 @@ func BenchmarkRun(b *testing.B) {
 	for _, files := range []int{0, 1, 5, 10, 50} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
 			dir := tfDir(b, files, 10)
-			parsed, _ := checker.ParseDir(dir)
+			parsed, _, _ := checker.ParseDir(context.Background(), dir)
 			b.ReportAllocs()
 			b.ReportMetric(float64(files), "files/op")
 			b.ResetTimer()
 			for range b.N {
-				v := checker.Run(parsed, nil, dir)
+				v, _ := checker.Run(context.Background(), parsed, nil, dir)
 				sink = v
 			}
 		})
@@ -143,8 +144,8 @@ func BenchmarkPipeline(b *testing.B) {
 			b.ReportMetric(float64(files), "files/op")
 			b.ResetTimer()
 			for range b.N {
-				parsed, _ := checker.ParseDir(dir)
-				v := checker.Run(parsed, nil, dir)
+				parsed, _, _ := checker.ParseDir(context.Background(), dir)
+				v, _ := checker.Run(context.Background(), parsed, nil, dir)
 				sink = v
 			}
 		})
@@ -157,11 +158,11 @@ func BenchmarkCheckFormat(b *testing.B) {
 	for _, files := range []int{1, 10, 50} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
 			dir := tfDirUnformatted(b, files)
-			parsed, _ := checker.ParseDir(dir)
+			parsed, _, _ := checker.ParseDir(context.Background(), dir)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				v := checker.CheckFormat(parsed)
+				v, _ := checker.CheckFormat(context.Background(), parsed)
 				sink = v
 			}
 		})
@@ -178,9 +179,9 @@ func BenchmarkFixFormat(b *testing.B) {
 			for range b.N {
 				b.StopTimer()
 				dir := tfDirUnformatted(b, files)
-				parsed, _ := checker.ParseDir(dir)
+				parsed, _, _ := checker.ParseDir(context.Background(), dir)
 				b.StartTimer()
-				fixed, v := checker.FixFormat(parsed, dir)
+				fixed, v, _ := checker.FixFormat(context.Background(), parsed, dir)
 				sink = fixed
 				sink = v
 			}
@@ -194,12 +195,12 @@ func BenchmarkRunModuleChecks(b *testing.B) {
 	for _, files := range []int{1, 5, 20} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
 			dir := tfDirWithModule(b, files)
-			parsed, _ := checker.ParseDir(dir)
+			parsed, _, _ := checker.ParseDir(context.Background(), dir)
 			cs := checker.CheckSet{"E006": {}, "E007": {}}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				v := checker.Run(parsed, cs, dir)
+				v, _ := checker.Run(context.Background(), parsed, cs, dir)
 				sink = v
 			}
 		})

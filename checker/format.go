@@ -2,6 +2,7 @@ package checker
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,9 +12,16 @@ import (
 
 // CheckFormat returns E008 violations for any ParsedFile whose source differs
 // from its hclwrite-formatted form. Files that failed parsing (Src == nil) are skipped.
-func CheckFormat(files []ParsedFile) []Violation {
+// Returns ctx.Err() (and partial violations) if ctx is cancelled mid-pass.
+func CheckFormat(ctx context.Context, files []ParsedFile) ([]Violation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var violations []Violation
 	for _, f := range files {
+		if err := ctx.Err(); err != nil {
+			return violations, err
+		}
 		if f.Src == nil {
 			continue
 		}
@@ -26,14 +34,21 @@ func CheckFormat(files []ParsedFile) []Violation {
 			})
 		}
 	}
-	return violations
+	return violations, nil
 }
 
 // FormatFile writes the hclwrite-formatted version of src to path atomically,
 // preserving the original file's permissions. Use [WriteFormatted] instead
 // when the caller already has the formatted bytes to avoid running
 // hclwrite.Format twice.
-func FormatFile(path string, src []byte) error {
+//
+// Returns ctx.Err() if ctx is cancelled before any work is done. Once
+// the rewrite begins it runs to completion to avoid leaving a half-
+// written file on disk.
+func FormatFile(ctx context.Context, path string, src []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	formatted := hclwrite.Format(src)
 	_, err := writeFormatted(path, formatted)
 	return err
@@ -47,21 +62,47 @@ func FormatFile(path string, src []byte) error {
 //
 // Atomicity vs metadata preservation: see [writeFormatted] godoc for the
 // tradeoff (mode bits preserved; ownership / ACLs / xattrs reset on rename).
-func WriteFormatted(path string, formatted []byte) error {
+//
+// Returns ctx.Err() if ctx is cancelled before any work is done. Once
+// the rewrite begins it runs to completion (the atomic-rename guarantee
+// is more important than mid-write cancellation responsiveness).
+func WriteFormatted(ctx context.Context, path string, formatted []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	_, err := writeFormatted(path, formatted)
 	return err
 }
 
 // FixFormat rewrites all unformatted files in dir atomically.
-// Returns the set of filenames successfully fixed and any E000/E008
-// violations. Each file is formatted exactly once. When a write fails,
-// both E000 (the write error itself) and E008 (the file is still
-// unformatted) are appended so callers that suppressed E008 in the
-// initial Run pass for performance (see main.go --fix path / G21+G22)
-// still surface the actionable formatting violation to the user.
-func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violations []Violation) {
-	fixed = make(map[string]bool)
+// Returns the set of filenames successfully fixed, any E000/E008
+// violations, and a non-nil error if ctx was cancelled mid-pass
+// (the fixed map and violations slice may be partial in that case).
+//
+// Each file is formatted exactly once. When a write fails, both E000
+// (the write error itself) and E008 (the file is still unformatted)
+// are appended so callers that suppressed E008 in the initial Run pass
+// for performance still surface the actionable formatting violation to
+// the user. ctx is checked once before any work and once per file at
+// the top of the iteration so a SIGINT mid-fix bails before opening
+// the next file rather than after every individual rewrite.
+func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]bool, []Violation, error) {
+	// Initialize fixed before the ctx check so every exit path returns a
+	// non-nil map. Callers using FixFormat's partial-results contract may
+	// want to read/extend the map even on cancellation, and `m[k] = v` on
+	// a nil map panics — see TestFixFormat_EntryCancelReturnsNonNilMap.
+	// The violations slice stays as Go-idiomatic nil for "no results"
+	// (slice operations are safe on nil); only the map needs special
+	// handling because of its assign-panic-on-nil semantics.
+	fixed := make(map[string]bool)
+	var violations []Violation
+	if err := ctx.Err(); err != nil {
+		return fixed, violations, err
+	}
 	for _, f := range files {
+		if err := ctx.Err(); err != nil {
+			return fixed, violations, err
+		}
 		if f.Src == nil {
 			continue
 		}
@@ -70,13 +111,13 @@ func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violation
 			continue
 		}
 		path := filepath.Join(dir, f.Name)
-		if ok, err := writeFormatted(path, formatted); err != nil {
+		if ok, werr := writeFormatted(path, formatted); werr != nil {
 			violations = append(violations,
 				Violation{
 					Code:     "E000",
 					Severity: "error",
 					File:     f.Name,
-					Message:  fmt.Sprintf("cannot write formatted file: %v", err),
+					Message:  fmt.Sprintf("cannot write formatted file: %v", werr),
 				},
 				Violation{
 					Code:     "E008",
@@ -89,7 +130,7 @@ func FixFormat(files []ParsedFile, dir string) (fixed map[string]bool, violation
 			fixed[f.Name] = true
 		}
 	}
-	return fixed, violations
+	return fixed, violations, nil
 }
 
 // writeFormatted atomically writes pre-formatted bytes to path.

@@ -3,12 +3,16 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -18,7 +22,84 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	// signal.NotifyContext gives us a cancellable ctx that fires on
+	// SIGINT (Ctrl-C) and SIGTERM. The derived ctx flows into run() and
+	// onwards into every long-running checker entry point, so an
+	// interrupted tfdry run cleanly stops at the next per-file
+	// checkpoint instead of being torn down mid-write or mid-parse.
+	//
+	// stop() must run before os.Exit because os.Exit terminates the
+	// process immediately and skips deferred functions — `defer stop()`
+	// here would never fire. Capture run()'s exit code, call stop()
+	// explicitly to unregister the signal handlers (restoring default
+	// signal behaviour as documented on signal.NotifyContext), then
+	// exit with the captured code.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
+}
+
+// handleCtxErr is the cancellation-only branch of run()'s error handling.
+// It writes a brief "interrupted" message to stderr and returns the
+// canonical interrupted-execution exit code (130) when err is a context
+// cancellation or timeout. Returns (0, false) for nil or any
+// non-cancellation error, letting the caller fall through to its own
+// error path (per-file accumulation, custom prefixes, etc.).
+//
+// Exit code 130 is the canonical signal-driven exit (128 + SIGINT) and
+// is reused here for any cancellation observed by the helper — SIGINT,
+// SIGTERM (both wired via signal.NotifyContext in main()), and explicit
+// context.DeadlineExceeded from a timeout context. The mapping treats
+// any interrupted-execution path as "exit 130" for CLI-facing
+// simplicity, rather than trying to recover the original signal
+// (which signal.NotifyContext doesn't expose downstream).
+func handleCtxErr(err error, stderr io.Writer) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		fmt.Fprintln(stderr, "tfdry: interrupted")
+		return 130, true
+	}
+	return 0, false
+}
+
+// handleFatalErr is the "any error is fatal to the run" companion to
+// handleCtxErr. It categorizes an error from a top-level orchestration
+// call (one that can't continue past an error) into a process exit
+// code, writes a user-facing message to stderr, and reports whether
+// the caller should return that code immediately.
+//
+// Three outcomes:
+//
+//	nil                          -> (0, false), no stderr — caller proceeds.
+//	context.Canceled / Deadline  -> (130, true) + "tfdry: interrupted"
+//	any other non-nil error      -> (2, true)  + "<prefix>: <err>"
+//
+// prefix is the subcommand label that scopes the error message
+// (e.g., "tfdry" for the main path, "tfdry fmt" for the fmt
+// subcommand). The cancellation message stays uniform across
+// subcommands because "tfdry: interrupted" is the existing
+// user-facing contract for exit code 130; only the non-cancellation
+// branch uses the prefix.
+//
+// Use handleFatalErr at call sites where any error from a checker
+// orchestration call (ParseDir/Run/FixFormat/ctx.Err()) is fatal —
+// there's nothing useful to continue with after the failure. Use
+// handleCtxErr directly (cancel-only) at call sites that accumulate
+// per-file errors and want to continue past non-cancellation
+// failures, like the WriteFormatted loops in runFmt/runFmtFile
+// where one unwriteable file shouldn't abort the rest of the batch.
+func handleFatalErr(err error, stderr io.Writer, prefix string) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	if code, ok := handleCtxErr(err, stderr); ok {
+		return code, true
+	}
+	fmt.Fprintln(stderr, prefix+":", err)
+	return 2, true
 }
 
 // run executes the CLI with the given args, writing user output to stdout and
@@ -30,9 +111,17 @@ func main() {
 //     failures during --fix or fmt), stdout broken-pipe / short-write
 //     failures (C25/C32), and parse errors in fmt subcommand
 //   - 3 = `fmt -check` found unformatted files
+//   - 130 = interrupted execution. Set whenever a checker call returns
+//     context.Canceled or context.DeadlineExceeded — i.e. SIGINT or
+//     SIGTERM (both wired via signal.NotifyContext in main()), or an
+//     explicit context.WithTimeout from a future caller. 130 is the
+//     canonical exit code for SIGINT (128 + 2); the helper reuses it
+//     for SIGTERM and deadlines too so the CLI's "tool was
+//     interrupted" semantics are uniform across cancellation sources.
 //
+// ctx is the cancellation token created by [main] via signal.NotifyContext.
 // Pure of os.Args / os.Exit / os.Stdout for testability.
-func run(args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Pre-scan: collect all flags before dispatching subcommands so that
 	// flag order relative to subcommand name doesn't matter.
 	jsonFlag := false
@@ -147,10 +236,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "tfdry", output.Version)
 		return 0
 	case "fmt":
-		return runFmt(stdout, stderr, dir, fmtCheck, fmtRecursive)
+		return runFmt(ctx, stdout, stderr, dir, fmtCheck, fmtRecursive)
 	}
 
-	files, parseViolations := checker.ParseDir(dir)
+	files, parseViolations, err := checker.ParseDir(ctx, dir)
+	if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+		return code
+	}
 
 	// Parse violations (E000, E001) are always emitted — not subject to --checks filtering.
 	violations := append([]checker.Violation{}, parseViolations...)
@@ -175,11 +267,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// emptied out via exclusion) and skip Run entirely.
 	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
 	if !skipRun {
-		violations = append(violations, checker.Run(files, runFilter, dir)...)
+		runViolations, err := checker.Run(ctx, files, runFilter, dir)
+		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+			return code
+		}
+		violations = append(violations, runViolations...)
 	}
 
 	if shouldFix {
-		_, fixViolations := checker.FixFormat(files, dir)
+		_, fixViolations, err := checker.FixFormat(ctx, files, dir)
+		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+			return code
+		}
 		violations = append(violations, fixViolations...)
 	}
 
@@ -246,7 +345,15 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 //   - 0 = success (clean, or successfully rewrote)
 //   - 2 = parse / write error / bad usage
 //   - 3 = -check found unformatted files
-func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
+func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, recursive bool) int {
+	// Entry-level cancel checkpoint. Without this, a pre-cancelled ctx
+	// still pays for os.Lstat on the supplied path plus a potentially
+	// deep collectFmtDirs walk in -recursive mode before the per-dir
+	// check (below) fires. Mirror the runFmtFile pattern (PR A2 round 1)
+	// so both fmt entry points behave identically on entry-cancel.
+	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+		return code
+	}
 	// Reject symlinked roots up front (consistent with file-mode symlink
 	// rejection in runFmtFile, round 4). Without this, a symlinked-dir
 	// root produces inconsistent behaviour: ParseDir / os.ReadDir follows
@@ -268,7 +375,7 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			fmt.Fprintf(stderr, "tfdry fmt: -recursive cannot be used with a file path: %s\n", path)
 			return 2
 		}
-		return runFmtFile(stdout, stderr, path, check)
+		return runFmtFile(ctx, stdout, stderr, path, check)
 	}
 
 	dirs, err := collectFmtDirs(path, recursive)
@@ -281,7 +388,18 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 	anyError := false
 
 	for _, d := range dirs {
-		files, parseViolations := checker.ParseDir(d)
+		// Per-directory cancel checkpoint. The runFmt walker may cover
+		// large monorepos with hundreds of subdirs; a SIGINT mid-walk
+		// should bail before parsing the next directory. handleFatalErr
+		// covers both cancellation (exit 130) and the defensive
+		// non-cancellation branch (exit 2 with "tfdry fmt:" prefix).
+		if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+			return code
+		}
+		files, parseViolations, err := checker.ParseDir(ctx, d)
+		if code, ok := handleFatalErr(err, stderr, "tfdry fmt"); ok {
+			return code
+		}
 		for _, v := range parseViolations {
 			// Show the path relative to the user-supplied root so a
 			// recursive run reports the subdir, not just a bare filename
@@ -299,6 +417,17 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			anyError = true
 		}
 		for _, f := range files {
+			// Per-file cancel checkpoint (C72). Without this, SIGINT
+			// during the format-and-emit loop is ignored for the rest
+			// of the current directory — particularly noticeable in
+			// -check mode where WriteFormatted (which has its own
+			// ctx check at entry) is never reached, so cancellation
+			// would only land at the NEXT directory's outer check.
+			// Uses handleFatalErr for consistency with the outer
+			// per-directory check at the top of this loop.
+			if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+				return code
+			}
 			if f.Src == nil {
 				continue
 			}
@@ -313,7 +442,10 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 			relPath := output.Sanitize(displayFmtPath(path, d, f.Name))
 			fmt.Fprintln(stdout, relPath)
 			if !check {
-				if err := checker.WriteFormatted(absFile, formatted); err != nil {
+				if err := checker.WriteFormatted(ctx, absFile, formatted); err != nil {
+					if code, ok := handleCtxErr(err, stderr); ok {
+						return code
+					}
 					fmt.Fprintln(stderr, "Error formatting", relPath+":", err)
 					anyError = true
 				}
@@ -339,7 +471,10 @@ func runFmt(stdout, stderr io.Writer, path string, check, recursive bool) int {
 // symlink at os.ReadFile and exit 3 if the target was dirty, while a write
 // pass would later destroy the symlink on Windows (oNoFollow=0). Reject
 // upfront so the failure mode is identical across read/write/platforms.
-func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
+func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, check bool) int {
+	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+		return code
+	}
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		fmt.Fprintf(stderr, "tfdry fmt: %s: not a regular file (symlinks are not supported)\n", path)
 		return 2
@@ -396,7 +531,10 @@ func runFmtFile(stdout, stderr io.Writer, path string, check bool) int {
 	if check {
 		return 3
 	}
-	if err := checker.WriteFormatted(path, formatted); err != nil {
+	if err := checker.WriteFormatted(ctx, path, formatted); err != nil {
+		if code, ok := handleCtxErr(err, stderr); ok {
+			return code
+		}
 		fmt.Fprintln(stderr, "Error formatting", safePath+":", err)
 		return 2
 	}

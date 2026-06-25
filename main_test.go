@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -17,7 +18,7 @@ import (
 // Returns exit code, stdout, stderr.
 func runCLI(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
-	code := run(args, &stdout, &stderr)
+	code := run(context.Background(), args, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -1120,7 +1121,7 @@ func (e errWriter) Write(p []byte) (int, error) { return 0, e.err }
 func TestRun_DescribeJSON_PropagatesWriteError(t *testing.T) {
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
-	code := run([]string{"describe", "--json"}, stdout, &stderr)
+	code := run(context.Background(), []string{"describe", "--json"}, stdout, &stderr)
 	if code != 2 {
 		t.Errorf("describe --json with failing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
@@ -1136,7 +1137,7 @@ func TestRun_MainJSON_PropagatesWriteError(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
-	code := run([]string{"--json", dir}, stdout, &stderr)
+	code := run(context.Background(), []string{"--json", dir}, stdout, &stderr)
 	if code != 2 {
 		t.Errorf("--json with failing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
@@ -1150,7 +1151,7 @@ func TestRun_MainHuman_PropagatesWriteError(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
-	code := run([]string{dir}, stdout, &stderr)
+	code := run(context.Background(), []string{dir}, stdout, &stderr)
 	if code != 2 {
 		t.Errorf("human output with failing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
@@ -1166,7 +1167,7 @@ func TestRun_MainHuman_NoViolationsBranch_PropagatesWriteError(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
-	code := run([]string{"--checks=E002", dir}, stdout, &stderr)
+	code := run(context.Background(), []string{"--checks=E002", dir}, stdout, &stderr)
 	if code != 2 {
 		t.Errorf("clean human run with failing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
@@ -1180,7 +1181,7 @@ func TestRun_MainHuman_NoViolationsBranch_PropagatesWriteError(t *testing.T) {
 func TestRun_DescribeText_PropagatesWriteError(t *testing.T) {
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
-	code := run([]string{"describe"}, stdout, &stderr)
+	code := run(context.Background(), []string{"describe"}, stdout, &stderr)
 	if code != 2 {
 		t.Errorf("describe (text) with failing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
@@ -1213,7 +1214,7 @@ func (s shortWriter) Write(p []byte) (int, error) {
 func TestRun_DescribeText_DetectsShortWrite(t *testing.T) {
 	stdout := shortWriter{accept: 5} // accept first 5 bytes only
 	var stderr bytes.Buffer
-	code := run([]string{"describe"}, stdout, &stderr)
+	code := run(context.Background(), []string{"describe"}, stdout, &stderr)
 	if code != 2 {
 		t.Errorf("describe (text) with short-writing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
@@ -1229,7 +1230,7 @@ func TestRun_MainHuman_DetectsShortWrite(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := shortWriter{accept: 5}
 	var stderr bytes.Buffer
-	code := run([]string{dir}, stdout, &stderr)
+	code := run(context.Background(), []string{dir}, stdout, &stderr)
 	if code != 2 {
 		t.Errorf("human output with short-writing stdout should exit 2, got %d (stderr=%q)",
 			code, stderr.String())
