@@ -102,17 +102,33 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 
 	bin := tfdryBin(t)
 
-	// Create enough files (with enough content per file) to keep the
-	// parser busy for ~1s so the SIGINT lands reliably during the lint
-	// pass rather than after it. tfdry is fast: 5000 tiny files can
-	// complete in under 50ms on Apple Silicon. Empirical sweep showed
-	// 4000 files × 50 locals each + 500ms pre-signal sleep gives 10/10
-	// reliable interrupt-mid-work behaviour. The exact content is
-	// irrelevant — we only need parser work, not specific check
-	// outputs.
+	// Create enough work to keep the parser busy past the pre-signal
+	// sleep so SIGINT lands during the lint pass rather than after it.
+	// tfdry is fast: small workloads finish in under 50ms on Apple
+	// Silicon. Empirical sweep with the 500ms sleep below:
+	//
+	//      total locals    stability
+	//        100 000           0/10  (Gemini's first suggestion — too small)
+	//        200 000           5/5
+	//        500 000          10/10  (current — chosen for CI headroom)
+	//
+	// Settled on 50 files × 10 000 locals each = 500 000 total locals.
+	// Trade-offs vs the earlier 4000-files × 50-locals setup:
+	//
+	//   - Disk I/O: 80× fewer file-system calls (50 writes vs 4000).
+	//     The earlier shape was disk-bound on CI shared runners.
+	//   - Memory: ~400KB per HCL file × 50 = ~20MB resident. Fine.
+	//   - Cancellation granularity: 50 per-file checkpoints in
+	//     ParseDir vs 4000 — still high enough to land the SIGINT
+	//     mid-walk, but the larger per-file work means each
+	//     checkpoint gap is ~10ms (still tighter than the 500ms
+	//     sleep budget).
+	//
+	// The exact content is irrelevant — we only need parser work,
+	// not specific check outputs.
 	dir := t.TempDir()
-	const fileCount = 4000
-	const localsPerFile = 50
+	const fileCount = 50
+	const localsPerFile = 10000
 	for i := 0; i < fileCount; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("f%05d.tf", i))
 		var b strings.Builder

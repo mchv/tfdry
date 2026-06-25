@@ -346,6 +346,14 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 //   - 2 = parse / write error / bad usage
 //   - 3 = -check found unformatted files
 func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, recursive bool) int {
+	// Entry-level cancel checkpoint. Without this, a pre-cancelled ctx
+	// still pays for os.Lstat on the supplied path plus a potentially
+	// deep collectFmtDirs walk in -recursive mode before the per-dir
+	// check (below) fires. Mirror the runFmtFile pattern (PR A2 round 1)
+	// so both fmt entry points behave identically on entry-cancel.
+	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+		return code
+	}
 	// Reject symlinked roots up front (consistent with file-mode symlink
 	// rejection in runFmtFile, round 4). Without this, a symlinked-dir
 	// root produces inconsistent behaviour: ParseDir / os.ReadDir follows
@@ -409,6 +417,17 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			anyError = true
 		}
 		for _, f := range files {
+			// Per-file cancel checkpoint (C72). Without this, SIGINT
+			// during the format-and-emit loop is ignored for the rest
+			// of the current directory — particularly noticeable in
+			// -check mode where WriteFormatted (which has its own
+			// ctx check at entry) is never reached, so cancellation
+			// would only land at the NEXT directory's outer check.
+			// Uses handleFatalErr for consistency with the outer
+			// per-directory check at the top of this loop.
+			if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
+				return code
+			}
 			if f.Src == nil {
 				continue
 			}

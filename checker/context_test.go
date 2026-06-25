@@ -28,18 +28,6 @@ import (
 // add scheduler timing dependence for no extra coverage of the
 // invariant we care about (that ctx is checked at all).
 
-// makeManyTfFiles creates n .tf files in dir so the walker has enough
-// work to hit a cancellation checkpoint even on fast hardware.
-func makeManyTfFiles(t *testing.T, dir string, n int) {
-	t.Helper()
-	for i := 0; i < n; i++ {
-		path := filepath.Join(dir, fmt.Sprintf("f%04d.tf", i))
-		if err := os.WriteFile(path, []byte("locals {\n  x = 1\n}\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 // mustRun is a test helper that calls checker.Run and panics on error.
 // Used in test sites that spread Run's output into an append() literal,
 // where capturing the new error return inline would require restructuring
@@ -53,15 +41,27 @@ func mustRun(ctx context.Context, files []checker.ParsedFile, checks checker.Che
 	return vs
 }
 
+// The four pre-cancel tests below intentionally do NO disk setup.
+// Each function checks ctx.Err() as its very first instruction and
+// returns immediately, so any files we created would be unused. The
+// minimal form expresses the test's intent more directly ("this
+// function honours pre-call cancellation") and is faster to run on
+// CI without sacrificing coverage: TestFixFormat_EntryCancelReturnsNonNilMap
+// (below) and the SIGINT subprocess test in main_test/sigint_test.go
+// already exercise the mid-walk / mid-pass cancellation paths.
+
 func TestParseDir_RespectsContext(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	makeManyTfFiles(t, dir, 50)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel BEFORE the call — ParseDir must observe this
 
-	_, _, err := checker.ParseDir(ctx, dir)
+	// Use an empty string as the dir. ParseDir's entry-level ctx.Err()
+	// check fires before any I/O (including os.ReadDir on the path),
+	// so passing a bogus dir is intentional: if a future refactor moved
+	// the ctx check after the ReadDir, this test would surface an
+	// ENOENT error instead of context.Canceled — exactly the regression
+	// the test is meant to catch.
+	_, _, err := checker.ParseDir(ctx, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("ParseDir with cancelled ctx: err=%v, want context.Canceled", err)
 	}
@@ -69,18 +69,15 @@ func TestParseDir_RespectsContext(t *testing.T) {
 
 func TestRun_RespectsContext(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	makeManyTfFiles(t, dir, 50)
-	// First parse with a live ctx so we have files to run checks on.
-	files, _, err := checker.ParseDir(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = checker.Run(ctx, files, nil, dir)
+	// nil files / nil checks: Run's entry ctx.Err() check fires before
+	// dereferencing either. If a refactor moves the check below the
+	// for-range, the empty slice means there's nothing to range over
+	// and we'd silently get a clean nil/nil return, which the assertion
+	// below would catch as "err = <nil>, want context.Canceled".
+	_, err := checker.Run(ctx, nil, nil, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Run with cancelled ctx: err=%v, want context.Canceled", err)
 	}
@@ -88,17 +85,10 @@ func TestRun_RespectsContext(t *testing.T) {
 
 func TestCheckFormat_RespectsContext(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	makeManyTfFiles(t, dir, 50)
-	files, _, err := checker.ParseDir(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = checker.CheckFormat(ctx, files)
+	_, err := checker.CheckFormat(ctx, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("CheckFormat with cancelled ctx: err=%v, want context.Canceled", err)
 	}
@@ -106,24 +96,10 @@ func TestCheckFormat_RespectsContext(t *testing.T) {
 
 func TestFixFormat_RespectsContext(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	// Create unformatted files so FixFormat has actual work to do.
-	for i := 0; i < 50; i++ {
-		path := filepath.Join(dir, fmt.Sprintf("f%04d.tf", i))
-		// Deliberately mis-indented; tfdry will reformat.
-		if err := os.WriteFile(path, []byte("locals{\nx=1\n}\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	files, _, err := checker.ParseDir(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err = checker.FixFormat(ctx, files, dir)
+	_, _, err := checker.FixFormat(ctx, nil, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("FixFormat with cancelled ctx: err=%v, want context.Canceled", err)
 	}
