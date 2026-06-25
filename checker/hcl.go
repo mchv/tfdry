@@ -115,6 +115,17 @@ func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(runtime.NumCPU() * 2)
 		for i, e := range tfEntries {
+			// Pre-dispatch cancel check (G62). Without this, g.Go below
+			// blocks the dispatcher on the SetLimit semaphore for every
+			// remaining file even after cancellation has fired —
+			// e.g. with 10 000 files and cancel at file 100, we'd still
+			// spawn ~9 900 doomed goroutines that immediately return.
+			// Checking here lets us break the dispatcher loop early.
+			// The worker's own gctx.Err() check below stays for the
+			// race between dispatcher's read and the worker's start.
+			if err := gctx.Err(); err != nil {
+				break
+			}
 			g.Go(func() error {
 				if err := gctx.Err(); err != nil {
 					return err
