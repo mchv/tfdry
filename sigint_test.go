@@ -1,3 +1,12 @@
+// This test file is excluded from Windows builds entirely. The
+// SIGINT subprocess test uses syscall.SysProcAttr{Setpgid: true},
+// a Unix-only field; a runtime t.Skip("windows") inside the test
+// isn't enough because the file is still compiled. Windows SIGINT
+// coverage will be added in PR B1 using the Win32 console-signal
+// API (GenerateConsoleCtrlEvent) and its own _windows_test.go file.
+
+//go:build !windows
+
 package main_test
 
 import (
@@ -16,9 +25,14 @@ import (
 )
 
 // tfdryBin builds the tfdry binary once for SIGINT-style subprocess tests
-// and returns its path. The binary is built into a temporary directory
-// that t.Cleanup() will remove when the test exits. Build output is
-// captured so a build failure produces a helpful test error.
+// and returns its path. The binary lives in a temporary directory that
+// is deliberately leaked: t.Cleanup is per-test, but the binary is
+// shared across tests via sync.Once, so removing it on the first test's
+// cleanup would break subsequent callers. The OS reclaims /tmp on
+// reboot, which is acceptable for a ~7 MB test artifact.
+//
+// Build output is captured so a build failure produces a helpful test
+// error rather than a bare "exec: no such file" later.
 //
 // We can't share one binary across tests via TestMain because the build
 // would happen even for "go test -short" runs that skip these tests.

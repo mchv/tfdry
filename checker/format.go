@@ -86,11 +86,12 @@ func WriteFormatted(ctx context.Context, path string, formatted []byte) error {
 // the user. ctx is checked once before any work and once per file at
 // the top of the iteration so a SIGINT mid-fix bails before opening
 // the next file rather than after every individual rewrite.
-func FixFormat(ctx context.Context, files []ParsedFile, dir string) (fixed map[string]bool, violations []Violation, err error) {
+func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]bool, []Violation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	fixed = make(map[string]bool)
+	fixed := make(map[string]bool)
+	var violations []Violation
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
 			return fixed, violations, err

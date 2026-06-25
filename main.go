@@ -32,11 +32,20 @@ func main() {
 	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// handleCtxErr writes a brief "interrupted" message to stderr and
-// returns the canonical signal exit code (130 = 128 + SIGINT) when err
-// is a context-cancellation error. Returns (0, false) if err is nil or
-// any non-cancellation error — letting the caller fall through to its
-// normal error path.
+// handleCtxErr is the cancellation-only branch of run()'s error handling.
+// It writes a brief "interrupted" message to stderr and returns the
+// canonical interrupted-execution exit code (130) when err is a context
+// cancellation or timeout. Returns (0, false) for nil or any
+// non-cancellation error, letting the caller fall through to its own
+// error path (per-file accumulation, custom prefixes, etc.).
+//
+// Exit code 130 is the canonical signal-driven exit (128 + SIGINT) and
+// is reused here for any cancellation observed by the helper — SIGINT,
+// SIGTERM (both wired via signal.NotifyContext in main()), and explicit
+// context.DeadlineExceeded from a timeout context. The mapping treats
+// any interrupted-execution path as "exit 130" for CLI-facing
+// simplicity, rather than trying to recover the original signal
+// (which signal.NotifyContext doesn't expose downstream).
 func handleCtxErr(err error, stderr io.Writer) (int, bool) {
 	if err == nil {
 		return 0, false
@@ -57,8 +66,13 @@ func handleCtxErr(err error, stderr io.Writer) (int, bool) {
 //     failures during --fix or fmt), stdout broken-pipe / short-write
 //     failures (C25/C32), and parse errors in fmt subcommand
 //   - 3 = `fmt -check` found unformatted files
-//   - 130 = interrupted by signal (SIGINT/SIGTERM); checker call
-//     returned context.Canceled / context.DeadlineExceeded
+//   - 130 = interrupted execution. Set whenever a checker call returns
+//     context.Canceled or context.DeadlineExceeded — i.e. SIGINT or
+//     SIGTERM (both wired via signal.NotifyContext in main()), or an
+//     explicit context.WithTimeout from a future caller. 130 is the
+//     canonical exit code for SIGINT (128 + 2); the helper reuses it
+//     for SIGTERM and deadlines too so the CLI's "tool was
+//     interrupted" semantics are uniform across cancellation sources.
 //
 // ctx is the cancellation token created by [main] via signal.NotifyContext.
 // Pure of os.Args / os.Exit / os.Stdout for testability.
@@ -181,8 +195,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	files, parseViolations, err := checker.ParseDir(ctx, dir)
-	if code, ok := handleCtxErr(err, stderr); ok {
-		return code
+	if err != nil {
+		if code, ok := handleCtxErr(err, stderr); ok {
+			return code
+		}
+		// Defensive: ParseDir currently returns only ctx.Err() cases, so
+		// this branch is unreachable today. Reaching it would indicate
+		// a future API change (e.g., propagating I/O errors). Surface
+		// as a tool error rather than silently dropping it.
+		fmt.Fprintln(stderr, "tfdry:", err)
+		return 2
 	}
 
 	// Parse violations (E000, E001) are always emitted — not subject to --checks filtering.
@@ -209,16 +231,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
 	if !skipRun {
 		runViolations, err := checker.Run(ctx, files, runFilter, dir)
-		if code, ok := handleCtxErr(err, stderr); ok {
-			return code
+		if err != nil {
+			if code, ok := handleCtxErr(err, stderr); ok {
+				return code
+			}
+			// Defensive: Run currently returns only ctx.Err() cases.
+			// See ParseDir handling above for rationale.
+			fmt.Fprintln(stderr, "tfdry:", err)
+			return 2
 		}
 		violations = append(violations, runViolations...)
 	}
 
 	if shouldFix {
 		_, fixViolations, err := checker.FixFormat(ctx, files, dir)
-		if code, ok := handleCtxErr(err, stderr); ok {
-			return code
+		if err != nil {
+			if code, ok := handleCtxErr(err, stderr); ok {
+				return code
+			}
+			// Defensive: FixFormat currently returns only ctx.Err() cases.
+			// See ParseDir handling above for rationale.
+			fmt.Fprintln(stderr, "tfdry:", err)
+			return 2
 		}
 		violations = append(violations, fixViolations...)
 	}
@@ -328,16 +362,22 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			if code, ok := handleCtxErr(err, stderr); ok {
 				return code
 			}
-			// Defensive: a non-nil ctx.Err() that isn't a cancellation
-			// would indicate a custom-context implementation we don't
-			// model. Surface as a tool error rather than silently exiting
-			// with the zero code handleCtxErr returns for the unhandled case.
+			// Defensive: ctx.Err() per Go's contract returns nil,
+			// context.Canceled, or context.DeadlineExceeded — reaching
+			// this branch indicates a custom-context wrapper we don't
+			// model. Surface as a tool error rather than silently
+			// continuing through the rest of the walk.
 			fmt.Fprintln(stderr, "tfdry fmt:", err)
 			return 2
 		}
 		files, parseViolations, err := checker.ParseDir(ctx, d)
-		if code, ok := handleCtxErr(err, stderr); ok {
-			return code
+		if err != nil {
+			if code, ok := handleCtxErr(err, stderr); ok {
+				return code
+			}
+			// Defensive: ParseDir currently returns only ctx.Err() cases.
+			fmt.Fprintln(stderr, "tfdry fmt:", err)
+			return 2
 		}
 		for _, v := range parseViolations {
 			// Show the path relative to the user-supplied root so a
@@ -404,9 +444,7 @@ func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, chec
 		if code, ok := handleCtxErr(err, stderr); ok {
 			return code
 		}
-		// Defensive: a non-nil ctx.Err() that isn't a cancellation
-		// would indicate a custom-context implementation we don't model.
-		// Surface as a tool error.
+		// Defensive: see runFmt pre-check above for the same rationale.
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
 		return 2
 	}
