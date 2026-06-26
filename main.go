@@ -109,7 +109,7 @@ func handleFatalErr(err error, stderr io.Writer, prefix string) (int, bool) {
 //   - 2 = tool error — covers usage mistakes (unknown flags, misplaced
 //     subcommand args), I/O failures (unreadable directories, write
 //     failures during --fix or fmt), stdout broken-pipe / short-write
-//     failures (C25/C32), and parse errors in fmt subcommand
+//     failures, and parse errors in fmt subcommand
 //   - 3 = `fmt -check` found unformatted files
 //   - 130 = interrupted execution. Set whenever a checker call returns
 //     context.Canceled or context.DeadlineExceeded — i.e. SIGINT or
@@ -162,7 +162,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stderr, "tfdry: "+err.Error())
 				return 2
 			}
-			// Accumulate when --checks= is repeated (G15): `--checks=E001
+			// Accumulate when --checks= is repeated: `--checks=E001
 			// --checks=E002` is equivalent to `--checks=E001,E002`. Initialise
 			// only on first use; reuse the existing set on subsequent flags.
 			if checksFilter == nil {
@@ -197,7 +197,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// -check / -recursive only apply to the `fmt` subcommand. Reject early
 	// so a user who types `tfdry -check ./infra` (expecting a format check)
 	// gets a clear error instead of a silent lint pass with the flag
-	// ignored (C19).
+	// ignored.
 	if subcmd != "fmt" {
 		if fmtCheck {
 			fmt.Fprintln(stderr, "tfdry: -check is only valid with the fmt subcommand")
@@ -208,7 +208,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	// C27: symmetric to C19 — --json / --fix / --checks= are lint-path
+	// Symmetric to the -check/-recursive guards above — --json / --fix
+	// / --checks= are lint-path
 	// flags and don't apply to the `fmt` subcommand. fmt has its own
 	// stdout contract (prints filenames) and exit codes (3 for -check),
 	// always rewrites in non-check mode, and only does formatting (no
@@ -247,19 +248,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Parse violations (E000, E001) are always emitted — not subject to --checks filtering.
 	violations := append([]checker.Violation{}, parseViolations...)
 
-	// G21: when --fix is enabled, skip E008 in the initial Run pass.
+	// When --fix is enabled, skip E008 in the initial Run pass.
 	// `checker.Run` would otherwise format every file just to emit E008,
 	// and `FixFormat` formats them again to write — doubling the
 	// hclwrite.Format work per dirty file. By disabling E008 here,
 	// FixFormat becomes the single emitter of E008 (for files it can't
-	// write — see G22 in checker/format.go which appends E008 alongside
+	// write — see FixFormat in checker/format.go which appends E008 alongside
 	// E000 on write failure so the actionable signal is preserved).
 	runFilter := checksFilter
 	shouldFix := fixFlag && checksFilter.Enabled("E008")
 	if shouldFix {
 		runFilter = checksFilterWithout(checksFilter, "E008")
 	}
-	// C28: CheckSet uses an empty/nil map as the implicit "all enabled"
+	// CheckSet uses an empty/nil map as the implicit "all enabled"
 	// sentinel. If the user passed `--checks=E008 --fix`, removing E008
 	// from a single-element filter yields an empty CheckSet — which Run
 	// would interpret as "run everything", silently subverting the
@@ -311,13 +312,13 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 		}
 		return 0
 	}
-	// C25 (nearby-code review): mirror the JSON path's write-error
+	// Mirror the JSON path's write-error
 	// propagation. Build into a buffer first so a single Write either
 	// fully succeeds or fully fails — keeps "describe" output atomic
 	// from a stdout consumer's perspective and lets us detect the
 	// failure with one error check.
 	//
-	// C32: use bytes.Buffer.WriteTo rather than stdout.Write(b.Bytes())
+	// Use bytes.Buffer.WriteTo rather than stdout.Write(b.Bytes())
 	// so a spec-violating Writer that silently short-writes (returns
 	// n < len(p) with nil error) still surfaces io.ErrShortWrite.
 	var b bytes.Buffer
@@ -338,7 +339,7 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 //   - -check: don't rewrite, print filenames that would change, exit 3 if any
 //   - -recursive: walk subdirs (skip hidden ones, e.g. .terraform/.git)
 //
-// `path` may be either a directory or a single file (G11 — terraform fmt
+// `path` may be either a directory or a single fileterraform fmt
 // parity). With a single file, `-recursive` is rejected as nonsensical.
 //
 // Exit codes match terraform fmt:
@@ -358,7 +359,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 	// rejection in runFmtFile, round 4). Without this, a symlinked-dir
 	// root produces inconsistent behaviour: ParseDir / os.ReadDir follows
 	// symlinks but filepath.WalkDir is Lstat-based and silently does
-	// nothing for `fmt -recursive`, exiting 0 with no output (C23).
+	// nothing for `fmt -recursive`, exiting 0 with no output.
 	// Reject in both modes so the security/atomicity contract of the path
 	// argument is uniform regardless of -recursive.
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
@@ -403,11 +404,11 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 		for _, v := range parseViolations {
 			// Show the path relative to the user-supplied root so a
 			// recursive run reports the subdir, not just a bare filename
-			// that may exist under several subdirs (G19). The helper
+			// that may exist under several subdirs. The helper
 			// guards against the dir-level case where v.File == d, which
-			// would otherwise duplicate the path (C22).
+			// would otherwise duplicate the path.
 			//
-			// C36: filenames and HCL diagnostic text can contain ANSI
+			// Filenames and HCL diagnostic text can contain ANSI
 			// escapes / Bidi-override / newline characters from
 			// attacker-controlled .tf content. Sanitize before printing
 			// to prevent terminal-injection / line-injection in fmt output.
@@ -417,7 +418,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			anyError = true
 		}
 		for _, f := range files {
-			// Per-file cancel checkpoint (C72). Without this, SIGINT
+			// Per-file cancel checkpoint. Without this, SIGINT
 			// during the format-and-emit loop is ignored for the rest
 			// of the current directory — particularly noticeable in
 			// -check mode where WriteFormatted (which has its own
@@ -437,7 +438,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			}
 			anyDirty = true
 			absFile := filepath.Join(d, f.Name)
-			// C36: same sanitization for the dirty-file path printed to
+			// Same sanitization for the dirty-file path printed to
 			// stdout (the user-facing list of formatted files).
 			relPath := output.Sanitize(displayFmtPath(path, d, f.Name))
 			fmt.Fprintln(stdout, relPath)
@@ -467,7 +468,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 // individual files: prints the path on stdout when dirty, rewrites in-place
 // unless `check` is set, and uses exit code 3 only when -check finds dirt.
 //
-// Symlinks are rejected (G14): without Lstat here, `-check` would follow the
+// Symlinks are rejected: without Lstat here, `-check` would follow the
 // symlink at os.ReadFile and exit 3 if the target was dirty, while a write
 // pass would later destroy the symlink on Windows (oNoFollow=0). Reject
 // upfront so the failure mode is identical across read/write/platforms.
@@ -484,14 +485,14 @@ func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, chec
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
 		return 2
 	}
-	// G24: parse for syntax errors before formatting. Directory mode
+	// Parse for syntax errors before formatting. Directory mode
 	// surfaces parse errors via E001/exit 2; without this check, single-
 	// file mode would silently format invalid HCL (best-effort token
 	// reshuffling), exit 0, and leave the user thinking the file is
 	// fine. Parse failure → exit 2 with a stderr message identifying
 	// the file and the diagnostic.
 	if _, diags := hclsyntax.ParseConfig(src, filepath.Base(path), hcl.Pos{Line: 1, Column: 1}); diags.HasErrors() {
-		// C36: sanitize path and message before printing — both can
+		// Sanitize path and message before printing — both can
 		// carry attacker-controlled control / Bidi characters from the
 		// caller-supplied path or HCL diagnostic text.
 		safePath := output.Sanitize(path)
@@ -523,7 +524,7 @@ func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, chec
 	if bytes.Equal(src, formatted) {
 		return 0
 	}
-	// C36: sanitize the file path before printing to stdout — the path
+	// Sanitize the file path before printing to stdout — the path
 	// came from the user's argv but could legitimately contain control
 	// chars on Unix (filenames are byte strings).
 	safePath := output.Sanitize(path)
@@ -542,7 +543,7 @@ func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, chec
 }
 
 // checksFilterWithout returns a CheckSet equivalent to filter but with code
-// disabled. Used by --fix (G21) to skip E008 in the initial checker.Run pass:
+// disabled. Used by --fix to skip E008 in the initial checker.Run pass:
 // since FixFormat will compute the formatted bytes itself, having Run also
 // format every file just to emit E008 is wasted work. When filter is nil/
 // empty (the implicit "all enabled" sentinel), this expands the AllChecks()
@@ -575,7 +576,7 @@ func checksFilterWithout(filter checker.CheckSet, code string) checker.CheckSet 
 // (the directory path itself, not a filename) — e.g. a TOCTOU race where
 // a recursively-walked subdir becomes unreadable between WalkDir scheduling
 // and ParseDir reading it. Naively joining dir + vFile in that case yields
-// "<dir>/<dir>" (C22). We detect that and absolute-path cases and treat
+// "<dir>/<dir>". We detect that and absolute-path cases and treat
 // vFile as already-a-path. Falls back to the absolute path when filepath.Rel
 // can't compute one (e.g. different drives on Windows).
 func displayFmtPath(rootArg, dir, vFile string) string {

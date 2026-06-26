@@ -34,13 +34,14 @@ This file tracks two things:
       E000 to exit 2 and the rest of severity=error to exit 1; refresh
       README/`SKILL.md` to point at the new behaviour as the canonical
       contract.
-- [ ] **PR A3 — Lint hardening.** `gofumpt` adoption,
-      `golangci-lint` config (`staticcheck`, `errcheck`, `gosec`,
-      `revive`, `gocritic`, `unconvert`, `unused`, `ineffassign`,
-      `misspell`, `noctx`, `unparam`), `govulncheck` in CI. *(In review.)*
+- [x] **PR A3 — Lint hardening.** Adopted `gofumpt` and `golangci-lint`
+      with 11 linters (`staticcheck`, `errcheck`, `gosec`, `revive`,
+      `gocritic`, `unconvert`, `unused`, `ineffassign`, `misspell`,
+      `noctx`, `unparam`); added `govulncheck` and `make verify`
+      target. Fixed all 25 surfaced findings. (#4 — 1 review round.)
 - [ ] **PR A4 — Review-marker cleanup.** Scrub `C##` / `G##`
       review-finding prefixes from inline comments while preserving the
-      reasoning. ~133 hits across 11 files.
+      reasoning. ~133 hits across 11 files. *(In review.)*
 - [ ] **PR A5 — Public-adoption documentation.** `LICENSE`
       (Apache-2.0), `CONTRIBUTING.md`, `SECURITY.md`,
       `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, README overhaul, SPDX
