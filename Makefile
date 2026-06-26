@@ -35,9 +35,17 @@ tools: ## Install the dev tools used by `make verify` (gofumpt, golangci-lint, g
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 fmt: ## Apply gofumpt formatting in place. Use this to fix `make fmt-check` failures.
+	@command -v gofumpt >/dev/null 2>&1 || { \
+		echo "gofumpt not found in PATH. Run 'make tools' first."; \
+		exit 1; \
+	}
 	gofumpt -w .
 
 fmt-check: ## Verify gofumpt formatting is clean. Fails with a diff if not.
+	@command -v gofumpt >/dev/null 2>&1 || { \
+		echo "gofumpt not found in PATH. Run 'make tools' first."; \
+		exit 1; \
+	}
 	@out=$$(gofumpt -l . 2>&1); \
 	if [ -n "$$out" ]; then \
 		echo "Files need gofumpt formatting:"; \
@@ -51,19 +59,35 @@ vet: ## Run go vet.
 	go vet ./...
 
 lint: ## Run golangci-lint with the project's config.
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint not found in PATH. Run 'make tools' first."; \
+		exit 1; \
+	}
 	golangci-lint run ./...
 
 test-race: ## Run tests with the race detector + a fresh build (no cache).
 	go test ./... -race -count=1
 
 vuln: ## Run govulncheck against the project's call graph.
+	@command -v govulncheck >/dev/null 2>&1 || { \
+		echo "govulncheck not found in PATH. Run 'make tools' first."; \
+		exit 1; \
+	}
 	govulncheck ./...
 
+# cross-build writes to a per-target file inside an OS-temp dir rather than
+# /dev/null so the rule works on Windows hosts too (where /dev/null doesn't
+# exist). The file is removed immediately after the build succeeds — we only
+# care about exit code, not the artifact.
+CROSS_BUILD_DIR := $(shell mktemp -d 2>/dev/null || echo .tfdry-cross)
+
 cross-build: ## Build for every supported target to catch GOOS/GOARCH issues.
-	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64  go build -o /dev/null .
-	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64  go build -o /dev/null .
-	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64  go build -o /dev/null .
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64  go build -o /dev/null .
+	@mkdir -p $(CROSS_BUILD_DIR)
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64  go build -o $(CROSS_BUILD_DIR)/tfdry-darwin-arm64  .
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64  go build -o $(CROSS_BUILD_DIR)/tfdry-linux-amd64   .
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64  go build -o $(CROSS_BUILD_DIR)/tfdry-linux-arm64   .
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64  go build -o $(CROSS_BUILD_DIR)/tfdry-windows-amd64.exe .
+	@rm -rf $(CROSS_BUILD_DIR)
 
 # ----- Benchmarks -----------------------------------------------------------
 

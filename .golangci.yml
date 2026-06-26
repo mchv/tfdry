@@ -25,7 +25,10 @@ version: "2"
 
 run:
   timeout: 5m
-  # Don't run on generated files (none today, but future-proof).
+  # readonly: refuse to modify go.mod / go.sum / vendor as a side effect of
+  # linting. The linter is a verifier, not a dependency manager — if go.sum
+  # is out of date that should fail loudly (here and in CI) rather than be
+  # silently fixed under the developer's feet.
   modules-download-mode: readonly
 
 linters:
@@ -51,9 +54,14 @@ linters:
       # recovered (the same writer is what we'd report the failure on),
       # and treating every diagnostic message as needing error handling
       # produces line-noise without catching a real class of bug.
+      #
+      # We deliberately do NOT exclude (io.Closer).Close or (*os.File).Close:
+      # for write paths, Close can surface a flush error that we MUST
+      # observe (see checker/format.go:writeFormatted's atomic-rename path
+      # where the final tmp.Close() is error-checked precisely to catch
+      # this). Intentionally-ignored closes in tfdry use the explicit
+      # `_ = f.Close()` pattern so the intent is locally visible.
       exclude-functions:
-        - (io.Closer).Close
-        - (*os.File).Close
         - fmt.Fprintln
         - fmt.Fprintf
         - fmt.Fprint

@@ -161,7 +161,11 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 		}
 		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("cannot open file: %v", err)}}}
 	}
-	defer f.Close()
+	// Read-only path: a failed Close after a successful Read has no
+	// recoverable signal (the data we read is already in memory). Use
+	// the explicit `_ =` form rather than excluding Close globally so
+	// the intent is locally visible.
+	defer func() { _ = f.Close() }()
 
 	fi, err := f.Stat()
 	if err != nil {

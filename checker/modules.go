@@ -113,11 +113,11 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSch
 		}
 		fi, err := fh.Stat()
 		if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxFileSize {
-			fh.Close()
+			_ = fh.Close()
 			continue
 		}
 		src, rerr := readAll(fh, fi.Size())
-		fh.Close()
+		_ = fh.Close()
 		if rerr != nil {
 			continue
 		}
