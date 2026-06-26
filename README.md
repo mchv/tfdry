@@ -26,10 +26,10 @@ pre-commit hooks, CI pipelines, and editor integrations.
 
 - **Fast.** Pure static analysis: ~10× quicker than `terraform validate`
   on a typical module because there's no provider download or state lookup.
-- **Focused.** Nine deterministic checks (E001–E008 + W001) that catch
-  bugs Terraform's own validator misses (undefined locals, type-mismatched
-  interpolations, circular references) plus `terraform fmt`-parity
-  formatting. No opinionated style nags.
+- **Focused.** Nine deterministic checks (E001–E008 + W001) — HCL
+  syntax, local-value resolution (undefined, duplicated, typed,
+  unused), relative-module input typing without `terraform init`,
+  and `terraform fmt`-parity formatting. No opinionated style nags.
 - **Agent-friendly.** Ships with a [`SKILL.md`](SKILL.md) describing the
   CLI surface, exit-code contract, and JSON schema in the convention AI
   coding agents expect. `--json` output is the stable machine-consumption
@@ -205,10 +205,22 @@ repos:
 
 ```yaml
 - name: tfdry
+  shell: bash
   run: |
+    set -euo pipefail
     tfdry --json . | tee tfdry.json
-    jq -e '.summary.errors == 0' tfdry.json
+    jq -e '.summary.errors == 0 and .summary.tool_errors == 0' tfdry.json
 ```
+
+The `set -euo pipefail` line is important: without `pipefail`, the
+`tfdry --json . | tee tfdry.json` pipeline would mask tfdry's
+non-zero exit code (the pipeline's exit code would come from `tee`,
+which is almost always `0`). With `pipefail`, tfdry's exit code
+propagates — so a tool error (exit `2`) surfaces in CI as the tool
+error it is, rather than being detected indirectly via the JSON
+check. GitHub Actions' Linux shell default does set `pipefail`
+already, but being explicit keeps the recipe portable to other CI
+runners and to local `bash` invocations.
 
 ### Other CI
 

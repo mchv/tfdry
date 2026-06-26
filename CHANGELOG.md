@@ -42,10 +42,11 @@ shipped; for the per-PR breakdown see the merged PRs in the
   - `E003` — reference to an undefined local.
   - `E004` — type-mismatched interpolation
     (e.g. `local.tags` is `object`, used where `string` expected).
-  - `E005` — circular local reference.
+  - `E005` — `count` and `for_each` used together on the same
+    `resource` / `data` / `module` block.
   - `E006` — module input type mismatch
     (for relative-path modules tfdry can resolve).
-  - `E007` — object-typed module input where a scalar is required.
+  - `E007` — unknown input key for a relative-path module.
   - `E008` — file is not formatted (matches `terraform fmt` parity).
   - `W001` — local declared but never referenced.
 - **`fmt` subcommand** (`tfdry fmt [path]`): drop-in replacement for

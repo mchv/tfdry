@@ -35,7 +35,7 @@ you would put in an advisory:
 
 - A description of the issue and its impact.
 - Reproduction steps (a minimal `.tf` fixture is ideal).
-- The tfdry version (`tfdry --version`) and the OS / architecture.
+- The tfdry version (`tfdry version`) and the OS / architecture.
 - Whether the issue is already public or known elsewhere.
 - A proposed fix if you have one — not required, but helpful.
 
