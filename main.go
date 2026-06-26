@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 // Command tfdry validates Terraform files without requiring terraform init or validate.
 package main
 

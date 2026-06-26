@@ -41,7 +41,7 @@ This file tracks two things:
 - [ ] **PR A5 — Public-adoption documentation.** `LICENSE`
       (Apache-2.0), `CONTRIBUTING.md`, `SECURITY.md`,
       `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, README overhaul, SPDX
-      headers on `.go` files.
+      headers on `.go` files. *(In review.)*
 - [ ] **PR B1 — CI + release infrastructure.** GitHub Actions
       workflows: PR validation matrix (Linux + macOS + Windows),
       `codeql.yml`, `release.yml` driven by goreleaser with cosign

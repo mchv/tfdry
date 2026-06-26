@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 // Package output formats tfdry check results for human and machine consumption.
 package output
 
