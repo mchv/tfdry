@@ -73,6 +73,31 @@ it up or wants to discuss it.
   SigV4 signing. The correct policy is
   `Managed-AllViewerExceptHostHeader`.
 
+- **E009 circular local reference** — emit a user-facing violation
+  when a local references itself transitively
+  (e.g. `local.a = local.b; local.b = local.a`, or longer chains).
+  The cycle-detection scaffolding already exists in `resolveExprType`
+  (`checker/modules.go:506`, `checker/checks.go:1103`) — it's
+  currently an internal safety mechanism so the linter doesn't
+  infinite-loop, but it bails out by returning `TypeUnknown` rather
+  than producing a violation. `terraform validate` catches this
+  (after `init`) as `Cycle in local values: local.a, local.b`;
+  tfdry currently produces no signal at all, which surprised a PR
+  reviewer (flagged on PR #7). Implementation needs:
+    1. A new `Violation` emission path from `resolveExprType` —
+       probably needs the cycle-detection map to record the cycle
+       path so the message can list the participating locals.
+    2. The check should be skippable via `--checks=` like the
+       others (and ideally enabled by default since it's a
+       correctness check, not a style one).
+    3. Test fixtures: 2-cycle, 3-cycle, and a self-reference
+       (`local.a = local.a + 1`).
+    4. Interaction with E003 (undefined local) and E004 (type
+       mismatch): the cycle participants currently degrade to
+       `TypeUnknown`, which suppresses downstream E004; once E009
+       fires, decide whether to keep suppressing E004 (one error
+       per cycle) or surface both (could be noisy).
+
 ### Tests & benchmarks
 
 - **Additional benchmark coverage**
