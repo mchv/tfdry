@@ -339,7 +339,7 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 //   - -check: don't rewrite, print filenames that would change, exit 3 if any
 //   - -recursive: walk subdirs (skip hidden ones, e.g. .terraform/.git)
 //
-// `path` may be either a directory or a single fileterraform fmt
+// `path` may be either a directory or a single file (terraform fmt
 // parity). With a single file, `-recursive` is rejected as nonsensical.
 //
 // Exit codes match terraform fmt:
