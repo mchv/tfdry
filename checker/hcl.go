@@ -115,7 +115,7 @@ func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(runtime.NumCPU() * 2)
 		for i, e := range tfEntries {
-			// Pre-dispatch cancel check (G62). Without this, g.Go below
+			// Pre-dispatch cancel check. Without this, g.Go below
 			// blocks the dispatcher on the SetLimit semaphore for every
 			// remaining file even after cancellation has fired —
 			// e.g. with 10 000 files and cancel at file 100, we'd still
@@ -201,12 +201,12 @@ func parseOne(dir string, e os.DirEntry) parseResult {
 // parseDiagsToViolations converts an hcl.Diagnostics slice into E001
 // violations. Only hcl.DiagError-severity diagnostics are emitted; warnings
 // (e.g. deprecation notices from hclsyntax) are skipped so they don't
-// inflate the error count or exit code. C34 — matches runFmtFile (G24)
+// inflate the error count or exit code, matching runFmtFile's behaviour
 // which already filters to error-severity only.
 //
 // The File field is always populated from `filename` (which the caller
 // passes as e.Name()) so file-level diagnostics with d.Subject == nil
-// still carry a usable origin (G20).
+// still carry a usable origin.
 func parseDiagsToViolations(diags hcl.Diagnostics, filename string) []Violation {
 	var vs []Violation
 	for _, d := range diags {
@@ -226,7 +226,7 @@ func parseDiagsToViolations(diags hcl.Diagnostics, filename string) []Violation 
 // hclsyntax token-/lex-level errors sometimes populate only d.Summary and
 // leave d.Detail empty; the original code used d.Detail directly, producing
 // E001 violations with empty Message which made syntax errors hard to
-// diagnose (G23). Order of preference: Detail, then Summary, then a sentinel
+// diagnose. Order of preference: Detail, then Summary, then a sentinel
 // so consumers never see an empty Message.
 func diagMessage(d *hcl.Diagnostic) string {
 	if d == nil {
