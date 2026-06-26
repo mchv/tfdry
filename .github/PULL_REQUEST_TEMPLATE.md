@@ -5,7 +5,7 @@ Please make sure your PR:
 - Has a clear title that describes the change in <70 characters.
 - Builds on a feature branch (not main).
 - Includes tests written before the fix/feature (test-first protocol).
-- Passes `go fmt ./...` (no diffs) and `go test ./... -race` locally.
+- Passes `make verify` locally (gofumpt + vet + golangci-lint + race tests + govulncheck + cross-builds).
 
 For security-sensitive changes, please use the [private security
 disclosure flow](https://github.com/mchv/tfdry/security/advisories/new)
@@ -35,7 +35,7 @@ Closes #
 <!-- How was this verified? -->
 
 - [ ] New or updated tests added (test-first — failing test written before the fix)
-- [ ] Local verification passes: `go fmt ./...` produces no changes (`git diff --exit-code` clean), `go vet ./...` clean, `go test ./... -race -count=1` passes, and cross-builds for `darwin-arm64` / `linux-amd64` / `windows-amd64` build cleanly with `CGO_ENABLED=0`
+- [ ] `make verify` passes locally — runs `gofumpt -l .` (must be clean), `go vet ./...`, `golangci-lint run ./...` (must report 0 issues with the project's `.golangci.yml`), `go test ./... -race -count=1`, `govulncheck ./...`, and cross-builds for `darwin-arm64` / `linux-amd64` / `linux-arm64` / `windows-amd64`. Run `make tools` once to install the required dev tools (`gofumpt`, `golangci-lint`, `govulncheck`).
 - [ ] Documentation updated if behaviour or public API changed
 
 ## Risk assessment

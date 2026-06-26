@@ -112,7 +112,8 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 		}
 		path := filepath.Join(dir, f.Name)
 		if ok, werr := writeFormatted(path, formatted); werr != nil {
-			violations = append(violations,
+			violations = append(
+				violations,
 				Violation{
 					Code:     "E000",
 					Severity: "error",
@@ -180,7 +181,13 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 		return false, err
 	}
 	fi, err := f.Stat()
-	f.Close() // we only needed the open() check + perms; the rename works on path
+	// Permission-check open: we only needed the open() to verify the
+	// caller has write access + the file's mode bits for the eventual
+	// rename. The rename works on the path, not on this file handle,
+	// so a Close error here would only signal that something happened
+	// on the kernel side that doesn't affect our write — explicit
+	// ignore via `_ =`.
+	_ = f.Close()
 	if err != nil {
 		return false, err
 	}

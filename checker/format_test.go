@@ -1,10 +1,12 @@
 package checker_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,9 +21,9 @@ func TestE008_UnformattedFile(t *testing.T) {
   a="foo"
   bb  =  "bar"
 }
-`), 0644)
+`), 0o644)
 	files, pv, _ := checker.ParseDir(context.Background(), dir)
-	vs := append(pv, mustRun(context.Background(), files, nil, dir)...)
+	vs := slices.Concat(pv, mustRun(context.Background(), files, nil, dir))
 	if !hasCode(vs, "E008") {
 		t.Fatalf("expected E008 for unformatted file, got %v", codes(vs))
 	}
@@ -34,9 +36,9 @@ func TestE008_FormattedFile_NoViolation(t *testing.T) {
   a  = "foo"
   bb = "bar"
 }
-`), 0644)
+`), 0o644)
 	files, pv, _ := checker.ParseDir(context.Background(), dir)
-	vs := append(pv, mustRun(context.Background(), files, nil, dir)...)
+	vs := slices.Concat(pv, mustRun(context.Background(), files, nil, dir))
 	if hasCode(vs, "E008") {
 		t.Fatalf("unexpected E008 for already-formatted file: %v", codes(vs))
 	}
@@ -45,7 +47,7 @@ func TestE008_FormattedFile_NoViolation(t *testing.T) {
 // E008: file with syntax error (E001) must be skipped — no E008.
 func TestE008_SyntaxError_Skipped(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "bad.tf"), []byte(`locals { bad syntax !!!`), 0644)
+	os.WriteFile(filepath.Join(dir, "bad.tf"), []byte(`locals { bad syntax !!!`), 0o644)
 	_, pv, _ := checker.ParseDir(context.Background(), dir)
 	if hasCode(pv, "E008") {
 		t.Fatalf("E008 must not fire on files that failed E001: %v", codes(pv))
@@ -60,7 +62,7 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
   a="foo"
 }
 `)
-	os.WriteFile(path, unformatted, 0644)
+	os.WriteFile(path, unformatted, 0o644)
 
 	src, _ := os.ReadFile(path)
 	if err := checker.FormatFile(context.Background(), path, src); err != nil {
@@ -69,7 +71,7 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
 
 	got, _ := os.ReadFile(path)
 	// After formatting, a = "foo" should be properly spaced.
-	if string(got) == string(unformatted) {
+	if bytes.Equal(got, unformatted) {
 		t.Fatal("FormatFile did not change the file content")
 	}
 	// Running again must be idempotent.
@@ -77,7 +79,7 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got2, _ := os.ReadFile(path)
-	if string(got) != string(got2) {
+	if !bytes.Equal(got, got2) {
 		t.Fatal("FormatFile is not idempotent")
 	}
 }
@@ -100,7 +102,7 @@ func TestFormatFile_DirectoryPath_ReturnsError(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "subdir")
-	if err := os.Mkdir(subdir, 0755); err != nil {
+	if err := os.Mkdir(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	err := checker.FormatFile(context.Background(), subdir, []byte(`locals { x = "y" }`))
@@ -126,16 +128,16 @@ func TestFormatFile_ReadOnlyParentDir_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.tf")
 	if err := os.WriteFile(path, []byte(`locals { x="y" }
-`), 0644); err != nil {
+`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Make the parent read-only AFTER the source file exists. writeFormatted
 	// will open the source successfully but CreateTemp in the same dir fails.
-	if err := os.Chmod(dir, 0555); err != nil {
+	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
 	src, _ := os.ReadFile(path)
 	err := checker.FormatFile(context.Background(), path, src)

@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -37,7 +38,7 @@ func leftoverFmtTemps(t *testing.T, dir string) []string {
 func TestLeftoverFmtTemps_DetectsRealTempName(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".tfdry-fmt-abc123"), []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".tfdry-fmt-abc123"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := leftoverFmtTemps(t, dir)
@@ -57,7 +58,7 @@ func TestWriteFormatted_SuccessPath_NoLeftoverTemp(t *testing.T) {
 	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "main.tf")
-	if err := os.WriteFile(target, []byte("locals { x = 1 }\n"), 0644); err != nil {
+	if err := os.WriteFile(target, []byte("locals { x = 1 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := writeFormatted(target, []byte("locals {\n  x = 1\n}\n"))
@@ -87,12 +88,12 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	// Real file at the target path: writeFormatted's initial Lstat/Open
 	// checks will succeed because this is a regular file.
 	target := filepath.Join(dir, "main.tf")
-	if err := os.WriteFile(target, []byte("locals { x = 1 }\n"), 0644); err != nil {
+	if err := os.WriteFile(target, []byte("locals { x = 1 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Outside file the symlink will eventually point at.
 	otherTarget := filepath.Join(dir, "elsewhere.tf")
-	if err := os.WriteFile(otherTarget, []byte("locals { y = 2 }\n"), 0644); err != nil {
+	if err := os.WriteFile(otherTarget, []byte("locals { y = 2 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	original, _ := os.ReadFile(otherTarget)
@@ -128,7 +129,7 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	//      symlink in some implementations. Either way, otherTarget's
 	//      content must be unchanged.
 	final, _ := os.ReadFile(otherTarget)
-	if string(final) != string(original) {
+	if !bytes.Equal(final, original) {
 		t.Errorf("symlink target file was modified despite C41 check; got %q want %q",
 			string(final), string(original))
 	}

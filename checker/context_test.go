@@ -149,7 +149,7 @@ func TestParseDir_ContextBackground_NoRegression(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
-		[]byte("locals {\n  x = 1\n}\n"), 0644); err != nil {
+		[]byte("locals {\n  x = 1\n}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
