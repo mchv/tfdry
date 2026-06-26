@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,5 +84,60 @@ func TestRun_NoE000_OnlyLintErrors_ExitOne(t *testing.T) {
 	if code != 1 {
 		t.Errorf("lint errors only → exit code = %d, want 1 (regression: exit 1 must still fire for non-E000 errors); stderr=%q",
 			code, stderr)
+	}
+}
+
+// TestRun_E000_JSONOutput_IncludesToolErrors asserts the user-facing
+// JSON shape includes the new `summary.tool_errors` field that we
+// document in README.md and SKILL.md. Without this test, a future
+// refactor could silently drop the field (e.g. removing it from the
+// Summary struct, changing the json tag) and the documented contract
+// would diverge from the runtime output. The existing
+// TestRun_JSONOutput_Shape test uses a partial-fields struct that
+// ignores extra fields, so it wouldn't catch the omission.
+//
+// We trigger E000 via the same oversize-file technique as
+// TestRun_E000_FileExceedsSize_ExitTwo, then verify:
+//   - summary.tool_errors > 0  (the new field is present and counted)
+//   - summary.errors > 0       (E000 is also tallied in the legacy count
+//     for human-output / back-compat)
+//   - exit code 2              (E000 routes to the tool-error exit)
+func TestRun_E000_JSONOutput_IncludesToolErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge.tf")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(10*1024*1024 + 1); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runCLI("--json", dir)
+	if code != 2 {
+		t.Fatalf("expected exit 2 for E000, got %d; stderr=%q", code, stderr)
+	}
+
+	var got struct {
+		Summary struct {
+			Errors     int `json:"errors"`
+			Warnings   int `json:"warnings"`
+			ToolErrors int `json:"tool_errors"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+	if got.Summary.ToolErrors == 0 {
+		t.Errorf("summary.tool_errors = 0, want > 0 (E000 should be counted as tool error); summary=%+v",
+			got.Summary)
+	}
+	if got.Summary.Errors == 0 {
+		t.Errorf("summary.errors = 0, want > 0 (E000 should also count as error for back-compat); summary=%+v",
+			got.Summary)
 	}
 }

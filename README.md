@@ -105,7 +105,7 @@ Warnings (W001) do not affect the exit code. When both E000 (tool error) and oth
       "message": "local.tags is object, used where string expected in interpolation"
     }
   ],
-  "summary": { "errors": 1, "warnings": 0 }
+  "summary": { "errors": 1, "warnings": 0, "tool_errors": 0 }
 }
 ```
 

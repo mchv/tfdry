@@ -61,7 +61,7 @@ When a value's type cannot be resolved statically, the check is **skipped** (no 
       "message": "local.tags is object, used where string expected in interpolation"
     }
   ],
-  "summary": { "errors": 1, "warnings": 0 }
+  "summary": { "errors": 1, "warnings": 0, "tool_errors": 0 }
 }
 ```
 

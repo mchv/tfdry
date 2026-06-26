@@ -23,7 +23,7 @@ type Report struct {
 	Summary      Summary             `json:"summary"`
 }
 
-// Summary holds the count of errors and warnings in a Report.
+// Summary holds violation counts for a Report.
 //
 // ToolErrors is a sub-count of Errors that only includes E000 violations
 // (tool/infrastructure failures: unreadable directories, files exceeding
