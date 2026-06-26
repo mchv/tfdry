@@ -74,12 +74,15 @@ func NewReport(dir string, violations []checker.Violation) Report {
 			}
 		case "warning":
 			s.Warnings++
-			// Any other severity (empty, unknown future variants like
-			// "info" or "fatal") is intentionally dropped from the summary
-			// counts: an unrecognised severity is a checker bug, and we
-			// don't want to mislead consumers reading summary.warnings.
-			// Earlier code had a `default` arm that swept everything into
-			// Warnings; explicit matching is the safer shape.
+		default:
+			// Unknown severities (empty, future variants like "info" or
+			// "fatal", or accidentally-empty due to a checker bug) are
+			// counted as errors so a downstream CI pipeline fails loudly
+			// rather than passing silently on a violation we don't
+			// recognise. An earlier shape of this switch had a `default`
+			// arm that tallied unknowns as warnings — which would have
+			// hidden a checker bug behind exit code 0.
+			s.Errors++
 		}
 	}
 	return Report{TfdryVersion: Version, Directory: sanitize(dir), Violations: clean, Summary: s}

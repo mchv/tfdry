@@ -81,17 +81,21 @@ check-no-markers: ## Refuse C##/G## review-finding markers in .go source.
 	@# This guard exists so the markers can't sneak back in via a future
 	@# PR's review-reply notes or copy/paste of a finding name into code.
 	@#
-	@# The scan is intentionally narrow:
-	@#  * Only *.go files (no markdown, so TODO.md's PR-history references
-	@#    and commit-message marker-cites stay legitimate).
-	@#  * gosec rule codes in .golangci.yml (G104/G304/G306/G703) are
-	@#    excluded by the *.go filter — they're real linter codes, not
-	@#    review-finding markers.
+	@# The scan is intentionally narrow and conservatively portable:
+	@#  * Uses `find -type f -name "*.go" -exec grep -wnE ...` rather than
+	@#    GNU-grep's `--include` flag, which isn't POSIX. `-w` (word-
+	@#    boundary match) is POSIX whereas `\b` is a GNU extension.
+	@#  * Excludes lines containing `nosec` or `gosec` — those are
+	@#    legitimate gosec suppression annotations (`//nosec G104`) that
+	@#    happen to match the marker pattern but reference real linter
+	@#    rule codes, not historical review findings.
+	@#  * `.git/` is excluded by `-type f -name "*.go"` since git stores
+	@#    blobs, not loose .go files.
 	@#
 	@# When a contributor needs to reference a historical review finding,
 	@# the right place is the commit message body or the PR description,
 	@# not source code. See PR A4 (#5) for the full rationale.
-	@hits=$$(grep -rnE '\b[CG][0-9]{1,3}\b' --include="*.go" . 2>/dev/null); \
+	@hits=$$(find . -type f -name "*.go" -exec grep -wnE '[CG][0-9]{1,3}' {} + 2>/dev/null | grep -vE 'nosec|gosec'); \
 	if [ -n "$$hits" ]; then \
 		echo "Found C##/G## review-finding markers in .go source — these must be scrubbed:"; \
 		echo "$$hits"; \
