@@ -74,7 +74,7 @@ func (s TypeSchema) label() string {
 // variable name → TypeSchema. Returns nil if the directory can't be read.
 // Results are cached in the provided cache map (keyed by moduleDir).
 func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSchema) map[string]TypeSchema {
-	// G28: tolerate a nil cache. Later code writes to cache[moduleDir]
+	// Tolerate a nil cache. Later code writes to cache[moduleDir]
 	// (both early-out paths and the success path), which would panic on
 	// a nil map. Lazy-init a local cache so callers that don't care
 	// about result memoisation (tests, one-shot callers) can pass nil.
@@ -180,7 +180,7 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 		// constraint is malformed (e.g. `type = string(bad)`). Same
 		// fail-safe stance as list/set/map below: return Unknown so
 		// downstream compareExprToSchema doesn't emit misleading E006
-		// against a broken declaration (C35).
+		// against a broken declaration.
 		switch e.Name {
 		case "string":
 			if len(e.Args) != 0 {
@@ -266,7 +266,7 @@ func parseObjectSchema(e *hclsyntax.FunctionCallExpr) TypeSchema {
 func objectKeyName(expr hclsyntax.Expression) string {
 	switch e := expr.(type) {
 	case *hclsyntax.LiteralValueExpr:
-		// G26: cty.NullVal(cty.String) reports FriendlyName "string" but
+		// cty.NullVal(cty.String) reports FriendlyName "string" but
 		// AsString panics on null. HCL string literals don't normally
 		// parse as typed-null, but the defensive check costs nothing.
 		if e.Val.Type().FriendlyName() == "string" && !e.Val.IsNull() {
@@ -320,7 +320,8 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]LocalInfo, ch
 		// be checked. tfdry runs with the user's permissions on the user's
 		// own files, so a project-root boundary doesn't add a real security
 		// property — symlink rejection on file open (O_NOFOLLOW) is the
-		// actual defence (see G10 / round 4).
+		// actual defence (see the EvalSymlinks-based root containment
+		// check below).
 		moduleDir := filepath.Join(dir, filepath.FromSlash(source))
 		realModule, err1 := filepath.EvalSymlinks(moduleDir)
 		realDir, err2 := filepath.EvalSymlinks(dir)
@@ -385,9 +386,9 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 		case SchemaList, SchemaSet:
 			if tup, ok := unwrapExpr(expr).(*hclsyntax.TupleConsExpr); ok {
 				for i, elemExpr := range tup.Exprs {
-					// C42: use the element's own line for multi-line
-					// literals so the violation points at the offending
-					// item, not the parent attribute.
+					// Use the element's own line for multi-line literals
+					// so the violation points at the offending item, not
+					// the parent attribute.
 					elemLine := line
 					if r := elemExpr.StartRange(); r.Start.Line > 0 {
 						elemLine = r.Start.Line
@@ -405,8 +406,9 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 					if key == "" {
 						key = "?"
 					}
-					// C43: same as C42 — point at the value expression's
-					// line for multi-line object literals.
+					// Same idea as the tuple element line tracking above —
+					// point at the value expression's line for multi-line
+					// object literals.
 					valLine := line
 					if r := item.ValueExpr.StartRange(); r.Start.Line > 0 {
 						valLine = r.Start.Line
@@ -570,7 +572,7 @@ func unwrapExpr(expr hclsyntax.Expression) hclsyntax.Expression {
 // references through the locals map when direct inference returns
 // TypeUnknown. Transitive chains (local.b → local.a → 1) are resolved by
 // recursing through the referenced local's expression with cycle detection,
-// matching the same pattern used by varTypeToSchemaKind (G27).
+// matching the same pattern used by varTypeToSchemaKind.
 func resolveExprType(expr hclsyntax.Expression, locals map[string]LocalInfo) VarType {
 	return resolveExprTypeRecursive(expr, locals, nil)
 }
@@ -623,14 +625,14 @@ func stringLiteralValue(expr hclsyntax.Expression) string {
 	switch e := expr.(type) {
 	case *hclsyntax.TemplateExpr:
 		if len(e.Parts) == 1 {
-			// G26: defensive null check — see objectKeyName.
+			// Defensive null check — see objectKeyName.
 			if lit, ok := e.Parts[0].(*hclsyntax.LiteralValueExpr); ok &&
 				lit.Val.Type().FriendlyName() == "string" && !lit.Val.IsNull() {
 				return lit.Val.AsString()
 			}
 		}
 	case *hclsyntax.LiteralValueExpr:
-		// G26: defensive null check — see objectKeyName.
+		// Defensive null check — see objectKeyName.
 		if e.Val.Type().FriendlyName() == "string" && !e.Val.IsNull() {
 			return e.Val.AsString()
 		}

@@ -6,7 +6,7 @@ import (
 )
 
 // TestHumanPreGrow_CapsAndOverflowGuard exercises the size calculation used
-// by WriteHuman to pre-grow its buffer. Crafted to catch the C20 regression:
+// by WriteHuman to pre-grow its buffer. Crafted to catch the buffer-overflow regression:
 // a previous form `len(r.Violations)*128 + 64` could overflow on
 // pathologically large counts and pass a negative argument to
 // bytes.Buffer.Grow, which panics. The helper now caps the result and

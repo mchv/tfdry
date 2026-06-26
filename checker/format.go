@@ -139,7 +139,7 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 // permissions in one syscall (mirrors the pattern in hcl.go:parseOne).
 // Returns (true, nil) on success, (false, err) on error.
 //
-// Atomicity tradeoff (C37): the implementation uses CreateTemp + Rename
+// Atomicity tradeoff: the implementation uses CreateTemp + Rename
 // rather than an in-place truncating write. This guarantees the file is
 // never observed in a half-written state — a power loss or SIGKILL mid-
 // write leaves either the original content or the formatted content,
@@ -159,7 +159,7 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 // Users who rely on group-shared trees or extended ACLs should be aware
 // that running `tfdry fmt` may strip those attributes on rewrite.
 func writeFormatted(path string, formatted []byte) (bool, error) {
-	// Cross-platform symlink rejection (G14): on Windows oNoFollow == 0 means
+	// Cross-platform symlink rejection: on Windows oNoFollow == 0 means
 	// O_NOFOLLOW is a no-op and OpenFile silently follows symlinks. Without
 	// this Lstat precheck, the subsequent os.Rename would destroy the symlink
 	// and replace it with a regular file. Lstat introduces a small TOCTOU
@@ -224,7 +224,7 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return false, err
 	}
-	// C41: TOCTOU defense-in-depth. The initial Lstat/OpenFile checks
+	// TOCTOU defense-in-depth. The initial Lstat/OpenFile checks
 	// established that `path` was a regular file, but between those
 	// checks and this rename, an attacker (or concurrent process) with
 	// write access to the parent directory could swap `path` for a
@@ -252,10 +252,11 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 	return true, nil
 }
 
-// writeFormattedBeforeRename is a test hook (C41). Production callers
-// must leave it nil; tests may set it to simulate a TOCTOU race by
-// swapping the target path between the initial regular-file checks and
-// the final pre-Rename Lstat. The nil check adds negligible overhead
+// writeFormattedBeforeRename is a test hook for the TOCTOU swap race.
+// Production callers must leave it nil; tests may set it to simulate
+// a TOCTOU race by swapping the target path between the initial
+// regular-file checks and the final pre-Rename Lstat. The nil check
+// adds negligible overhead
 // (one indirect call per write) compared to the I/O cost of the actual
 // rewrite.
 var writeFormattedBeforeRename func(path string)

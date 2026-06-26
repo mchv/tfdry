@@ -32,7 +32,7 @@ type Summary struct {
 // NewReport builds a Report from a directory path and a list of violations.
 // A nil violations slice is normalised to an empty slice so JSON output is [] not null.
 //
-// The File and Message fields of every violation are sanitized here (C21):
+// The File and Message fields of every violation are sanitized here:
 // stripping ANSI/control sequences and Bidi-override format characters
 // before either the human or JSON writer sees the data. JSON consumers
 // commonly pipe values to a terminal (e.g. `jq`, CI dashboards), so the
@@ -40,11 +40,11 @@ type Summary struct {
 // at the constructor keeps both writers consistent and lets the human
 // writer skip per-field re-sanitization.
 //
-// C38: Report.Directory is also sanitized — the caller-supplied path can
+// Report.Directory is also sanitized — the caller-supplied path can
 // contain control / ANSI / Bidi-override characters on Unix and would
 // otherwise leak into the JSON "directory" field, enabling the same
-// terminal- and line-injection attacks that C30 / C36 mitigated for the
-// human and fmt-subcommand paths.
+// terminal- and line-injection attacks that the human and fmt-subcommand
+// paths defend against.
 func NewReport(dir string, violations []checker.Violation) Report {
 	if violations == nil {
 		violations = make([]checker.Violation, 0)
@@ -74,7 +74,7 @@ func WriteJSON(w io.Writer, r Report) error {
 }
 
 // WriteHuman writes r to w in a human-readable format with severity icons.
-// Returns any error encountered while writing to w. C25: callers should
+// Returns any error encountered while writing to w. Callers should
 // propagate this so a stdout failure (closed pipe, full disk) maps to a
 // non-zero exit code, consistent with the JSON output path.
 func WriteHuman(w io.Writer, r Report) error {
@@ -98,7 +98,7 @@ func WriteHuman(w io.Writer, r Report) error {
 		b.WriteString("  [")
 		b.WriteString(v.Code)
 		b.WriteString("] ")
-		// Fields are pre-sanitized by NewReport (C21 — see godoc there).
+		// Fields are pre-sanitized by NewReport — see godoc there.
 		b.WriteString(v.File)
 		if v.Line > 0 {
 			b.WriteByte(':')
@@ -113,7 +113,7 @@ func WriteHuman(w io.Writer, r Report) error {
 	b.WriteString(" error(s), ")
 	b.WriteString(strconv.Itoa(r.Summary.Warnings))
 	b.WriteString(" warning(s)\n")
-	// C33: use bytes.Buffer.WriteTo rather than w.Write(b.Bytes()). The
+	// Use bytes.Buffer.WriteTo rather than w.Write(b.Bytes()). The
 	// io.Writer contract requires non-nil error on short write, but real
 	// implementations sometimes break that. WriteTo detects n != len(p)
 	// and surfaces io.ErrShortWrite, so a partial write doesn't slip
@@ -180,7 +180,7 @@ func humanPreGrow(n int) int {
 // Sanitize is the exported alias for the package-internal sanitize helper.
 // Use it from outside the output package — e.g. the fmt subcommand in main.go
 // — when emitting attacker-influenced strings (filenames, HCL diagnostic
-// text) directly to stdout/stderr without going through NewReport (C36).
+// text) directly to stdout/stderr without going through NewReport.
 func Sanitize(s string) string {
 	return sanitize(s)
 }
@@ -197,7 +197,7 @@ func Sanitize(s string) string {
 //   - APC: ESC _ ... <ESC \>
 //   - Single-char ESC sequences (e.g. ESC c reset, ESC = keypad mode)
 //
-// All control characters are stripped — INCLUDING `\n` and `\t` (C30).
+// All control characters are stripped — INCLUDING `\n` and `\t`.
 // Filenames on Unix can legitimately contain newlines/tabs, but in
 // attacker-controlled values they enable line-injection attacks
 // (forging fake violation lines in human output, breaking TSV
@@ -228,8 +228,8 @@ func sanitize(s string) string {
 			// assumption only holds for report SCAFFOLDING (separators,
 			// summary line) — not for the attacker-controlled VALUES
 			// (File, Message) that go through this function. Strip them
-			// to prevent line-injection attacks from crafted filenames
-			// (C30). Also strip Cf (format) characters in the Bidi-
+			// to prevent line-injection attacks from crafted filenames.
+			// Also strip Cf (format) characters in the Bidi-
 			// override and isolate-control ranges — these are not
 			// caught by unicode.IsControl (which only covers Cc) but
 			// enable Trojan Source attacks (CVE-2021-42574) where U+202E

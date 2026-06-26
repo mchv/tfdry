@@ -11,8 +11,8 @@ import (
 
 // leftoverFmtTemps returns the names of any files in dir whose names match
 // the temp-file pattern used by writeFormatted (".tfdry-fmt-*"). Centralises
-// the prefix check so both the C41 race test and the C45 success-path test
-// use the same detection logic. C45: the previous inline check did
+// the prefix check so the TOCTOU-race test and the success-path test both
+// use the same detection logic. The previous inline check did
 // `filepath.Ext(name) == ""` but filepath.Ext(".tfdry-fmt-123") returns
 // the whole string, not "", so the assertion was dead.
 func leftoverFmtTemps(t *testing.T, dir string) []string {
@@ -30,7 +30,7 @@ func leftoverFmtTemps(t *testing.T, dir string) []string {
 	return leftovers
 }
 
-// C45 regression guard for the detection helper itself. Drops a file whose
+// Regression guard for the detection helper itself. Drops a file whose
 // name matches the temp pattern, then asserts leftoverFmtTemps surfaces it.
 // Pre-fix, the inline check in TestWriteFormatted_RaceToSymlink_RefusesRename
 // used filepath.Ext()=="", which never matches for dot-prefix names — so
@@ -47,11 +47,12 @@ func TestLeftoverFmtTemps_DetectsRealTempName(t *testing.T) {
 	}
 }
 
-// C45: success path of writeFormatted must not leave any temp behind.
+// Success path of writeFormatted must not leave any temp behind.
 // On success, renamed=true and the deferred cleanup skips Remove because
 // os.Rename already moved the temp file to its final location. Direct
-// regression test (previously the C41 test exercised this property as a
-// side-check, but its assertion was dead code — see leftoverFmtTemps).
+// regression test (previously the TOCTOU-race test exercised this
+// property as a side-check, but its assertion was dead code — see
+// leftoverFmtTemps).
 func TestWriteFormatted_SuccessPath_NoLeftoverTemp(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink rejection uses Unix permissions; not the focus here")
@@ -70,7 +71,7 @@ func TestWriteFormatted_SuccessPath_NoLeftoverTemp(t *testing.T) {
 	}
 }
 
-// C41: writeFormatted must Lstat the target path immediately before
+// writeFormatted must Lstat the target path immediately before
 // os.Rename, not only at the start of the function. Without this
 // defense-in-depth check, a TOCTOU race where an attacker swaps the
 // path to a symlink between the initial check and the final rename
@@ -130,11 +131,11 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	//      content must be unchanged.
 	final, _ := os.ReadFile(otherTarget)
 	if !bytes.Equal(final, original) {
-		t.Errorf("symlink target file was modified despite C41 check; got %q want %q",
+		t.Errorf("symlink target file was modified despite TOCTOU check; got %q want %q",
 			string(final), string(original))
 	}
 	//   2. The temp file we wrote should not be left behind in dir.
-	//      C45: prior to this commit the inline check used
+	//      Prior to this commit the inline check used
 	//      filepath.Ext(name) == "", which never matches dot-prefixed
 	//      temp names (Ext returns the whole string in that case). The
 	//      helper now does the right prefix check, so this assertion

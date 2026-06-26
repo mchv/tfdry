@@ -115,7 +115,7 @@ func TestParseTypeSchema(t *testing.T) {
 
 		{"unknown traversal name → unknown (skip checks)", "x = mystery", SchemaUnknown},
 
-		// C17: malformed container types must return Unknown, not concrete
+		// Malformed container types must return Unknown, not concrete
 		// SchemaList/Set/Map with Elem=nil. Emitting a concrete kind makes
 		// downstream compareExprToSchema produce misleading E006 ("declared
 		// list, got string") when the actual problem is the module-side type
@@ -128,7 +128,7 @@ func TestParseTypeSchema(t *testing.T) {
 		{"map() no args → unknown", "x = map()", SchemaUnknown},
 		{"map(a, b) too many args → unknown", "x = map(string, number)", SchemaUnknown},
 
-		// C35: same fail-safe stance for primitives. `string`/`number`/`bool`
+		// Same fail-safe stance for primitives. `string`/`number`/`bool`
 		// are TYPE KEYWORDS in HCL, not function calls — they should appear
 		// as ScopeTraversalExpr. If they parse as FunctionCallExpr, the
 		// type constraint is malformed (e.g. `type = string(bad)`). Returning

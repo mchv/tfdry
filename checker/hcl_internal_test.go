@@ -6,7 +6,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 )
 
-// G23: hclsyntax diagnostics may set only Summary (token-level errors,
+// hclsyntax diagnostics may set only Summary (token-level errors,
 // some lex paths), leaving Detail empty. Using d.Detail directly produces
 // an E001 with no message, which makes the violation impossible to
 // diagnose. The diagMessage helper falls back to Summary in that case
@@ -35,12 +35,12 @@ func TestDiagMessage_FallbacksAndShape(t *testing.T) {
 	}
 }
 
-// C34: parseOne previously created E001 violations with hardcoded
+// parseOne previously created E001 violations with hardcoded
 // Severity:"error" for every diagnostic, regardless of d.Severity. If
 // hclsyntax emits a mix of warnings and errors (e.g. deprecation
 // warnings alongside parse errors), warnings would be reported as E001
 // errors, inflating the error count and exit code. The fix filters to
-// hcl.DiagError only — matching the behaviour of runFmtFile (G24).
+// hcl.DiagError only — matching runFmtFile.
 func TestParseDiagsToViolations_FiltersWarnings(t *testing.T) {
 	t.Parallel()
 	subject := &hcl.Range{Filename: "main.tf", Start: hcl.Pos{Line: 7, Column: 1}, End: hcl.Pos{Line: 7, Column: 5}}

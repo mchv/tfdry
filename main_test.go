@@ -141,7 +141,7 @@ func TestRun_FixWithChecksFilterExcludingE008_DoesNotFix(t *testing.T) {
 	}
 }
 
-// G21: with --fix enabled, the initial Run pass skips E008 (FixFormat owns
+// With --fix enabled, the initial Run pass skips E008 (FixFormat owns
 // the format check). For successfully-fixed files there must be no E008 in
 // the JSON output. (Previously this was achieved by a post-Run filter on
 // `fixed[v.File]`; the new flow avoids the redundant Format work entirely
@@ -174,7 +174,7 @@ func TestRun_FixSuccessfullyFixed_NoE008InOutput(t *testing.T) {
 	}
 }
 
-// C28: when `--checks=E008 --fix` is used, the filter has only E008.
+// When `--checks=E008 --fix` is used, the filter has only E008.
 // `checksFilterWithout(filter, "E008")` returns an empty CheckSet.
 // CheckSet.Enabled() treats empty as "all enabled" (the implicit
 // sentinel), so without a guard the initial Run pass would run ALL
@@ -279,7 +279,7 @@ locals {
 	}
 }
 
-// G15: repeated --checks= flags must accumulate, not overwrite. The single-
+// Repeated --checks= flags must accumulate, not overwrite. The single-
 // flag form `--checks=E003,W001` is already supported; the multi-flag form
 // `--checks=E003 --checks=W001` should be equivalent. Previously each flag
 // re-initialised checksFilter via make(), silently dropping the prior set.
@@ -544,7 +544,7 @@ func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
 	}
 }
 
-// C19: -check / -recursive only make sense with the `fmt` subcommand. Using
+// -check / -recursive only make sense with the `fmt` subcommand. Using
 // them on the lint path silently ignored the flag and ran the normal pass,
 // hiding user mistakes (e.g. `tfdry -check ./infra` would NOT check
 // formatting — it would lint the dir and exit accordingly). Reject as a
@@ -576,7 +576,7 @@ func TestRun_FmtFlagsOutsideFmt_ExitTwo(t *testing.T) {
 	}
 }
 
-// C19 (regression): -check and -recursive must STILL work under `fmt`.
+// Regression: -check and -recursive must STILL work under `fmt`.
 func TestRun_FmtFlagsWithFmtSubcommand_StillWork(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"a.tf": fmtCleanTF})
 	cases := [][]string{
@@ -596,9 +596,9 @@ func TestRun_FmtFlagsWithFmtSubcommand_StillWork(t *testing.T) {
 	}
 }
 
-// C27: --json/--fix/--checks= are lint-path flags that don't apply to
+// --json/--fix/--checks= are lint-path flags that don't apply to
 // the fmt subcommand. The previous behaviour silently ignored them.
-// Symmetric to C19 (-check / -recursive being rejected outside fmt):
+// Symmetric to the -check/-recursive guards being rejected outside fmt:
 // flags that don't apply to the chosen subcommand should reject early
 // with exit 2 instead of letting the user think they applied.
 func TestRun_LintFlagsWithFmtSubcommand_ExitTwo(t *testing.T) {
@@ -692,7 +692,7 @@ func TestRun_ExtrasAfterSubcommand_ExitTwo(t *testing.T) {
 	}
 }
 
-// G19: in `tfdry fmt -recursive`, parse errors in subdirs must be reported
+// In `tfdry fmt -recursive`, parse errors in subdirs must be reported
 // with their subdirectory path so the user can locate the broken file.
 // Previously the bare basename was printed (e.g. `bad.tf`) — when the same
 // filename exists under multiple subdirs the message is ambiguous.
@@ -718,7 +718,7 @@ func TestRun_FmtRecursive_ParseError_PrefixesSubdirPath(t *testing.T) {
 	}
 }
 
-// C36: tfdry fmt prints filenames and parse-error text directly to
+// tfdry fmt prints filenames and parse-error text directly to
 // stdout/stderr without applying the output sanitizer used by the
 // lint/JSON paths. On Unix, filenames can contain ESC/control/Bidi
 // characters, which enables terminal/line injection via crafted
@@ -757,7 +757,7 @@ func TestRun_Fmt_SanitizesFilenameInOutput(t *testing.T) {
 	}
 }
 
-// C36: same property for parse-error stderr output. A subdir with an
+// Same property for parse-error stderr output. A subdir with an
 // invalid .tf whose name contains ESC must not propagate that ESC to
 // stderr.
 func TestRun_FmtRecursive_SanitizesParseErrorPath(t *testing.T) {
@@ -782,7 +782,7 @@ func TestRun_FmtRecursive_SanitizesParseErrorPath(t *testing.T) {
 	}
 }
 
-// C22: when ParseDir emits a directory-level E000 (because os.ReadDir
+// When ParseDir emits a directory-level E000 (because os.ReadDir
 // failed on the directory itself, e.g. permission race), v.File is the
 // directory path — not a basename. Naively joining d+v.File then
 // duplicates the prefix (e.g. "infra/prod/infra/prod"). The
@@ -869,7 +869,7 @@ func TestRun_FmtMultiplePaths_ExitTwo(t *testing.T) {
 	}
 }
 
-// ── tfdry fmt single-file (G11 — terraform fmt parity) ──────────────────────
+// ── tfdry fmt single-file (terraform fmt parity) ──────────────────────
 //
 // terraform fmt accepts both directories and individual files; tfdry must do
 // the same. Previously passing a file path produced a confusing
@@ -939,7 +939,7 @@ func TestRun_FmtCheck_SingleCleanFile_NoOutputExitZero(t *testing.T) {
 	}
 }
 
-// G24: single-file fmt should report HCL syntax errors before formatting,
+// Single-file fmt should report HCL syntax errors before formatting,
 // matching the directory-mode behaviour (which surfaces parse errors via
 // E001 with exit 2). Without this, `tfdry fmt bad.tf` would silently exit
 // 0 even when bad.tf has invalid HCL — the user is left thinking the
@@ -1002,7 +1002,7 @@ func TestRun_Fmt_RecursiveOnFile_ExitTwo(t *testing.T) {
 	}
 }
 
-// G14: tfdry fmt <symlink-path> must reject symlinks before reading or
+// tfdry fmt <symlink-path> must reject symlinks before reading or
 // writing — on Unix this was already enforced at writeFormatted via
 // O_NOFOLLOW, but the dirty-detection read in runFmtFile happened first
 // (os.ReadFile follows symlinks), and on Windows oNoFollow=0 means the
@@ -1043,7 +1043,7 @@ func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 	}
 }
 
-// G14 (read-only): fmt -check on a symlink should also reject (no read
+// Read-only path: fmt -check on a symlink should also reject (no read
 // follows, no exit-3 false positive, just a usage error).
 func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
@@ -1058,7 +1058,7 @@ func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
 	}
 }
 
-// C23: symlinked-DIR handling for `tfdry fmt`. The previous code path used
+// Symlinked-DIR handling for `tfdry fmt`. The previous code path used
 // os.Stat (follows symlinks) to detect dir-vs-file, but collectFmtDirs uses
 // filepath.WalkDir which is Lstat-based and does NOT recurse into a
 // symlinked root — so `tfdry fmt -recursive <symlink-to-dir>` silently did
@@ -1109,7 +1109,7 @@ func TestRun_Fmt_SymlinkedDirRoot_Rejected(t *testing.T) {
 	}
 }
 
-// ── describe --json must propagate write errors (C15) ────────────────────────
+// ── describe --json must propagate write errors ────────────────────────
 
 // errWriter is a Writer that always fails on Write — simulates closed pipe /
 // EPIPE / disk full etc. Used to verify CLI exit code on output failure.
@@ -1146,7 +1146,7 @@ func TestRun_MainJSON_PropagatesWriteError(t *testing.T) {
 	}
 }
 
-// C25: the human-output path should propagate stdout write errors with the
+// The human-output path should propagate stdout write errors with the
 // same exit code semantics as the JSON path, otherwise success is reported
 // even when stdout is broken (closed pipe, full disk, etc.).
 func TestRun_MainHuman_PropagatesWriteError(t *testing.T) {
@@ -1163,7 +1163,7 @@ func TestRun_MainHuman_PropagatesWriteError(t *testing.T) {
 	}
 }
 
-// C25 (no-violations branch): the early "No violations found" path also
+// No-violations branch: the early "No violations found" path also
 // writes to stdout and must propagate write errors.
 func TestRun_MainHuman_NoViolationsBranch_PropagatesWriteError(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
@@ -1176,7 +1176,7 @@ func TestRun_MainHuman_NoViolationsBranch_PropagatesWriteError(t *testing.T) {
 	}
 }
 
-// C25 (nearby-code review): runDescribe text mode (`tfdry describe` without
+// runDescribe text mode (`tfdry describe` without
 // --json) was the closest analogue to WriteHuman and had the same issue —
 // JSON path propagated write errors but text path silently continued.
 // Symmetric fix.
@@ -1197,7 +1197,7 @@ func TestRun_DescribeText_PropagatesWriteError(t *testing.T) {
 // with a nil error. The io.Writer contract requires non-nil error on short
 // write, but real-world implementations sometimes break that. The fix uses
 // bytes.Buffer.WriteTo which detects the violation and surfaces
-// io.ErrShortWrite, so output failures aren't silently swallowed (C32, C33).
+// io.ErrShortWrite, so output failures are not silently swallowed.
 type shortWriter struct{ accept int }
 
 func (s shortWriter) Write(p []byte) (int, error) {
@@ -1207,7 +1207,7 @@ func (s shortWriter) Write(p []byte) (int, error) {
 	return s.accept, nil // short write WITHOUT error — spec violation
 }
 
-// C32: runDescribe text mode should detect a short-write-without-error and
+// runDescribe text mode should detect a short-write-without-error and
 // return exit 2 (consistent with the JSON path and human-output path which
 // already do via the writer's own error chain). The previous code used
 // `stdout.Write(b.Bytes())` and only checked the returned error, so a
@@ -1226,7 +1226,7 @@ func TestRun_DescribeText_DetectsShortWrite(t *testing.T) {
 	}
 }
 
-// C33: same property for the main human-output path. WriteHuman previously
+// Same property for the main human-output path. WriteHuman previously
 // used `w.Write(b.Bytes())` which couldn't surface short writes either.
 func TestRun_MainHuman_DetectsShortWrite(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
@@ -1244,7 +1244,7 @@ func TestRun_MainHuman_DetectsShortWrite(t *testing.T) {
 
 // ── SKILL.md regression guards ───────────────────────────────────────────────
 
-// C24: SKILL.md should not carry security claims that don't match what
+// SKILL.md should not carry security claims that don't match what
 // tfdry actually implements. Specifically, the previous claim "All path
 // arguments are validated. Path traversal attempts are rejected." was
 // false: CLI paths are accepted as-is and module `source = "../shared"`
@@ -1264,7 +1264,7 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	}
 	for _, phrase := range forbidden {
 		if strings.Contains(s, phrase) {
-			t.Errorf("SKILL.md still contains misleading security claim: %q (C24)", phrase)
+			t.Errorf("SKILL.md still contains misleading security claim: %q", phrase)
 		}
 	}
 	// Sanity: the Security section must still exist — we only object to
@@ -1272,26 +1272,26 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	if !strings.Contains(s, "## Security") {
 		t.Error("SKILL.md should retain a Security section describing the actual posture")
 	}
-	// C26: the symlink bullet must qualify Windows behaviour. The
+	// The symlink bullet must qualify Windows behaviour. The
 	// O_NOFOLLOW protection only applies on Unix-like systems; on
 	// Windows oNoFollow=0 and the symlink-to-regular-file case is
 	// silently followed (see checker/nofollow_windows.go). Without
 	// this qualification, the bullet overpromises cross-platform
 	// symlink skipping.
 	if !strings.Contains(s, "Windows") {
-		t.Error("SKILL.md symlink bullet must qualify Windows behaviour (C26)")
+		t.Error("SKILL.md symlink bullet must qualify Windows behaviour")
 	}
-	// C39: the "never modifies files unless --fix" invariant is misleading
+	// The "never modifies files unless --fix" invariant is misleading
 	// because the `fmt` subcommand rewrites files by default (without
 	// -check). The line must NOT contain a blanket "never modifies"
 	// claim — it must qualify the fmt subcommand's write behaviour.
 	if strings.Contains(s, "tfdry never modifies files unless `--fix` is passed.") {
-		t.Error("SKILL.md still contains the misleading blanket invariant (C39); the fmt subcommand also writes")
+		t.Error("SKILL.md still contains the misleading blanket invariant; the fmt subcommand also writes")
 	}
 	// And the qualified replacement should call out that `tfdry fmt`
 	// (without -check) rewrites in place, so users aren't surprised.
 	if !strings.Contains(s, "tfdry fmt") {
-		t.Error("SKILL.md should mention `tfdry fmt` write behaviour explicitly (C39)")
+		t.Error("SKILL.md should mention `tfdry fmt` write behaviour explicitly")
 	}
 }
 
@@ -1381,8 +1381,8 @@ func extractRelativeLinks(content string) []string {
 // (inline + reference-style), and which links are correctly filtered
 // out as absolute URLs / anchors.
 //
-// Gemini G39 reported the old regex missed reference-style links
-// ([ref]: url definitions); Gemini G40 reported the old scheme check
+// An earlier review caught that the old regex missed reference-style links
+// ([ref]: url definitions); the old scheme check
 // only listed http/https, missing git://, ftp://, custom schemes.
 // Both cases live in the table below as explicit regression guards.
 func TestExtractRelativeLinks(t *testing.T) {
@@ -1397,11 +1397,11 @@ func TestExtractRelativeLinks(t *testing.T) {
 		{"inline relative", "see [foo](../foo.md)", []string{"../foo.md"}},
 		{"inline absolute https skipped", "see [a](https://example.com)", nil},
 		{"inline absolute http skipped", "see [a](http://example.com)", nil},
-		// G40 — non-http schemes must also be filtered out.
+		// Non-http schemes must also be filtered out.
 		{"inline absolute git skipped", "see [a](git://example.com/repo.git)", nil},
 		{"inline absolute ftp skipped", "see [a](ftp://example.com)", nil},
 		{"inline absolute custom-scheme skipped", "see [a](slack://channel/123)", nil},
-		// G43 — protocol-relative URLs (//example.com/...) are absolute
+		// Protocol-relative URLs (//example.com/...) are absolute
 		// web links but don't contain "://". The naive containment
 		// check would let them through and then os.Stat would fail
 		// against ".github/example.com/..." or similar nonsense.
@@ -1410,7 +1410,7 @@ func TestExtractRelativeLinks(t *testing.T) {
 		{"inline pure anchor skipped", "jump to [a](#section)", nil},
 		{"inline with anchor fragment stripped", "see [a](../bar.md#sec)", []string{"../bar.md"}},
 		{"inline with title stripped", `see [a](../bar.md "title")`, []string{"../bar.md"}},
-		// G39 — reference-style link definitions must also be picked up.
+		// Reference-style link definitions must also be picked up.
 		{"reference relative", "uses [foo][r1]\n\n[r1]: ../bar.md", []string{"../bar.md"}},
 		{"reference indented", "uses [foo][r1]\n\n  [r1]: ../bar.md", []string{"../bar.md"}},
 		{"reference absolute skipped", "uses [foo][r1]\n\n[r1]: https://example.com", nil},
@@ -1418,7 +1418,7 @@ func TestExtractRelativeLinks(t *testing.T) {
 		{"reference protocol-relative skipped", "uses [foo][r1]\n\n[r1]: //example.com/x", nil},
 		// Mixed: inline + reference in same content.
 		{"both styles", "see [a](../a.md) and [b][r]\n\n[r]: ../b.md", []string{"../a.md", "../b.md"}},
-		// C57 — godoc promises "order of appearance"; a reference
+		// The walker godoc promises "order of appearance"; a reference
 		// definition placed BEFORE an inline link must come first in
 		// the result, not be silently relegated to last because of
 		// the implementation order.
@@ -1456,7 +1456,7 @@ func TestExtractRelativeLinks(t *testing.T) {
 // link is the markdown link as written, with anchors and titles
 // already stripped by extractRelativeLinks.
 //
-// Gemini G41 reported the original walker used filepath.Join on every
+// An earlier review caught that the original walker used filepath.Join on every
 // link, which silently mishandles "/X" by stripping the leading slash
 // during the join — so a future template with [link](/TODO.md) would
 // falsely fail the resolution check against ".github/ISSUE_TEMPLATE/
@@ -1471,7 +1471,7 @@ func resolveDocLink(docPath, repoRoot, link string) string {
 // TestResolveDocLink pins the doc-link resolution behaviour: bare
 // relative links resolve against the doc's directory, "/X" links
 // resolve against the repo root. Sub-cases cover the corner Gemini
-// G41 flagged on PR #2.
+// (originally flagged during PR #2 review).
 //
 // Test inputs and expectations are written with forward slashes for
 // readability; filepath.FromSlash converts them to the host
@@ -1547,16 +1547,16 @@ func gitHubTemplateFiles() []string {
 // extractRelativeLinks, and verifies that each relative-path target
 // resolves to a file that exists on disk.
 //
-// Scope is intentionally narrow (Copilot C56): walking the entire
+// Scope is intentionally narrow: walking the entire
 // .github/ tree would eventually catch workflow YAML files added in
 // PR B1, whose run-scripts can contain "[text](path)"-shaped strings
 // that aren't real markdown links.
 //
 // The resolution step uses resolveDocLink so both bare relative
 // ("../../TODO.md") and repo-root-relative ("/TODO.md") link forms
-// are handled correctly (Gemini G41).
+// are handled correctly.
 //
-// This catches the class of bug Gemini reported on PR #2 (G37/G38)
+// This catches the class of broken-doc-link bug surfaced during PR #2 review
 // where templates linked to "../blob/main/X" — a confused mix of a
 // relative file path and GitHub's web-URL "blob/main" pattern. The
 // resolved path lands inside .github/ instead of the repo root and

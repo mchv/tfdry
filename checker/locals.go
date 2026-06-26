@@ -110,8 +110,8 @@ func inferFuncReturnType(name string) VarType {
 	switch name {
 	// Pure scalar-returning string functions.
 	case "tostring", "format", "join", "lower", "upper", "trimspace", "replace", "substr",
-		// G25: well-known string-returning functions used widely in
-		// terraform code (file/template I/O, encoding, identifiers).
+		// Well-known string-returning functions used widely in terraform
+		// code (file/template I/O, encoding, identifiers).
 		"file", "templatefile", "jsonencode",
 		"base64encode", "base64decode",
 		"uuid", "timestamp":
@@ -125,7 +125,7 @@ func inferFuncReturnType(name string) VarType {
 	// (keys/values) map here too.
 	case "tolist", "toset", "flatten", "concat", "setunion",
 		"tomap", "merge", "zipmap",
-		// G25: keys/values return lists — non-scalar.
+		// keys/values return lists — non-scalar.
 		"keys", "values":
 		return TypeObject
 	default:

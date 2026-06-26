@@ -59,7 +59,7 @@ func TestE001_InvalidSyntax(t *testing.T) {
 	}
 }
 
-// G20: every E001 violation must carry a non-empty File field, even for
+// Every E001 violation must carry a non-empty File field, even for
 // diagnostics where d.Subject is nil (file-level / global HCL errors don't
 // have a position). Without the fix, such violations get an empty filename
 // and downstream consumers (terminal output, JSON parsers grouping by file)
@@ -83,7 +83,7 @@ func TestE001_FilePopulatedEvenWhenSubjectNil(t *testing.T) {
 		if v.File == "" {
 			t.Errorf("E001 violation has empty File: %+v", v)
 		}
-		// G23: even if d.Detail is empty (some hclsyntax token-level
+		// Even if d.Detail is empty (some hclsyntax token-level
 		// errors only populate Summary), Message must never be empty
 		// or the violation is impossible to diagnose.
 		if v.Message == "" {
@@ -628,7 +628,7 @@ output "o" { value = "${local.obj}-${local.str}" }
 // blanket rejection at ParseDir was over-paranoid: tfdry runs as the
 // caller's UID with the caller's filesystem access, so blocking parent
 // traversal at the top level adds no security and breaks normal usage.
-// Module-source containment (G5) is still enforced.
+// Module-source containment is still enforced.
 func TestParseDir_DotDotSegment_Allowed(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
@@ -893,7 +893,7 @@ variable "name" {
 	}
 }
 
-// C17: malformed container types like `list()` (no args) or `list(a, b)`
+// Malformed container types like `list()` (no args) or `list(a, b)`
 // (too many args) must not produce false-positive E006 at the caller. The
 // module type constraint is broken; tfdry should skip type-mismatch checks
 // rather than treat the malformed form as a concrete container kind.
@@ -939,7 +939,7 @@ variable "v" {
 	}
 }
 
-// C18: malformed object() expressions (no args, too many args, or non-object
+// Malformed object() expressions (no args, too many args, or non-object
 // argument) must not produce false-positive E007 at the caller. With an
 // empty Fields map, every key in the caller's literal would otherwise be
 // flagged as an unknown field. SchemaUnknown short-circuits the check.
@@ -1056,7 +1056,7 @@ variable "config" {
 	}
 }
 
-// G27: resolveExprType should follow transitive local references with
+// resolveExprType should follow transitive local references with
 // cycle detection. Without recursion, `local.b -> local.a -> 1` resolves
 // to TypeUnknown at local.b (because local.b's expression is a
 // ScopeTraversalExpr, not a literal), and E006 is silently skipped even
@@ -1094,7 +1094,7 @@ variable "v" {
 	}
 }
 
-// G27: cycle detection — `local.a = local.b`, `local.b = local.a` must NOT
+// Cycle detection — `local.a = local.b`, `local.b = local.a` must NOT
 // recurse infinitely. resolveExprType should bail out via the cycle map and
 // return TypeUnknown without crashing or stack-overflowing.
 func TestE006_TransitiveLocalCycle_DoesNotPanic(t *testing.T) {
@@ -1131,7 +1131,7 @@ variable "v" {
 	}
 }
 
-// C42: list/set element type mismatches should report the line of the
+// List/set element type mismatches should report the line of the
 // offending element, not the parent attribute. With multi-line list
 // literals the parent line is misleading — the user has to scan through
 // the literal to find which element is wrong. tup.Exprs[i].StartRange()
@@ -1177,8 +1177,8 @@ func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
 	}
 }
 
-// C43: map element type mismatches should report the value expression's
-// line, not the parent attribute. Same reasoning as C42.
+// Map element type mismatches should report the value expression's
+// line, not the parent attribute. Same reasoning as the list/set case.
 func TestE006_MapValueMismatch_ReportsValueLine(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
@@ -1451,9 +1451,9 @@ module "m" {
 	_ = vs // just ensure no panic
 }
 
-// Bug#3 / G22: --fix must keep E008 in output when the file could not be
+// --fix must keep E008 in output when the file could not be
 // written. Once the --fix path skips E008 in the initial Run pass for
-// performance (G21), FixFormat itself becomes the only emitter of E008 for
+// performance, FixFormat itself becomes the only emitter of E008 for
 // unfixable files — without it, the user would see E000 (write error) but
 // not E008 (file is still unformatted), losing the actionable signal.
 func TestFixFormat_WriteError_ReturnsE000(t *testing.T) {
@@ -1473,7 +1473,7 @@ func TestFixFormat_WriteError_ReturnsE000(t *testing.T) {
 		t.Errorf("expected E000 when write fails, got %v", codes(vs))
 	}
 	if !hasCode(vs, "E008") {
-		t.Errorf("expected E008 alongside E000 (G22 — file is still unformatted), got %v", codes(vs))
+		t.Errorf("expected E008 alongside E000 (file is still unformatted), got %v", codes(vs))
 	}
 }
 
@@ -1524,13 +1524,13 @@ module "evil" {
 	})
 	// The parent dir doesn't exist as a tfdry-readable module; no checks
 	// fire. (We no longer enforce containment — the security boundary lives
-	// at the kernel level via O_NOFOLLOW + EvalSymlinks; see G10.)
+	// at the kernel level via O_NOFOLLOW + EvalSymlinks.)
 	if hasCode(vs, "E006") || hasCode(vs, "E007") {
 		t.Fatalf("non-existent parent dir produced spurious findings: %v", codes(vs))
 	}
 }
 
-// G10: parent-relative module path that DOES exist must be parsed and
+// Parent-relative module path that DOES exist must be parsed and
 // checked. This is the standard monorepo pattern — `infra/prod` references
 // `../shared/<module>`. Previously the containment check silently skipped
 // such modules, leaving E006/E007 unable to fire.
@@ -1569,7 +1569,7 @@ module "vpc" {
 	}
 }
 
-// G10 (positive): a parent-relative module with correctly-typed inputs
+// Positive case: a parent-relative module with correctly-typed inputs
 // produces no findings. Symmetric to the negative test above.
 func TestCheckModuleInputs_ParentRelativeModule_Clean(t *testing.T) {
 	t.Parallel()
@@ -1603,7 +1603,7 @@ module "vpc" {
 	}
 }
 
-// G10 (formerly Security#2): a sibling module ../proj-evil with differing
+// Security-bypass guard: a sibling module ../proj-evil with differing
 // variables produces E007 on the unknown caller key. Previously containment
 // would skip the module entirely; now it's checked like any other.
 func TestCheckModuleInputs_SiblingDir_UnknownInput_E007(t *testing.T) {
@@ -1764,7 +1764,7 @@ module "m" {
 	}
 }
 
-// ── G8: recursive element type checking for list/set/map ─────────────────────
+// ── Recursive element type checking for list/set/map ─────────────────────
 
 // list(string) with a non-string element must fire E006.
 func TestE006_ListOfString_WithNumberElement(t *testing.T) {
