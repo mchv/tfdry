@@ -76,22 +76,33 @@ it up or wants to discuss it.
 - **E009 circular local reference** — emit a user-facing violation
   when a local references itself transitively
   (e.g. `local.a = local.b; local.b = local.a`, or longer chains).
-  The cycle-detection scaffolding already exists in `resolveExprType`
-  (`checker/modules.go:506`, `checker/checks.go:1103`) — it's
-  currently an internal safety mechanism so the linter doesn't
-  infinite-loop, but it bails out by returning `TypeUnknown` rather
-  than producing a violation. `terraform validate` catches this
-  (after `init`) as `Cycle in local values: local.a, local.b`;
-  tfdry currently produces no signal at all, which surprised a PR
-  reviewer (flagged on PR #7). Implementation needs:
-    1. A new `Violation` emission path from `resolveExprType` —
-       probably needs the cycle-detection map to record the cycle
-       path so the message can list the participating locals.
+  The cycle-detection scaffolding already exists in two functions in
+  `checker/modules.go`: `varTypeToSchemaKind` (around `:506`, the
+  schema-resolution side used for module input typing) and
+  `resolveExprTypeRecursive` (around `:583`, the local-expression
+  type-resolution side used by E004). Both keep a `seen` map and
+  bail out by returning `SchemaUnknown` / `TypeUnknown` rather than
+  producing a violation, which keeps the linter from infinite-looping
+  on cyclic local refs but means the user sees no signal at all.
+  `TestE006_TransitiveLocalCycle_DoesNotPanic` in
+  `checker/checks_test.go:1103` exercises the recursive path and is
+  the canonical no-panic regression test. `terraform validate`
+  catches this (after `init`) as `Cycle in local values:
+  local.a, local.b`; flagged on PR #7 as a surprising gap.
+  Implementation needs:
+    1. A new `Violation` emission path from `resolveExprTypeRecursive`
+       (and possibly `varTypeToSchemaKind` if module-input cycles
+       should be surfaced too). The `seen` map currently only stores
+       names; it should record the cycle path so the message can list
+       the participating locals in order.
     2. The check should be skippable via `--checks=` like the
        others (and ideally enabled by default since it's a
-       correctness check, not a style one).
+       correctness check, not a style one). Add `E009` to the
+       canonical `CheckList` in `checker/checks.go`.
     3. Test fixtures: 2-cycle, 3-cycle, and a self-reference
-       (`local.a = local.a + 1`).
+       (`local.a = local.a + 1`). Extend
+       `TestE006_TransitiveLocalCycle_DoesNotPanic` or add a
+       parallel `TestE009_*` family.
     4. Interaction with E003 (undefined local) and E004 (type
        mismatch): the cycle participants currently degrade to
        `TypeUnknown`, which suppresses downstream E004; once E009
@@ -99,6 +110,19 @@ it up or wants to discuss it.
        per cycle) or surface both (could be noisy).
 
 ### Tests & benchmarks
+
+- **Lint British English in `.md` prose, not just `.go` comments.**
+  golangci-lint's `misspell` plugin only operates on `.go` files —
+  prose drift in `.md` docs (the larger surface area for v0.1.0)
+  slips through. PR #7 surfaced four US-spelled words in CHANGELOG
+  / SECURITY (`defense`, `sanitization`) that the linter never had
+  a chance to flag. Add a `make lint-prose` target (or fold into
+  `make verify`) that runs `misspell -locale=UK` against `**/*.md`
+  with the same identifier ignore-list as the Go side. Could also
+  catch other UK/US drift: `color/colour`, `organize/organise`,
+  `analyze/analyse`, `recognize/recognise`, etc. Tiny target — the
+  misspell binary is already installed via `make tools` once
+  promoted from a transitive golangci-lint dep.
 
 - **Additional benchmark coverage**
   - Small-scale benchmark (2–5 files) to measure goroutine overhead

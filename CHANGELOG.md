@@ -34,9 +34,7 @@ shipped; for the per-PR breakdown see the merged PRs in the
 
 ### Added
 
-- **Lint checks** (`tfdry [dir]`):
-  - `E000` — tool/infrastructure failure (unreadable directory,
-    oversize file, write failure during `--fix`). Routes to exit 2.
+- **Lint checks** (`tfdry [dir]`, all toggleable via `--checks=`):
   - `E001` — invalid HCL syntax.
   - `E002` — duplicate local definition.
   - `E003` — reference to an undefined local.
@@ -49,6 +47,10 @@ shipped; for the per-PR breakdown see the merged PRs in the
   - `E007` — unknown input key for a relative-path module.
   - `E008` — file is not formatted (matches `terraform fmt` parity).
   - `W001` — local declared but never referenced.
+- **Tool-error code** — `E000` is emitted by tfdry itself when it
+  cannot operate on the input (unreadable directory, oversize file
+  >10 MiB, write failure during `--fix`). Always enabled (not
+  toggleable via `--checks=`) and routes to exit `2`.
 - **`fmt` subcommand** (`tfdry fmt [path]`): drop-in replacement for
   `terraform fmt`. Supports directory and single-file modes,
   `-recursive`, and `-check` (exit 3 on dirt, no rewrite).
@@ -69,9 +71,9 @@ shipped; for the per-PR breakdown see the merged PRs in the
   `signal.NotifyContext` so SIGINT / SIGTERM cleanly stops the
   current pass at the next file boundary.
 - **Atomic `--fix` rewrites**: uses `CreateTemp` + `Rename` with
-  symlink-rejection and TOCTOU defense-in-depth, so a power loss or
+  symlink-rejection and TOCTOU defence-in-depth, so a power loss or
   SIGKILL mid-write never leaves a half-written file on disk.
-- **Trojan Source / terminal-injection sanitization**: filenames and
+- **Trojan Source / terminal-injection sanitisation**: filenames and
   HCL diagnostic text are stripped of ANSI escapes,
   Bidi-override / isolate-control characters (Unicode Cf category),
   and embedded newlines / tabs before reaching stdout, stderr, or

@@ -149,7 +149,6 @@ linters:
         - sanitizing
         - behavior    # used in some legacy test names; OK in both spellings
         - initialize  # Go-stdlib-adjacent term; OK in both spellings
-        - defense     # in defense-in-depth comments; common Go usage
         - categorizes
         - unrecognized
         - artifact    # standard CI/release term; not an arte-/arti- bikeshed

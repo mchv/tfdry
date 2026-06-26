@@ -26,10 +26,13 @@ pre-commit hooks, CI pipelines, and editor integrations.
 
 - **Fast.** Pure static analysis: ~10× quicker than `terraform validate`
   on a typical module because there's no provider download or state lookup.
-- **Focused.** Nine deterministic checks (E001–E008 + W001) — HCL
+- **Focused.** Nine deterministic lint checks (E001–E008 + W001) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
-  and `terraform fmt`-parity formatting. No opinionated style nags.
+  and `terraform fmt`-parity formatting. Plus the special `E000`
+  tool-error code for unreadable files, oversize input, and write
+  failures (routed to exit `2`, not `--checks=`-toggleable). No
+  opinionated style nags.
 - **Agent-friendly.** Ships with a [`SKILL.md`](SKILL.md) describing the
   CLI surface, exit-code contract, and JSON schema in the convention AI
   coding agents expect. `--json` output is the stable machine-consumption
@@ -89,9 +92,14 @@ Same input with `--json`:
 
 ## Checks
 
+### Lint checks
+
+These nine codes lint Terraform code itself. All are toggleable via
+`--checks=` and route to exit `1` on violation (warnings don't affect
+exit code).
+
 | Code  | Severity | Description |
 |-------|----------|-------------|
-| E000  | error    | Tool/infrastructure failure: unreadable directory, oversize file (>10 MiB), write failure during `--fix`. Routes to exit 2. |
 | E001  | error    | Invalid HCL syntax. |
 | E002  | error    | Duplicate `locals` definition within the same directory. |
 | E003  | error    | Reference to an undefined local. |
@@ -101,6 +109,17 @@ Same input with `--json`:
 | E007  | error    | Unknown input key for a relative-path module. |
 | E008  | error    | File is not formatted (`terraform fmt` parity, auto-fixable with `--fix`). |
 | W001  | warning  | Local defined but never referenced. |
+
+### Tool-error code
+
+`E000` is emitted by tfdry itself when it can't operate on input — not
+by a lint check. It's **always enabled** (cannot be disabled via
+`--checks=`) and routes to exit `2`, distinct from lint-violation
+exit `1`.
+
+| Code  | Severity | Description |
+|-------|----------|-------------|
+| E000  | error    | Tool/infrastructure failure: unreadable directory, oversize file (>10 MiB), write failure during `--fix`. |
 
 **Scope limits:**
 

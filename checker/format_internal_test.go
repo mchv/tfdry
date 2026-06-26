@@ -76,7 +76,7 @@ func TestWriteFormatted_SuccessPath_NoLeftoverTemp(t *testing.T) {
 
 // writeFormatted must Lstat the target path immediately before
 // os.Rename, not only at the start of the function. Without this
-// defense-in-depth check, a TOCTOU race where an attacker swaps the
+// defence-in-depth check, a TOCTOU race where an attacker swaps the
 // path to a symlink between the initial check and the final rename
 // would have Rename silently destroy the symlink and create a regular
 // file in its place. Adding a final Lstat catches that race and fails
@@ -125,7 +125,7 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 		t.Fatalf("ok=true with err=%v — should be (false, err)", err)
 	}
 
-	// Strong invariants of the defense:
+	// Strong invariants of the defence:
 	//   1. The eventual target of the (now-)symlink must NOT have been
 	//      overwritten with the formatted content. Rename replacing the
 	//      symlink would have left `target` as a regular file (different

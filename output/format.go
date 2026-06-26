@@ -50,7 +50,7 @@ type Summary struct {
 // commonly pipe values to a terminal (e.g. `jq`, CI dashboards), so the
 // JSON path needs the same protection as the human path. Sanitizing once
 // at the constructor keeps both writers consistent and lets the human
-// writer skip per-field re-sanitization.
+// writer skip per-field re-sanitisation.
 //
 // Report.Directory is also sanitized — the caller-supplied path can
 // contain control / ANSI / Bidi-override characters on Unix and would

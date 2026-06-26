@@ -85,11 +85,11 @@ demonstrate that one of these is bypassed:
   `tfdry fmt` reject symlinked input paths before opening them
   (atomic via `O_NOFOLLOW` on Unix, `Lstat`-then-check on Windows
   where `O_NOFOLLOW` isn't available).
-- **TOCTOU defense-in-depth** on the atomic `--fix` rewrite path: a
+- **TOCTOU defence-in-depth** on the atomic `--fix` rewrite path: a
   final `Lstat` immediately before `Rename` fails the operation if
   the target was swapped to a symlink between the initial check and
   the rename.
-- **Trojan Source / terminal-injection** sanitization: filenames and
+- **Trojan Source / terminal-injection** sanitisation: filenames and
   HCL diagnostic text are stripped of ANSI escapes, Bidi-override /
   isolate-control characters (Unicode Cf category), and embedded
   newlines / tabs before reaching stdout, stderr, or the JSON
