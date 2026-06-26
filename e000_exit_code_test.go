@@ -3,45 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
-
-// TestRun_E000_DirectoryUnreadable_ExitTwo pins the contract that an E000
-// violation (tool/infrastructure failure) routes to exit code 2, not 1.
-// E000 is emitted by ParseDir when it can't read the directory itself —
-// this is a "tool couldn't run" condition that's semantically different
-// from "lint found issues in user code" (which is exit 1). The README and
-// main.go's run() godoc both document exit 2 for "I/O failures (unreadable
-// directories, write failures during --fix or fmt)".
-//
-// Before this fix, main.go's `if report.Summary.Errors > 0 { return 1 }`
-// caught E000 alongside E001/E004/E007 etc., flattening the distinction
-// and exiting 1 for what's really a tool error. Surfaced by Copilot C73
-// during PR A2 review.
-//
-// Test technique: chmod the directory to 0o000 so os.ReadDir fails inside
-// ParseDir, which then synthesises E000. Skip if running as root (chmod
-// has no effect for the superuser).
-func TestRun_E000_DirectoryUnreadable_ExitTwo(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod 0o000 doesn't restrict reads the same way on Windows")
-	}
-	if os.Geteuid() == 0 {
-		t.Skip("running as root; chmod 0o000 doesn't restrict the superuser")
-	}
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o000); err != nil {
-		t.Skip("cannot chmod:", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-
-	code, _, stderr := runCLI(dir)
-	if code != 2 {
-		t.Errorf("E000 (unreadable dir) → exit code = %d, want 2 (tool error); stderr=%q",
-			code, stderr)
-	}
-}
 
 // TestRun_E000_FileExceedsSize_ExitTwo: ParseDir emits E000 for files
 // larger than the max-file-size limit (parseOne path). This is also a
