@@ -105,11 +105,17 @@ func handleFatalErr(err error, stderr io.Writer, prefix string) (int, bool) {
 // run executes the CLI with the given args, writing user output to stdout and
 // errors/diagnostics to stderr. Returns the exit code:
 //   - 0 = clean (no violations found, or all fixed)
-//   - 1 = one or more violations found by the lint pass
+//   - 1 = one or more lint violations found by the lint pass
+//     (E001-E008, excluding E000 — see exit 2)
 //   - 2 = tool error — covers usage mistakes (unknown flags, misplaced
-//     subcommand args), I/O failures (unreadable directories, write
-//     failures during --fix or fmt), stdout broken-pipe / short-write
-//     failures, and parse errors in fmt subcommand
+//     subcommand args), I/O failures (unreadable directories, oversize
+//     files, write failures during --fix or fmt), stdout broken-pipe /
+//     short-write failures, parse errors in fmt subcommand, AND any
+//     E000 violation emitted by the checker package (E000 represents a
+//     tool-side "couldn't process this input" condition, semantically
+//     distinct from "lint found issues in user code"). Exit 2 takes
+//     precedence over exit 1 when both are present — a tool failure
+//     means some files weren't actually checked.
 //   - 3 = `fmt -check` found unformatted files
 //   - 130 = interrupted execution. Set whenever a checker call returns
 //     context.Canceled or context.DeadlineExceeded — i.e. SIGINT or
@@ -297,6 +303,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// Exit-code routing for violation-bearing runs:
+	//
+	//   - ToolErrors > 0  → exit 2 (E000: unreadable dir, oversize file,
+	//                       write failure). The tool itself couldn't run
+	//                       cleanly on the input — that's semantically
+	//                       different from "lint found issues in user
+	//                       code", and the CLI contract in README /
+	//                       SKILL.md documents exit 2 for this class.
+	//                       Takes precedence over Errors > 0 because a
+	//                       tool failure means some files weren't
+	//                       actually checked; the user needs to see the
+	//                       loud signal rather than the routine exit-1.
+	//   - Errors > 0      → exit 1 (lint found issues in user code).
+	//   - else            → exit 0.
+	//
+	// Note: Summary.Errors counts ALL error-severity violations including
+	// E000, so the human-output "X error(s) found" line and JSON
+	// `summary.errors` stay backwards-compatible. ToolErrors is the
+	// E000-only sub-count we route on.
+	if report.Summary.ToolErrors > 0 {
+		return 2
+	}
 	if report.Summary.Errors > 0 {
 		return 1
 	}

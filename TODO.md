@@ -21,27 +21,23 @@ This file tracks two things:
       the canonical Go shape. Added cancellation checkpoints in hot
       loops and wired `signal.NotifyContext` in `main`. Test-first;
       covers SIGINT graceful shutdown. (#3 — 7 review rounds.)
-- [ ] **PR A2 follow-up — E000 exit-code routing.** The README and
-      `SKILL.md` contract documents exit 2 for tool/infrastructure
-      failures (E000: unreadable directories, write failures, malformed
-      input not produced by checks), but `main.go` currently maps any
-      `Severity=="error"` violation — including E000 — to exit 1. Surfaced
-      as Copilot C73 during PR A2 review and deferred to keep PR A2
-      scoped to the context.Context sweep. Should land before v0.1.0.
-      Test plan: a regression test for each E000 site
-      (`E000` synthesis points in `checker/hcl.go`, `checker/format.go`,
-      `checker/modules.go`) verifying exit 2; update `main.go` to route
-      E000 to exit 2 and the rest of severity=error to exit 1; refresh
-      README/`SKILL.md` to point at the new behaviour as the canonical
-      contract.
+- [x] **PR A2 follow-up — E000 exit-code routing.** Routes E000 violations
+      (tool/infrastructure failures: unreadable directories, oversize
+      files, write failures during `--fix`) to exit code 2 instead of
+      exit 1, matching the documented contract in README and `SKILL.md`.
+      Added `Summary.ToolErrors` sub-count; exit 2 takes precedence over
+      exit 1 when both are present. Refreshed README, `SKILL.md`, and
+      `main.go` godoc to spell out the new routing. (#6.)
 - [x] **PR A3 — Lint hardening.** Adopted `gofumpt` and `golangci-lint`
       with 11 linters (`staticcheck`, `errcheck`, `gosec`, `revive`,
       `gocritic`, `unconvert`, `unused`, `ineffassign`, `misspell`,
       `noctx`, `unparam`); added `govulncheck` and `make verify`
       target. Fixed all 25 surfaced findings. (#4 — 1 review round.)
-- [ ] **PR A4 — Review-marker cleanup.** Scrub `C##` / `G##`
-      review-finding prefixes from inline comments while preserving the
-      reasoning. ~133 hits across 11 files. *(In review.)*
+- [x] **PR A4 — Review-marker cleanup.** Scrubbed ~140 `C##` / `G##`
+      review-finding markers from inline code comments and t.Errorf
+      assertion strings across 17 files. Comment reasoning preserved;
+      cross-references rewritten to name the property rather than the
+      historical finding. (#5 — 1 review round.)
 - [ ] **PR A5 — Public-adoption documentation.** `LICENSE`
       (Apache-2.0), `CONTRIBUTING.md`, `SECURITY.md`,
       `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, README overhaul, SPDX
@@ -84,6 +80,23 @@ it up or wants to discuss it.
     vs. sequential
   - Violation-heavy benchmark to stress the `append` path in `Run`
   - Isolated `walkExpressions` benchmark
+
+- **Move chmod-based E000 tests behind `//go:build unix`.**
+  `checker/checks_test.go` has `TestE000_AlwaysEmitted_WhenDirUnreadable`
+  and `TestParseDir_UnreadableFile_EmitsE000` that drive `ParseDir` into
+  the E000 path via `os.Chmod(dir, 0o000)`. Both currently rely on
+  `if err := os.Chmod(...); err != nil { t.Skip(...) }` for platform
+  divergence, but Windows `os.Chmod` doesn't actually return an error
+  on `0o000` — it just doesn't enforce read permissions the same way
+  POSIX does. The tests would silently produce a false negative on
+  Windows (skip-but-look-clean rather than skip-with-reason). The PR A2
+  follow-up (#6) already factored the same pattern into
+  `e000_exit_code_unix_test.go` with a `//go:build unix` constraint
+  and a comment explaining the rationale (Plan 9 / js/wasm also lack
+  the POSIX permission model and `os.Geteuid()`). These two siblings
+  in `checker/checks_test.go` should get the same treatment — split
+  into a `checks_unix_test.go` companion file (or comparable name)
+  with the build constraint at the top. Small, mechanical, ~30 LOC.
 
 ### Performance
 

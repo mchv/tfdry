@@ -83,11 +83,12 @@ tfdry describe --json
 | Code | Meaning |
 |------|---------|
 | 0    | No violations |
-| 1    | One or more errors found |
-| 2    | Tool error (bad args, unreadable files) |
+| 1    | One or more lint violations found (E001-E008, excluding E000) |
+| 2    | Tool error: bad arguments, unreadable directory, oversize file, write failure during `--fix` (E000 violations route here) |
 | 3    | `tfdry fmt -check` found unformatted files |
+| 130  | Interrupted by SIGINT / SIGTERM, or a context deadline expired |
 
-Warnings (W001) do not affect the exit code.
+Warnings (W001) do not affect the exit code. When both E000 (tool error) and other error-severity violations are present, exit 2 takes precedence — the tool couldn't run cleanly on all input, so the user needs the loud signal rather than the routine "lint found issues" code.
 
 ## JSON output
 
@@ -104,7 +105,7 @@ Warnings (W001) do not affect the exit code.
       "message": "local.tags is object, used where string expected in interpolation"
     }
   ],
-  "summary": { "errors": 1, "warnings": 0 }
+  "summary": { "errors": 1, "warnings": 0, "tool_errors": 0 }
 }
 ```
 

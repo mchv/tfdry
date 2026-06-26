@@ -118,14 +118,35 @@ func TestNewReport_SummaryCounting(t *testing.T) {
 	vs := []checker.Violation{
 		{Code: "E001", Severity: "error"},
 		{Code: "E002", Severity: "error"},
+		{Code: "E000", Severity: "error"}, // ToolError sub-count
 		{Code: "W001", Severity: "warning"},
+		// Unknown/empty/arbitrary severities must NOT be silently
+		// dropped — they should count as errors so a downstream CI
+		// pipeline fails loudly rather than passing silently when a
+		// checker bug emits a malformed severity or a future tfdry
+		// version adds a severity that this output package hasn't
+		// learned about yet.
+		{Code: "X999", Severity: "info"},
+		{Code: "X998", Severity: ""},
+		{Code: "X997", Severity: "anything"},
 	}
 	r := output.NewReport("/dir", vs)
-	if r.Summary.Errors != 2 {
-		t.Fatalf("expected 2 errors, got %d", r.Summary.Errors)
+
+	// Errors counts ALL error-severity violations including E000
+	// (back-compat for human-output "X error(s) found" and the JSON
+	// summary.errors field) PLUS any unknown-severity violations
+	// (fail-loud defensive coding).
+	if r.Summary.Errors != 6 {
+		t.Errorf("expected 6 errors (E001, E002, E000 + 3 unknown-severity), got %d", r.Summary.Errors)
+	}
+	// ToolErrors is the E000-only sub-count main.go routes on for exit code 2.
+	// Unknown-severity violations contribute to Errors but NOT to
+	// ToolErrors — they're "lint failed" semantics, not "tool failed".
+	if r.Summary.ToolErrors != 1 {
+		t.Errorf("expected 1 tool error (E000), got %d", r.Summary.ToolErrors)
 	}
 	if r.Summary.Warnings != 1 {
-		t.Fatalf("expected 1 warning, got %d", r.Summary.Warnings)
+		t.Errorf("expected 1 warning (W001), got %d", r.Summary.Warnings)
 	}
 }
 
