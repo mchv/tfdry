@@ -21,10 +21,10 @@ import (
 // The wrap cases verify errors.Is() unwrapping is preserved so wrapped
 // cancellations still produce exit 130 rather than falling through.
 //
-// This test exists because two earlier silent-failure bugs (G46/G47,
-// G49-G52) were caused by code that ignored the bool — either using
-// `code, _ := handleCtxErr(...)` and returning code unconditionally, or
-// using `if code, ok := handleCtxErr(...); ok { return code }` without
+// This test exists because two earlier silent-failure bugs in PR A2's
+// review history were caused by code that ignored the bool — either
+// using `code, _ := handleCtxErr(...)` and returning code unconditionally,
+// or using `if code, ok := handleCtxErr(...); ok { return code }` without
 // a fall-through for the generic-error case. Pinning the (0, false)
 // return for generic errors makes the cancel-only semantics explicit
 // and gives callers a deterministic contract to write against.

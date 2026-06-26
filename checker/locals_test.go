@@ -18,7 +18,7 @@ func TestInferFuncReturnType(t *testing.T) {
 		{"trimspace", TypeString},
 		{"replace", TypeString},
 		{"substr", TypeString},
-		// G25: more well-known string-returning functions.
+		// More well-known string-returning functions.
 		{"file", TypeString},
 		{"templatefile", TypeString},
 		{"jsonencode", TypeString},
@@ -42,7 +42,7 @@ func TestInferFuncReturnType(t *testing.T) {
 		{"tomap", TypeObject},
 		{"merge", TypeObject},
 		{"zipmap", TypeObject},
-		// G25: keys/values return lists → TypeObject in our minimal type system.
+		// keys/values return lists → TypeObject in our minimal type system.
 		{"keys", TypeObject},
 		{"values", TypeObject},
 		// Default → Unknown

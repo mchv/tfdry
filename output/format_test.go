@@ -31,7 +31,7 @@ func TestNewReport_NilViolations_EmptyJSONArray(t *testing.T) {
 	}
 }
 
-// C21: violations carrying terminal-injection or Trojan Source payloads
+// Violations carrying terminal-injection or Trojan Source payloads
 // in their File/Message fields must not leak into JSON output. JSON
 // consumers commonly print decoded values to a terminal (e.g. `jq`,
 // pretty-printers in CI dashboards), so unsanitized Bidi/control chars
@@ -71,13 +71,13 @@ func TestWriteJSON_StripsTerminalInjection(t *testing.T) {
 	}
 }
 
-// C38: Report.Directory is taken directly from the caller-supplied path
+// Report.Directory is taken directly from the caller-supplied path
 // and was not sanitized — unlike Violation.File / Violation.Message which
-// NewReport already cleans (C21). On Unix, directory paths can contain
+// NewReport already cleans. On Unix, directory paths can contain
 // ANSI escapes / Bidi-override / control characters, which then leak
 // straight into the JSON output's "directory" field. Same terminal- and
-// line-injection threat as C30 (newline injection) and C36 (fmt output);
-// closing the remaining hole in C21's coverage.
+// line-injection threat as the newline-injection case and the fmt-output
+// case; closing the remaining hole in NewReport's sanitization coverage.
 func TestNewReport_SanitizesDirectoryField(t *testing.T) {
 	t.Parallel()
 	const rlo = "\u202E"
@@ -169,7 +169,7 @@ func TestSanitize_ANSIEscapeStripped(t *testing.T) {
 	}
 }
 
-// C30: filenames on Unix can contain `\n` and `\t`. An attacker who
+// Filenames on Unix can contain `\n` and `\t`. An attacker who
 // controls a .tf file name (or a local name embedded in an error
 // message) could inject newlines that forge fake violation lines in
 // human output, or inject \n/\t into JSON-decoded fields that
@@ -340,7 +340,7 @@ func TestSanitize_TerminalInjection(t *testing.T) {
 			mustNot:  []string{"\x1b", "url", "8;;"},
 			mustHave: []string{"pre ", "after end"},
 		},
-		// ── G13 (Trojan Source / CVE-2021-42574 family) ──────────────────────
+		// ── Trojan Source / CVE-2021-42574 family ──────────────────────────
 		// Bidi override and isolate-control characters belong to Unicode's Cf
 		// (format) category, which unicode.IsControl does NOT cover. Without
 		// explicit stripping, an attacker could craft a filename or local name

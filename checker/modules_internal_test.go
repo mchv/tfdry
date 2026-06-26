@@ -7,7 +7,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-// G26: cty.NullVal(cty.String).Type().FriendlyName() returns "string" but
+// cty.NullVal(cty.String).Type().FriendlyName() returns "string" but
 // .AsString() panics on null values. The two string-extraction helpers
 // in this package — objectKeyName and stringLiteralValue (TemplateExpr
 // and LiteralValueExpr branches) — gate their AsString calls on
@@ -67,7 +67,7 @@ func TestStringLiteralValue_NullStringInTemplateDoesNotPanic(t *testing.T) {
 	}
 }
 
-// G28: parseModuleVarSchemas writes to its `cache` argument
+// parseModuleVarSchemas writes to its `cache` argument
 // (`cache[moduleDir] = nil` on early-out paths, `cache[moduleDir] = schemas`
 // on success). If the caller passes a nil map — which is the natural way
 // to bypass caching from a test or a one-shot caller — those writes panic.

@@ -7,20 +7,22 @@ import (
 	"testing"
 )
 
-// TestRunFmt_PreCancel_BailsBeforeIO pins the G61 contract: runFmt must
-// check ctx.Err() at its very first instruction, before any filesystem
-// I/O. Without this guard, a pre-cancelled context still pays for
-// os.Lstat (or os.Stat) on the supplied path plus a potentially deep
-// collectFmtDirs walk in -recursive mode, even though the result is
-// going to be discarded immediately.
+// TestRunFmt_PreCancel_BailsBeforeIO pins the contract that runFmt
+// must check ctx.Err() at its very first instruction, before any
+// filesystem I/O. Without this guard, a pre-cancelled context still
+// pays for os.Lstat (or os.Stat) on the supplied path plus a
+// potentially deep collectFmtDirs walk in -recursive mode, even
+// though the result is going to be discarded immediately.
 //
 // The test deliberately uses a path that doesn't exist on disk. Two
 // possible outcomes:
 //
-//   - Before G61: runFmt calls os.Lstat first, gets ENOENT, prints
-//     "tfdry fmt: <path>: ..." to stderr, returns exit code 2.
-//   - After G61: handleFatalErr(ctx.Err(), ...) fires at the top of
-//     runFmt, prints "tfdry: interrupted", returns exit code 130
+//   - Without the entry-level check: runFmt calls os.Lstat first,
+//     gets ENOENT, prints "tfdry fmt: <path>: ..." to stderr, returns
+//     exit code 2.
+//   - With the entry-level check: handleFatalErr(ctx.Err(), ...) fires
+//     at the top of runFmt, prints "tfdry: interrupted", returns exit
+//     code 130
 //     without ever touching the filesystem.
 //
 // The exit-code assertion is the discriminator: 130 means the ctx check
@@ -55,9 +57,9 @@ func TestRunFmt_PreCancel_BailsBeforeIO(t *testing.T) {
 
 // TestRunFmtFile_PreCancel_BailsBeforeIO is the file-mode counterpart
 // of TestRunFmt_PreCancel_BailsBeforeIO. runFmtFile's entry check was
-// added in PR A2 round 1 (G47) so this test passes today, but it
-// guards against regression — moving the check below any I/O call
-// would reintroduce the wasted-work bug.
+// added in PR A2 round 1 so this test passes today, but it guards
+// against regression — moving the check below any I/O call would
+// reintroduce the wasted-work bug.
 func TestRunFmtFile_PreCancel_BailsBeforeIO(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
