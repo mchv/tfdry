@@ -27,7 +27,7 @@ This file tracks two things:
       exit 1, matching the documented contract in README and `SKILL.md`.
       Added `Summary.ToolErrors` sub-count; exit 2 takes precedence over
       exit 1 when both are present. Refreshed README, `SKILL.md`, and
-      `main.go` godoc to spell out the new routing. *(In review.)*
+      `main.go` godoc to spell out the new routing. (#6.)
 - [x] **PR A3 — Lint hardening.** Adopted `gofumpt` and `golangci-lint`
       with 11 linters (`staticcheck`, `errcheck`, `gosec`, `revive`,
       `gocritic`, `unconvert`, `unused`, `ineffassign`, `misspell`,

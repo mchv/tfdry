@@ -7,17 +7,17 @@ import (
 	"testing"
 )
 
-// TestRun_E000_FileExceedsSize_ExitTwo: ParseDir emits E000 for files
-// larger than the max-file-size limit (parseOne path). This is also a
-// tool-side concern — the file exists but tfdry can't process it safely
-// — so it routes to exit 2.
-func TestRun_E000_FileExceedsSize_ExitTwo(t *testing.T) {
-	dir := t.TempDir()
-	// Sparse file: 10 MB + 1 byte (the production threshold in
-	// checker/hcl.go is 10 MB, strict >). Truncate is O(1) — we
-	// only care about the file size for the limit check, not the
-	// content. Same technique as TestParseDir_FileTooLarge_EmitsE000.
-	path := filepath.Join(dir, "huge.tf")
+// createOversizedFile creates a sparse file at dir/name that's 10 MB + 1
+// byte — one byte over the production threshold in checker/hcl.go. Used
+// across the three tests below that need to drive ParseDir into the
+// "file too large" E000 path. Truncate is O(1) (sparse file allocation)
+// so the helper is cheap to call in multiple tests, and the content is
+// irrelevant — the size check fires before any byte is read.
+//
+// t.Fatal on any error: the test wouldn't make sense without the file.
+func createOversizedFile(t *testing.T, dir, name string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +29,15 @@ func TestRun_E000_FileExceedsSize_ExitTwo(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestRun_E000_FileExceedsSize_ExitTwo: ParseDir emits E000 for files
+// larger than the max-file-size limit (parseOne path). This is also a
+// tool-side concern — the file exists but tfdry can't process it safely
+// — so it routes to exit 2.
+func TestRun_E000_FileExceedsSize_ExitTwo(t *testing.T) {
+	dir := t.TempDir()
+	createOversizedFile(t, dir, "huge.tf")
 
 	code, _, stderr := runCLI(dir)
 	if code != 2 {
@@ -50,17 +59,7 @@ func TestRun_E000_PrecedesOtherErrors_ExitTwo(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One file too large to parse — generates E000.
-	huge, err := os.Create(filepath.Join(dir, "huge.tf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := huge.Truncate(10*1024*1024 + 1); err != nil {
-		_ = huge.Close()
-		t.Fatal(err)
-	}
-	if err := huge.Close(); err != nil {
-		t.Fatal(err)
-	}
+	createOversizedFile(t, dir, "huge.tf")
 
 	code, _, stderr := runCLI(dir)
 	if code != 2 {
@@ -104,18 +103,7 @@ func TestRun_NoE000_OnlyLintErrors_ExitOne(t *testing.T) {
 //   - exit code 2              (E000 routes to the tool-error exit)
 func TestRun_E000_JSONOutput_IncludesToolErrors(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "huge.tf")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Truncate(10*1024*1024 + 1); err != nil {
-		_ = f.Close()
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
+	createOversizedFile(t, dir, "huge.tf")
 
 	code, stdout, stderr := runCLI("--json", dir)
 	if code != 2 {

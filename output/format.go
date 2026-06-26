@@ -72,8 +72,14 @@ func NewReport(dir string, violations []checker.Violation) Report {
 			if v.Code == "E000" {
 				s.ToolErrors++
 			}
-		default:
+		case "warning":
 			s.Warnings++
+			// Any other severity (empty, unknown future variants like
+			// "info" or "fatal") is intentionally dropped from the summary
+			// counts: an unrecognised severity is a checker bug, and we
+			// don't want to mislead consumers reading summary.warnings.
+			// Defensive coding caught by Gemini G68 — the previous default
+			// arm swept everything into Warnings.
 		}
 	}
 	return Report{TfdryVersion: Version, Directory: sanitize(dir), Violations: clean, Summary: s}

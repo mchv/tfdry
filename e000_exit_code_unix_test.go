@@ -2,13 +2,15 @@
 // fail with EACCES so it synthesises an E000 violation. Windows file
 // permissions don't model POSIX read bits the same way (a 0o000 chmod
 // is effectively a no-op for the user-side ACL evaluation), so the
-// chmod can't drive ParseDir into the E000 path on Windows. Rather
-// than handle that via a runtime.GOOS skip, the file is excluded from
-// Windows compilation entirely — the intent is visible from the
-// filename and the unused `runtime` import drops out of the sibling
-// e000_exit_code_test.go.
+// chmod can't drive ParseDir into the E000 path on Windows. The same
+// constraint applies to other non-Unix targets (Plan 9, JS/wasm),
+// which also lack the POSIX permission model and where os.Geteuid()
+// isn't defined. Use `unix` (not `!windows`) so the file is excluded
+// from compilation on every non-Unix target rather than just Windows
+// — matches the pattern established in sigint_test.go and
+// checker/nofollow_unix.go.
 
-//go:build !windows
+//go:build unix
 
 package main
 

@@ -118,14 +118,36 @@ func TestNewReport_SummaryCounting(t *testing.T) {
 	vs := []checker.Violation{
 		{Code: "E001", Severity: "error"},
 		{Code: "E002", Severity: "error"},
+		{Code: "E000", Severity: "error"}, // ToolError sub-count
 		{Code: "W001", Severity: "warning"},
+		{Code: "X999", Severity: "info"},     // unknown severity — must be silently dropped
+		{Code: "X998", Severity: ""},         // empty severity — must be silently dropped
+		{Code: "X997", Severity: "anything"}, // arbitrary unrecognised severity
 	}
 	r := output.NewReport("/dir", vs)
-	if r.Summary.Errors != 2 {
-		t.Fatalf("expected 2 errors, got %d", r.Summary.Errors)
+
+	// Errors counts ALL error-severity violations including E000 — back-compat
+	// for the human-output "X error(s) found" line and the JSON
+	// summary.errors field.
+	if r.Summary.Errors != 3 {
+		t.Errorf("expected 3 errors (E001, E002, E000), got %d", r.Summary.Errors)
+	}
+	// ToolErrors is the E000-only sub-count main.go routes on for exit code 2.
+	if r.Summary.ToolErrors != 1 {
+		t.Errorf("expected 1 tool error (E000), got %d", r.Summary.ToolErrors)
 	}
 	if r.Summary.Warnings != 1 {
-		t.Fatalf("expected 1 warning, got %d", r.Summary.Warnings)
+		t.Errorf("expected 1 warning (W001), got %d", r.Summary.Warnings)
+	}
+	// Unknown / empty / arbitrary severities must NOT be counted as warnings.
+	// The previous implementation used a `default` arm that swept everything
+	// into Warnings; defensive coding prefers explicit `case "warning":` so a
+	// future bug producing severity="info" or "" doesn't silently inflate the
+	// warning count or mislead consumers reading `summary.warnings`.
+	totalCounted := r.Summary.Errors + r.Summary.Warnings
+	if totalCounted != 4 {
+		t.Errorf("expected exactly 4 counted (3 errors + 1 warning); got Errors=%d + Warnings=%d = %d (the 3 unknown-severity entries should NOT have been counted as warnings)",
+			r.Summary.Errors, r.Summary.Warnings, totalCounted)
 	}
 }
 
