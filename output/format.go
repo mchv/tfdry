@@ -24,9 +24,18 @@ type Report struct {
 }
 
 // Summary holds the count of errors and warnings in a Report.
+//
+// ToolErrors is a sub-count of Errors that only includes E000 violations
+// (tool/infrastructure failures: unreadable directories, files exceeding
+// the size limit, write failures during --fix). The split lets main.go
+// route those to exit code 2 (tool error) rather than exit code 1 (lint
+// found issues). Errors still counts ALL error-severity violations
+// including E000, so existing human-output "X error(s) found" and JSON
+// `summary.errors` consumers stay backwards-compatible.
 type Summary struct {
-	Errors   int `json:"errors"`
-	Warnings int `json:"warnings"`
+	Errors     int `json:"errors"`
+	Warnings   int `json:"warnings"`
+	ToolErrors int `json:"tool_errors"`
 }
 
 // NewReport builds a Report from a directory path and a list of violations.
@@ -57,9 +66,13 @@ func NewReport(dir string, violations []checker.Violation) Report {
 	}
 	s := Summary{}
 	for _, v := range clean {
-		if v.Severity == "error" {
+		switch v.Severity {
+		case "error":
 			s.Errors++
-		} else {
+			if v.Code == "E000" {
+				s.ToolErrors++
+			}
+		default:
 			s.Warnings++
 		}
 	}

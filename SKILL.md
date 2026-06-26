@@ -14,13 +14,14 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
   - `tfdry fmt [path]` — rewrites unformatted files in place (default), unless `-check` is passed (read-only, exit 3 on dirt).
 - **Exit codes are strict:**
   - `0` — no violations found (or all violations were fixed by `--fix`)
-  - `1` — one or more violations found
-  - `2` — tool error (bad arguments, unreadable directory, etc.)
+  - `1` — one or more lint violations found (E001-E008, excluding E000)
+  - `2` — tool error (bad arguments, unreadable directory, oversize file, write failure during `--fix`); E000 violations route here. Takes precedence over exit 1 when both are present.
   - `3` — `tfdry fmt -check` found unformatted files
+  - `130` — interrupted by SIGINT / SIGTERM, or a context deadline expired
 - **Always use `--json` for machine consumption.** Human output format is not stable.
 - **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`.
 - **`--checks` filters are additive.** Passing `--checks=E003,E004` runs only those two checks.
-- **Warnings (W001) do not affect exit code.** Only errors (E0xx) cause exit 1.
+- **Warnings (W001) do not affect exit code.** Only errors (E001-E008) cause exit 1; E000 maps to exit 2 (tool error).
 
 ## Checks
 
