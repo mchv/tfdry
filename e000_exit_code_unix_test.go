@@ -29,8 +29,7 @@ import (
 //
 // Before this fix, main.go's `if report.Summary.Errors > 0 { return 1 }`
 // caught E000 alongside E001/E004/E007 etc., flattening the distinction
-// and exiting 1 for what's really a tool error. Surfaced by Copilot C73
-// during PR A2 review.
+// and exiting 1 for what's really a tool error.
 //
 // Test technique: chmod the directory to 0o000 so os.ReadDir fails inside
 // ParseDir, which then synthesises E000. Skip if running as root (chmod

@@ -78,8 +78,8 @@ func NewReport(dir string, violations []checker.Violation) Report {
 			// "info" or "fatal") is intentionally dropped from the summary
 			// counts: an unrecognised severity is a checker bug, and we
 			// don't want to mislead consumers reading summary.warnings.
-			// Defensive coding caught by Gemini G68 — the previous default
-			// arm swept everything into Warnings.
+			// Earlier code had a `default` arm that swept everything into
+			// Warnings; explicit matching is the safer shape.
 		}
 	}
 	return Report{TfdryVersion: Version, Directory: sanitize(dir), Violations: clean, Summary: s}

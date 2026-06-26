@@ -9,7 +9,7 @@ GOFUMPT_VERSION       := latest
 GOLANGCI_LINT_VERSION := latest
 GOVULNCHECK_VERSION   := latest
 
-.PHONY: help build test verify tools fmt fmt-check lint vet vuln cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
+.PHONY: help build test verify tools fmt fmt-check lint vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -27,7 +27,7 @@ test: ## Run unit tests across all packages.
 # in PR B1's pipeline. Composed of fine-grained sub-targets so contributors
 # can run pieces in isolation when debugging a specific finding.
 
-verify: fmt-check vet lint test-race vuln cross-build ## Run the full pre-PR verification pipeline.
+verify: fmt-check vet lint check-no-markers test-race vuln cross-build ## Run the full pre-PR verification pipeline.
 
 tools: ## Install the dev tools used by `make verify` (gofumpt, golangci-lint, govulncheck) into GOPATH/bin.
 	go install mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
@@ -74,6 +74,32 @@ vuln: ## Run govulncheck against the project's call graph.
 		exit 1; \
 	}
 	govulncheck ./...
+
+check-no-markers: ## Refuse C##/G## review-finding markers in .go source.
+	@# PR A4 scrubbed every C##/G## review marker from inline comments and
+	@# test assertion strings while preserving the underlying reasoning.
+	@# This guard exists so the markers can't sneak back in via a future
+	@# PR's review-reply notes or copy/paste of a finding name into code.
+	@#
+	@# The scan is intentionally narrow:
+	@#  * Only *.go files (no markdown, so TODO.md's PR-history references
+	@#    and commit-message marker-cites stay legitimate).
+	@#  * gosec rule codes in .golangci.yml (G104/G304/G306/G703) are
+	@#    excluded by the *.go filter — they're real linter codes, not
+	@#    review-finding markers.
+	@#
+	@# When a contributor needs to reference a historical review finding,
+	@# the right place is the commit message body or the PR description,
+	@# not source code. See PR A4 (#5) for the full rationale.
+	@hits=$$(grep -rnE '\b[CG][0-9]{1,3}\b' --include="*.go" . 2>/dev/null); \
+	if [ -n "$$hits" ]; then \
+		echo "Found C##/G## review-finding markers in .go source — these must be scrubbed:"; \
+		echo "$$hits"; \
+		echo ""; \
+		echo "Rewrite the comment to describe the property without naming the marker,"; \
+		echo "or move the historical context into the commit message body."; \
+		exit 1; \
+	fi
 
 # cross-build writes to a per-target file inside an OS-temp dir rather than
 # /dev/null so the rule works on Windows hosts too (where /dev/null doesn't
