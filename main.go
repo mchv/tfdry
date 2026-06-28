@@ -612,11 +612,15 @@ func checksFilterWithout(filter checker.CheckSet, code string) checker.CheckSet 
 // can't compute one (e.g. different drives on Windows).
 //
 // The returned path always uses forward slashes regardless of host OS, so
-// tfdry's stdout / JSON output and our integration tests don't have to
-// pivot on the runtime separator. Windows handles `/` everywhere in
-// modern shells and standard library APIs, so normalising to `/` is a
-// UX win (consistent across platforms) and a testing win (no
-// `filepath.Join` dance in every assertion).
+// the fmt subcommand's stderr/stdout output and our integration tests
+// don't have to pivot on the runtime separator. (JSON output isn't
+// involved here — `Violation.File` is set to bare filenames like
+// "main.tf" elsewhere, so the separator question doesn't arise on
+// that path; `displayFmtPath` is fmt-subcommand-only, see main.go:447
+// and main.go:474.) Windows handles `/` everywhere in modern shells
+// and standard library APIs, so normalising to `/` is a UX win
+// (consistent across platforms) and a testing win (no `filepath.Join`
+// dance in every assertion).
 func displayFmtPath(rootArg, dir, vFile string) string {
 	var abs string
 	switch {

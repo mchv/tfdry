@@ -12,7 +12,13 @@ project_name: tfdry
 
 before:
   hooks:
-    - go mod tidy
+    # Read-only assertions only — the release pipeline must never mutate
+    # the source tree, otherwise the artefacts won't correspond to the
+    # tagged commit. `go mod tidy -diff` (Go 1.23+) prints the diff and
+    # exits non-zero if go.mod/go.sum aren't already canonical, without
+    # rewriting them. `go mod verify` checks module-cache integrity
+    # against go.sum.
+    - go mod tidy -diff
     - go mod verify
 
 builds:
