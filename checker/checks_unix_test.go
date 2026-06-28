@@ -50,6 +50,9 @@ import (
 // does not include E001.
 func TestE000_AlwaysEmitted_WhenDirUnreadable(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; chmod 0o000 doesn't restrict the superuser")
+	}
 	dir := t.TempDir()
 	// Make dir unreadable so ReadDir fails.
 	if err := os.Chmod(dir, 0o000); err != nil {
@@ -67,6 +70,9 @@ func TestE000_AlwaysEmitted_WhenDirUnreadable(t *testing.T) {
 // message (so users can distinguish permission-denied from other failures).
 func TestParseDir_UnreadableFile_EmitsE000(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; chmod 0o000 doesn't restrict the superuser")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "unreadable.tf")
 	if err := os.WriteFile(path, []byte(`locals { x = "y" }`), 0o000); err != nil {
@@ -124,10 +130,17 @@ func TestParseDir_SymlinkSkipped(t *testing.T) {
 // not E008 (file is still unformatted), losing the actionable signal.
 func TestFixFormat_WriteError_ReturnsE000(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; chmod 0o555 doesn't prevent the superuser from writing")
+	}
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "readonly")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "main.tf"), []byte("locals {\na=\"foo\"\n}\n"), 0o644)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte("locals {\na=\"foo\"\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Skip("cannot chmod:", err)
 	}
@@ -148,12 +161,20 @@ func TestFormatFile_PreservesPermissions(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.tf")
-	os.WriteFile(path, []byte("locals {\na=\"foo\"\n}\n"), 0o600)
-	src, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, []byte("locals {\na=\"foo\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := checker.FormatFile(context.Background(), path, src); err != nil {
 		t.Fatal(err)
 	}
-	fi, _ := os.Stat(path)
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("FormatFile changed permissions: got %o, want 0600", fi.Mode().Perm())
 	}
