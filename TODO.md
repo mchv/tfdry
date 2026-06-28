@@ -77,10 +77,11 @@ it up or wants to discuss it.
   when a local references itself transitively
   (e.g. `local.a = local.b; local.b = local.a`, or longer chains).
   The cycle-detection scaffolding already exists in two functions in
-  `checker/modules.go`: `varTypeToSchemaKind` (around `:506`, the
-  schema-resolution side used for module input typing) and
-  `resolveExprTypeRecursive` (around `:583`, the local-expression
-  type-resolution side used by E004). Both keep a `seen` map and
+  `checker/modules.go`: `varTypeToSchemaKind` (at `:487`, with the
+  cycle check at `:506-509`; schema-resolution side used for module
+  input typing) and `resolveExprTypeRecursive` (at `:583`, with the
+  cycle check at `:600-603`; local-expression type-resolution side
+  used by E004). Both keep a `seen` map and
   bail out by returning `SchemaUnknown` / `TypeUnknown` rather than
   producing a violation, which keeps the linter from infinite-looping
   on cyclic local refs but means the user sees no signal at all.
