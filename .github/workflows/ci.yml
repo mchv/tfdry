@@ -61,3 +61,35 @@ jobs:
         # ships GNU find/grep with the runner image.
         shell: bash
         run: make verify
+
+      # Coverage is generated once on the ubuntu runner only — the
+      # coverprofile is platform-agnostic for our code (no //go:build
+      # gates affect the measured statements meaningfully), so running
+      # it on three OSes would just burn macOS / windows minutes for an
+      # identical report. Runs AFTER make verify so a verify failure is
+      # not masked by a coverage upload error.
+      #
+      # `-covermode=atomic` is required when combined with `-race`
+      # (which we don't pass here, but atomic stays correct for any
+      # future race-mode coverage run and is the mode Codecov expects
+      # for accurate hit counts).
+      - name: Generate coverage report
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+
+      # codecov-action v5 supports both token-required (private repo)
+      # and tokenless (public repo) flows. The token stays harmless
+      # once tfdry flips public — it just becomes optional rather than
+      # required.
+      #
+      # `fail_ci_if_error: false` is deliberate: a Codecov outage or
+      # transient upload failure should not fail an otherwise-green PR.
+      # The badge will catch missing data on the dashboard side.
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
