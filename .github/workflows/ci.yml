@@ -83,11 +83,27 @@ jobs:
       # once tfdry flips public — it just becomes optional rather than
       # required.
       #
-      # `fail_ci_if_error: false` is deliberate: a Codecov outage or
-      # transient upload failure should not fail an otherwise-green PR.
-      # The badge will catch missing data on the dashboard side.
+      # Two independent non-blocking guards:
+      #
+      #   1. `fail_ci_if_error: false` (action input) — tells the
+      #      codecov-action's own logic not to exit non-zero when
+      #      the upload itself fails (network error, invalid token,
+      #      Codecov API outage).
+      #   2. `continue-on-error: true` (step-level, GitHub Actions
+      #      native) — tells the runner to mark the job as
+      #      successful even if THIS STEP exits non-zero. Belt-and-
+      #      braces for failure modes the action input doesn't cover
+      #      (e.g. action bootstrap failure, runner can't download
+      #      the action, secret unavailable on fork PRs, future
+      #      changes to the input's semantics).
+      #
+      # Together they make "Codecov outage / misconfig must not fail
+      # an otherwise-green CI run" deterministic regardless of which
+      # layer the failure surfaces at. The step shows ✗ in the UI on
+      # failure but the job stays green — matching the advisory intent.
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out
