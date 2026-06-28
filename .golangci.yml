@@ -149,9 +149,12 @@ linters:
       # ignore-rules below because misspell's ignore-rules are
       # word-level — adding bare "defense" would whitelist the word
       # in every context, broader than the intended exception.
-      # misspell also currently scans .go only, so Makefile / .md
-      # prose isn't enforced here either way (tracked by the
-      # `make lint-prose` TODO in TODO.md).
+      # misspell here scans .go only; non-Go prose (Makefile,
+      # `.md`, workflow YAML, `.goreleaser.yaml`) is covered by
+      # `make lint-prose` which uses the same ignore list plus
+      # `defense` as a documented (broader-than-ideal) idiomatic
+      # allowance — see the lint-prose comment block in the Makefile
+      # for the trade-off rationale.
       locale: UK
       ignore-rules:
         - sanitize    # output.Sanitize is a public identifier we don't rename
