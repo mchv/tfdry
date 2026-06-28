@@ -94,32 +94,36 @@ changelog:
   # engine) — no lazy quantifiers like .*? or ??. Each group matches
   # the prefix at the start of the subject with an optional scope and
   # optional `!` for breaking changes (e.g. `feat:`, `feat(api):`,
-  # `feat!:`, `feat(api)!:` all match the "Added" group).
+  # `feat!:`, `feat(api)!:` all match the "Added" group). Use
+  # `[^)]+` rather than `.+` for the scope body so a stray parenthesis
+  # later in the subject (`feat(api): add helper (fixes #12)`) can't
+  # be swallowed greedily into the scope match.
   groups:
     - title: "Added"
-      regexp: '^feat(\(.+\))?!?:'
+      regexp: '^feat(\([^)]+\))?!?:'
       order: 0
     - title: "Fixed"
-      regexp: '^fix(\(.+\))?!?:'
+      regexp: '^fix(\([^)]+\))?!?:'
       order: 1
     - title: "Security"
-      regexp: '^security(\(.+\))?!?:'
+      regexp: '^security(\([^)]+\))?!?:'
       order: 2
     - title: "Other"
       order: 999
   # Exclude patterns also match scoped variants, so Dependabot's
   # `build(gomod): bump …` and `build(github-actions): bump …`
-  # commits are filtered out alongside the plain prefixes.
+  # commits are filtered out alongside the plain prefixes. Same
+  # `[^)]+` discipline as the groups above.
   filters:
     exclude:
-      - '^docs(\(.+\))?:'
-      - '^test(\(.+\))?:'
-      - '^chore(\(.+\))?:'
-      - '^build(\(.+\))?:'
-      - '^ci(\(.+\))?:'
-      - '^refactor(\(.+\))?:'
-      - '^style(\(.+\))?:'
-      - '^review(\(.+\))?:'
+      - '^docs(\([^)]+\))?:'
+      - '^test(\([^)]+\))?:'
+      - '^chore(\([^)]+\))?:'
+      - '^build(\([^)]+\))?:'
+      - '^ci(\([^)]+\))?:'
+      - '^refactor(\([^)]+\))?:'
+      - '^style(\([^)]+\))?:'
+      - '^review(\([^)]+\))?:'
 
 homebrew_casks:
   - name: tfdry

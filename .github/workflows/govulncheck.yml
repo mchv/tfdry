@@ -36,7 +36,10 @@ jobs:
           cache: true
 
       - name: Install govulncheck (pinned)
-        run: make tools
+        # Use the granular `tools-vuln` target so the daily scheduled
+        # job doesn't pay the cost of installing gofumpt + golangci-lint
+        # that this workflow never invokes.
+        run: make tools-vuln
 
       - name: Run govulncheck
         run: make vuln

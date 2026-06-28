@@ -13,7 +13,7 @@ GOFUMPT_VERSION       := v0.10.0
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := v1.4.0
 
-.PHONY: help build test verify tools fmt fmt-check lint vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
+.PHONY: help build test verify tools tools-fmt tools-lint tools-vuln fmt fmt-check lint vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -33,9 +33,15 @@ test: ## Run unit tests across all packages.
 
 verify: fmt-check vet lint check-no-markers test-race vuln cross-build ## Run the full pre-PR verification pipeline.
 
-tools: ## Install the dev tools used by `make verify` (gofumpt, golangci-lint, govulncheck) into GOPATH/bin.
+tools: tools-fmt tools-lint tools-vuln ## Install every dev tool used by `make verify` (gofumpt, golangci-lint, govulncheck) into GOPATH/bin.
+
+tools-fmt: ## Install gofumpt only.
 	go install mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
+
+tools-lint: ## Install golangci-lint only.
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+tools-vuln: ## Install govulncheck only — used by the standalone scheduled vuln-scan workflow.
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 fmt: ## Apply gofumpt formatting in place. Use this to fix `make fmt-check` failures.
