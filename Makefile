@@ -5,7 +5,10 @@ LDFLAGS := -ldflags="-s -w -X github.com/mchv/tfdry/output.Version=$(VERSION)"
 # Tool versions are pinned in the install targets so contributors can
 # bootstrap a clean environment with `make tools` before running
 # `make verify`. CI installs the same versions in its runner.
-# Dependabot will bump these via PRs against this file.
+# Bumps are a manual edit here — Dependabot's `gomod` ecosystem only
+# tracks `go.mod` / `go.sum`, not Makefile variables, so it can't open
+# PRs against these pins. Re-pin to the latest stable versions during
+# release-prep (or whenever a relevant upstream fix lands).
 GOFUMPT_VERSION       := v0.10.0
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := v1.4.0

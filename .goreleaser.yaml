@@ -90,28 +90,36 @@ sboms:
 changelog:
   use: github
   sort: asc
+  # Conventional-commit grouping. Patterns are RE2 (Go's stdlib regexp
+  # engine) — no lazy quantifiers like .*? or ??. Each group matches
+  # the prefix at the start of the subject with an optional scope and
+  # optional `!` for breaking changes (e.g. `feat:`, `feat(api):`,
+  # `feat!:`, `feat(api)!:` all match the "Added" group).
   groups:
     - title: "Added"
-      regexp: "^.*?feat(\\(.+\\))??!?:.+$"
+      regexp: '^feat(\(.+\))?!?:'
       order: 0
     - title: "Fixed"
-      regexp: "^.*?fix(\\(.+\\))??!?:.+$"
+      regexp: '^fix(\(.+\))?!?:'
       order: 1
     - title: "Security"
-      regexp: "^.*?security(\\(.+\\))??!?:.+$"
+      regexp: '^security(\(.+\))?!?:'
       order: 2
     - title: "Other"
       order: 999
+  # Exclude patterns also match scoped variants, so Dependabot's
+  # `build(gomod): bump …` and `build(github-actions): bump …`
+  # commits are filtered out alongside the plain prefixes.
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^build:"
-      - "^ci:"
-      - "^refactor:"
-      - "^style:"
-      - "^review:"
+      - '^docs(\(.+\))?:'
+      - '^test(\(.+\))?:'
+      - '^chore(\(.+\))?:'
+      - '^build(\(.+\))?:'
+      - '^ci(\(.+\))?:'
+      - '^refactor(\(.+\))?:'
+      - '^style(\(.+\))?:'
+      - '^review(\(.+\))?:'
 
 homebrew_casks:
   - name: tfdry
@@ -127,14 +135,14 @@ homebrew_casks:
       name: goreleaserbot
       email: goreleaserbot@users.noreply.github.com
     commit_msg_template: "Cask formula update for {{ .ProjectName }} version {{ .Tag }}"
-    # tfdry's macOS binary isn't notarized for v0.1.0 (notarization is
+    # tfdry's macOS binary isn't notarised for v0.1.0 (notarisation is
     # a Phase C+ follow-up — would need a paid Apple Developer
-    # account). Without notarization, macOS quarantines downloaded
+    # account). Without notarisation, macOS quarantines downloaded
     # binaries with the com.apple.quarantine extended attribute, which
     # triggers Gatekeeper's "untrusted developer" dialog on first run.
     # Strip the attribute as a post-install hook so `brew install`
     # produces a usable binary without manual user intervention. This
-    # is the documented goreleaser pattern for unnotarized casks.
+    # is the documented goreleaser pattern for unnotarised casks.
     hooks:
       post:
         install: |

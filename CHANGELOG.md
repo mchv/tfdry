@@ -43,12 +43,18 @@ Each release entry groups changes under the following headings (omitted if empty
   - Auto-commits an updated Homebrew cask formula to the
     `mchv/homebrew-tfdry` tap on every release.
 - **Dependabot** (`.github/dependabot.yml`) — weekly updates for Go
-  module dependencies and GitHub Actions versions, with prefixed
-  commit messages (`build(deps): ...`) and the `dependencies` label.
+  module dependencies and GitHub Actions versions. Commits land as
+  `build(gomod): bump <pkg> from <a> to <b>` (Go modules ecosystem) or
+  `build(github-actions): bump <action> from <a> to <b>` (GitHub
+  Actions ecosystem) — the conventional-commit scope makes the source
+  ecosystem visible at a glance. Both are excluded from goreleaser's
+  release-notes via the `^build(\(.+\))?:` exclude regex.
 - **Pinned tool versions** in the Makefile so `make tools` produces
   reproducible builds: `gofumpt@v0.10.0`, `golangci-lint@v2.12.2`,
-  `govulncheck@v1.4.0`. Dependabot bumps these via PRs against the
-  Makefile.
+  `govulncheck@v1.4.0`. Dependabot's `gomod` ecosystem can't track
+  Makefile variables (it only watches `go.mod` / `go.sum`), so these
+  pins are bumped manually during release-prep — usually a one-line
+  edit per tool.
 
 ### Changed
 
