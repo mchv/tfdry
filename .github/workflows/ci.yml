@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Continuous integration: runs the full `make verify` pipeline on every
+# push to main and every pull request, across the three OSes that tfdry
+# supports (linux-amd64, macos-arm64, windows-amd64). linux-arm64 is
+# covered by the cross-build step inside `make verify` — we don't need a
+# native arm64 runner just to verify `GOOS=linux GOARCH=arm64 go build`.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress PR builds when a new commit lands on the same
+# branch — saves CI minutes and gives faster feedback on the latest
+# change. Main-branch pushes are NOT cancelled; we want every commit on
+# main to have its own green/red signal in history.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    # macOS runners are the slowest of the three; the full verify
+    # pipeline (build + test -race + lint + cross-build) typically takes
+    # 4-5 minutes there. Give 15 minutes of slack so a transient network
+    # blip during `make tools` doesn't time out the job.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.3
+          cache: true
+
+      - name: Install dev tools (pinned versions)
+        # Run on bash on all platforms so the install commands work
+        # uniformly. Windows runners have Git Bash pre-installed.
+        shell: bash
+        run: make tools
+
+      - name: Run verify pipeline
+        # `make verify` runs: fmt-check, vet, lint, check-no-markers,
+        # test-race, vuln, cross-build. On Windows the Makefile's POSIX
+        # constructs (find -exec, sh shell-outs) work because Git Bash
+        # ships GNU find/grep with the runner image.
+        shell: bash
+        run: make verify

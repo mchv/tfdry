@@ -46,6 +46,7 @@ This file tracks two things:
       workflows: PR validation matrix (Linux + macOS + Windows),
       `codeql.yml`, `release.yml` driven by goreleaser with cosign
       keyless signing, Syft SBOMs, dependabot config.
+      *(In review.)*
 - [ ] **Phase C — Tag v0.1.0 + go public.** Create
       `mchv/homebrew-tfdry` tap repo, tag `v0.1.0`, verify the release
       workflow produces all artifacts and auto-PRs the tap formula,
@@ -149,23 +150,6 @@ it up or wants to discuss it.
     vs. sequential
   - Violation-heavy benchmark to stress the `append` path in `Run`
   - Isolated `walkExpressions` benchmark
-
-- **Move chmod-based E000 tests behind `//go:build unix`.**
-  `checker/checks_test.go` has `TestE000_AlwaysEmitted_WhenDirUnreadable`
-  and `TestParseDir_UnreadableFile_EmitsE000` that drive `ParseDir` into
-  the E000 path via `os.Chmod(dir, 0o000)`. Both currently rely on
-  `if err := os.Chmod(...); err != nil { t.Skip(...) }` for platform
-  divergence, but Windows `os.Chmod` doesn't actually return an error
-  on `0o000` — it just doesn't enforce read permissions the same way
-  POSIX does. The tests would silently produce a false negative on
-  Windows (skip-but-look-clean rather than skip-with-reason). The PR A2
-  follow-up (#6) already factored the same pattern into
-  `e000_exit_code_unix_test.go` with a `//go:build unix` constraint
-  and a comment explaining the rationale (Plan 9 / js/wasm also lack
-  the POSIX permission model and `os.Geteuid()`). These two siblings
-  in `checker/checks_test.go` should get the same treatment — split
-  into a `checks_unix_test.go` companion file (or comparable name)
-  with the build constraint at the top. Small, mechanical, ~30 LOC.
 
 ### Performance
 

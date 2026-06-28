@@ -1,0 +1,195 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# goreleaser configuration for tfdry. The release workflow
+# (.github/workflows/release.yml) invokes goreleaser on every v*.*.*
+# tag. Validate locally with `goreleaser check`; preview an end-to-end
+# run with `goreleaser release --snapshot --clean` (writes to ./dist/,
+# skips publishing and signing).
+
+version: 2
+
+project_name: tfdry
+
+before:
+  hooks:
+    # Read-only assertions only — the release pipeline must never mutate
+    # the source tree, otherwise the artefacts won't correspond to the
+    # tagged commit. `go mod tidy -diff` (Go 1.23+) prints the diff and
+    # exits non-zero if go.mod/go.sum aren't already canonical, without
+    # rewriting them. `go mod verify` checks module-cache integrity
+    # against go.sum.
+    - go mod tidy -diff
+    - go mod verify
+
+builds:
+  - id: tfdry
+    main: .
+    binary: tfdry
+    env:
+      - CGO_ENABLED=0
+    # Match the cross-build matrix in `make verify` so a green
+    # `make verify` is a strong predictor of a clean release.
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # macOS is arm64-only (Apple Silicon); Windows is amd64-only for
+    # v0.1.0. Drop the unsupported cross-products.
+    ignore:
+      - goos: darwin
+        goarch: amd64
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/mchv/tfdry/output.Version={{.Version}}
+
+archives:
+  - id: tfdry
+    # tar.gz on Linux/macOS, zip on Windows (the Windows convention).
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - SECURITY.md
+      - SKILL.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Cosign keyless signing of every archive + the checksums file. Uses
+# the GitHub Actions OIDC token as the signing identity; verifiable
+# without any pre-shared key via `cosign verify-blob --certificate
+# <cert> --signature <sig> --certificate-identity-regexp ... <file>`.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: all
+
+# Syft SBOMs per archive in SPDX JSON format. The same supplychain
+# tooling that consumes SLSA provenance can ingest these directly.
+sboms:
+  - id: archive
+    artifacts: archive
+    documents:
+      - "${artifact}.sbom.json"
+
+changelog:
+  use: github
+  sort: asc
+  # Conventional-commit grouping. Patterns are RE2 (Go's stdlib regexp
+  # engine) — no lazy quantifiers like .*? or ??. Each group matches
+  # the prefix at the start of the subject with an optional scope and
+  # optional `!` for breaking changes (e.g. `feat:`, `feat(api):`,
+  # `feat!:`, `feat(api)!:` all match the "Added" group). Use
+  # `[^)]+` rather than `.+` for the scope body so a stray parenthesis
+  # later in the subject (`feat(api): add helper (fixes #12)`) can't
+  # be swallowed greedily into the scope match.
+  groups:
+    - title: "Added"
+      regexp: '^feat(\([^)]+\))?!?:'
+      order: 0
+    - title: "Fixed"
+      regexp: '^fix(\([^)]+\))?!?:'
+      order: 1
+    - title: "Security"
+      regexp: '^security(\([^)]+\))?!?:'
+      order: 2
+    - title: "Other"
+      order: 999
+  # Exclude patterns also match scoped variants, so Dependabot's
+  # `build(gomod): bump …` and `build(github-actions): bump …`
+  # commits are filtered out alongside the plain prefixes. Same
+  # `[^)]+` discipline as the groups above.
+  filters:
+    exclude:
+      - '^docs(\([^)]+\))?:'
+      - '^test(\([^)]+\))?:'
+      - '^chore(\([^)]+\))?:'
+      - '^build(\([^)]+\))?:'
+      - '^ci(\([^)]+\))?:'
+      - '^refactor(\([^)]+\))?:'
+      - '^style(\([^)]+\))?:'
+      - '^review(\([^)]+\))?:'
+
+homebrew_casks:
+  - name: tfdry
+    repository:
+      owner: mchv
+      name: homebrew-tfdry
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # Casks live in the `Casks/` directory by convention (the default).
+    homepage: https://github.com/mchv/tfdry
+    description: Fast, focused Terraform linting — no terraform init, no state, no network.
+    license: Apache-2.0
+    commit_author:
+      name: goreleaserbot
+      email: goreleaserbot@users.noreply.github.com
+    commit_msg_template: "Cask formula update for {{ .ProjectName }} version {{ .Tag }}"
+    # tfdry's macOS binary isn't notarised for v0.1.0 (notarisation is
+    # a Phase C+ follow-up — would need a paid Apple Developer
+    # account). Without notarisation, macOS quarantines downloaded
+    # binaries with the com.apple.quarantine extended attribute, which
+    # triggers Gatekeeper's "untrusted developer" dialog on first run.
+    # Strip the attribute as a post-install hook so `brew install`
+    # produces a usable binary without manual user intervention. This
+    # is the documented goreleaser pattern for unnotarised casks.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/tfdry"]
+          end
+
+release:
+  github:
+    owner: mchv
+    name: tfdry
+  draft: false
+  prerelease: auto
+  mode: append
+  header: |
+    ## tfdry {{ .Tag }}
+
+    Fast, focused Terraform linting — no `terraform init`, no state, no network.
+
+    See the [CHANGELOG](https://github.com/mchv/tfdry/blob/main/CHANGELOG.md) for the full release notes.
+  footer: |
+    ---
+
+    **Verifying the release artifacts:**
+
+    Every archive and the `checksums.txt` file are signed with
+    [cosign](https://docs.sigstore.dev/cosign) in keyless mode. To
+    verify:
+
+    ```sh
+    cosign verify-blob \
+      --certificate tfdry_{{ .Version }}_linux_amd64.tar.gz.pem \
+      --signature  tfdry_{{ .Version }}_linux_amd64.tar.gz.sig \
+      --certificate-identity-regexp 'https://github.com/mchv/tfdry/.+' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      tfdry_{{ .Version }}_linux_amd64.tar.gz
+    ```
+
+    Each archive ships with a Syft SBOM (`*.sbom.json`, SPDX format)
+    listing all Go module dependencies.

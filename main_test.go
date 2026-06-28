@@ -796,6 +796,20 @@ func TestRun_FmtRecursive_SanitizesParseErrorPath(t *testing.T) {
 // regardless of trigger.
 func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
 	t.Parallel()
+	// absRoot constructs a platform-appropriate absolute path from
+	// path segments. Windows considers `/root` to NOT be absolute (it
+	// requires a drive letter or UNC prefix), so the Unix-style
+	// hard-coded `/root` inputs the test used to ship with were
+	// effectively relative on Windows and produced bizarre
+	// duplicated paths. Routing through this helper keeps the test
+	// cross-platform while exercising the absolute-path branch.
+	absRoot := func(segments ...string) string {
+		joined := filepath.Join(segments...)
+		if runtime.GOOS == "windows" {
+			return `C:\` + joined
+		}
+		return "/" + joined
+	}
 	cases := []struct {
 		name    string
 		rootArg string
@@ -805,44 +819,47 @@ func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
 	}{
 		{
 			name:    "file-level violation: basename joined under dir",
-			rootArg: "/root",
-			dir:     "/root/infra/prod",
+			rootArg: absRoot("root"),
+			dir:     absRoot("root", "infra", "prod"),
 			vFile:   "bad.tf",
-			want:    filepath.Join("infra", "prod", "bad.tf"),
+			// displayFmtPath always emits forward slashes regardless
+			// of host OS (see its godoc — UX consistency + test
+			// stability), so the expected values do too.
+			want: "infra/prod/bad.tf",
 		},
 		{
 			name:    "dir-level violation: vFile equals dir, must NOT duplicate",
-			rootArg: "/root",
-			dir:     "/root/infra/prod",
-			vFile:   "/root/infra/prod",
-			want:    filepath.Join("infra", "prod"),
+			rootArg: absRoot("root"),
+			dir:     absRoot("root", "infra", "prod"),
+			vFile:   absRoot("root", "infra", "prod"),
+			want:    "infra/prod",
 		},
 		{
 			name:    "dir-level violation, relative tree",
 			rootArg: ".",
-			dir:     "infra/prod",
-			vFile:   "infra/prod",
-			want:    filepath.Join("infra", "prod"),
+			dir:     filepath.Join("infra", "prod"),
+			vFile:   filepath.Join("infra", "prod"),
+			want:    "infra/prod",
 		},
 		{
 			name:    "absolute vFile resolves under root",
-			rootArg: "/root",
-			dir:     "/root/infra",
-			vFile:   "/root/infra/main.tf",
-			want:    filepath.Join("infra", "main.tf"),
+			rootArg: absRoot("root"),
+			dir:     absRoot("root", "infra"),
+			vFile:   absRoot("root", "infra", "main.tf"),
+			want:    "infra/main.tf",
 		},
 		{
 			name:    "empty vFile falls back to dir",
-			rootArg: "/root",
-			dir:     "/root/infra",
+			rootArg: absRoot("root"),
+			dir:     absRoot("root", "infra"),
 			vFile:   "",
 			want:    "infra",
 		},
 		{
 			name:    "root and dir identical: dir-level violation reports root itself",
-			rootArg: "/root",
-			dir:     "/root",
-			vFile:   "/root",
+			rootArg: absRoot("root"),
+			dir:     absRoot("root"),
+			vFile:   absRoot("root"),
 			want:    ".",
 		},
 	}
@@ -854,9 +871,14 @@ func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
 					tc.rootArg, tc.dir, tc.vFile, got, tc.want)
 			}
 			// Strong invariant: the result must NEVER contain the same
-			// non-empty subpath segment twice in a row (the bug signature).
-			if tc.dir != "" && strings.Contains(got, tc.dir+string(filepath.Separator)+tc.dir) {
-				t.Errorf("path duplication detected in %q (dir=%q)", got, tc.dir)
+			// non-empty subpath segment twice in a row (the bug
+			// signature). Test in forward-slash space since that's the
+			// canonical form displayFmtPath emits.
+			if tc.dir != "" {
+				dirSlash := filepath.ToSlash(tc.dir)
+				if strings.Contains(got, dirSlash+"/"+dirSlash) {
+					t.Errorf("path duplication detected in %q (dir=%q)", got, tc.dir)
+				}
 			}
 		})
 	}
