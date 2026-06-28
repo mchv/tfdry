@@ -66,10 +66,16 @@ tfdry describe
 Sample output on a directory with one undefined local reference:
 
 ```text
-infra/main.tf:12  error  E003  reference to undefined local "tags"
+✗  [E003] main.tf:12  reference to undefined local "tags"
 
-1 error(s) found.
+1 error(s), 0 warning(s)
 ```
+
+The format is `{icon} [{code}] {file}:{line}  {message}`, where the
+icon is `✗` for errors and `⚠` for warnings. File-level violations
+(e.g. `E000` tool errors) omit the `:{line}` segment because there's
+no source line to point at. A clean run prints `✓ No violations found.`
+instead.
 
 Same input with `--json`:
 
@@ -197,7 +203,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 | `violations[].code` | string | E000–E008 or W001. |
 | `violations[].severity` | string | `"error"` or `"warning"`. |
 | `violations[].file` | string | Filename relative to `directory` (sanitised). |
-| `violations[].line` | integer | 1-based line number, or `0` if the violation is file-level. |
+| `violations[].line` | integer | 1-based line number. **Omitted entirely** (not emitted as `0`) when the violation is file-level — e.g. E000 tool errors, which are raised before HCL parsing resolves any line. JSON consumers should treat absent and `0` as equivalent. |
 | `violations[].message` | string | Human-readable detail (sanitised). |
 | `summary.errors` | integer | Count of `severity == "error"` violations (includes E000 for back-compat). |
 | `summary.warnings` | integer | Count of `severity == "warning"` violations. |
@@ -228,7 +234,6 @@ repos:
   run: |
     set -euo pipefail
     tfdry --json . | tee tfdry.json
-    jq -e '.summary.errors == 0 and .summary.tool_errors == 0' tfdry.json
 ```
 
 The `set -euo pipefail` line is important: without `pipefail`, the
@@ -236,10 +241,12 @@ The `set -euo pipefail` line is important: without `pipefail`, the
 non-zero exit code (the pipeline's exit code would come from `tee`,
 which is almost always `0`). With `pipefail`, tfdry's exit code
 propagates — so a tool error (exit `2`) surfaces in CI as the tool
-error it is, rather than being detected indirectly via the JSON
-check. GitHub Actions' Linux shell default does set `pipefail`
-already, but being explicit keeps the recipe portable to other CI
-runners and to local `bash` invocations.
+error it is, and lint violations (exit `1`) fail the step directly.
+GitHub Actions' Linux shell default does set `pipefail` already, but
+being explicit keeps the recipe portable to other CI runners and to
+local `bash` invocations. The `tee` keeps a copy of the JSON for any
+downstream step (artifact upload, custom failure-mode rules in `jq`,
+etc.).
 
 ### Other CI
 
