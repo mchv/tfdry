@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 // This test uses os.Chmod(dir, 0o000) to force ParseDir's os.ReadDir to
 // fail with EACCES so it synthesises an E000 violation. Windows file
 // permissions don't model POSIX read bits the same way (a 0o000 chmod

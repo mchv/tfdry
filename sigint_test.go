@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 // This test file is excluded from non-Unix builds entirely. The
 // SIGINT subprocess test uses syscall.SysProcAttr{Setpgid: true}
 // and syscall.Kill(-pid, SIGINT), both of which are Unix-only API

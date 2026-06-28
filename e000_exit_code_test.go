@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -127,5 +130,47 @@ func TestRun_E000_JSONOutput_IncludesToolErrors(t *testing.T) {
 	if got.Summary.Errors == 0 {
 		t.Errorf("summary.errors = 0, want > 0 (E000 should also count as error for back-compat); summary=%+v",
 			got.Summary)
+	}
+}
+
+// TestRun_E000_JSONOutput_OmitsLineField asserts that file-level
+// violations (E000, emitted from the I/O layer before HCL parsing
+// resolves any line number) produce JSON entries with NO "line" key
+// at all, per the `json:"line,omitempty"` tag on
+// checker.Violation.Line. The README's JSON schema row documents
+// this as "1-based line number; omitted when the violation is
+// file-level (e.g. E000)"; without this test, a future struct
+// refactor that drops omitempty would silently emit "line": 0 and
+// diverge from the documented contract — and the existing
+// TestRun_E000_JSONOutput_IncludesToolErrors only inspects summary
+// fields, not the violation entries themselves.
+func TestRun_E000_JSONOutput_OmitsLineField(t *testing.T) {
+	dir := t.TempDir()
+	createOversizedFile(t, dir, "huge.tf")
+
+	code, stdout, stderr := runCLI("--json", dir)
+	if code != 2 {
+		t.Fatalf("expected exit 2 for E000, got %d; stderr=%q", code, stderr)
+	}
+
+	// Decode into a generic map so we can detect the *presence* of
+	// keys, not just their values — a partial-fields struct would
+	// happily accept "line": 0 and miss the omitempty regression.
+	var got struct {
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+	if len(got.Violations) == 0 {
+		t.Fatalf("expected at least one violation, got none; output: %s", stdout)
+	}
+	for i, v := range got.Violations {
+		if v["code"] != "E000" {
+			continue
+		}
+		if _, hasLine := v["line"]; hasLine {
+			t.Errorf("violation[%d] (E000) has unexpected \"line\" key (omitempty should have stripped it); violation=%+v", i, v)
+		}
 	}
 }

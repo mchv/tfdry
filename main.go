@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 // Command tfdry validates Terraform files without requiring terraform init or validate.
 package main
 
@@ -466,7 +469,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			}
 			anyDirty = true
 			absFile := filepath.Join(d, f.Name)
-			// Same sanitization for the dirty-file path printed to
+			// Same sanitisation for the dirty-file path printed to
 			// stdout (the user-facing list of formatted files).
 			relPath := output.Sanitize(displayFmtPath(path, d, f.Name))
 			fmt.Fprintln(stdout, relPath)

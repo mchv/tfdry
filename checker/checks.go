@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 // Package checker implements tfdry's static analysis checks for Terraform
 // files. It parses .tf files via hashicorp/hcl, builds a per-directory map
 // of locals and module schemas, and runs a configurable set of checks

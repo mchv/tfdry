@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 package output_test
 
 import (
@@ -77,7 +80,7 @@ func TestWriteJSON_StripsTerminalInjection(t *testing.T) {
 // ANSI escapes / Bidi-override / control characters, which then leak
 // straight into the JSON output's "directory" field. Same terminal- and
 // line-injection threat as the newline-injection case and the fmt-output
-// case; closing the remaining hole in NewReport's sanitization coverage.
+// case; closing the remaining hole in NewReport's sanitisation coverage.
 func TestNewReport_SanitizesDirectoryField(t *testing.T) {
 	t.Parallel()
 	const rlo = "\u202E"

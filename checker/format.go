@@ -1,3 +1,6 @@
+// Copyright 2026 Mariot Chauvin
+// SPDX-License-Identifier: Apache-2.0
+
 package checker
 
 import (
@@ -224,7 +227,7 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return false, err
 	}
-	// TOCTOU defense-in-depth. The initial Lstat/OpenFile checks
+	// TOCTOU defence-in-depth. The initial Lstat/OpenFile checks
 	// established that `path` was a regular file, but between those
 	// checks and this rename, an attacker (or concurrent process) with
 	// write access to the parent directory could swap `path` for a

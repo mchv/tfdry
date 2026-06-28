@@ -41,7 +41,7 @@ This file tracks two things:
 - [ ] **PR A5 — Public-adoption documentation.** `LICENSE`
       (Apache-2.0), `CONTRIBUTING.md`, `SECURITY.md`,
       `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, README overhaul, SPDX
-      headers on `.go` files.
+      headers on `.go` files. *(In review.)*
 - [ ] **PR B1 — CI + release infrastructure.** GitHub Actions
       workflows: PR validation matrix (Linux + macOS + Windows),
       `codeql.yml`, `release.yml` driven by goreleaser with cosign
@@ -73,7 +73,76 @@ it up or wants to discuss it.
   SigV4 signing. The correct policy is
   `Managed-AllViewerExceptHostHeader`.
 
+- **E009 circular local reference** — emit a user-facing violation
+  when a local references itself transitively
+  (e.g. `local.a = local.b; local.b = local.a`, or longer chains).
+  The cycle-detection scaffolding already exists in two functions in
+  `checker/modules.go`: `varTypeToSchemaKind` (at `:487`, with the
+  cycle check at `:506-509`; schema-resolution side used for module
+  input typing) and `resolveExprTypeRecursive` (at `:583`, with the
+  cycle check at `:600-603`; local-expression type-resolution side
+  used by E004). Both keep a `seen` map and
+  bail out by returning `SchemaUnknown` / `TypeUnknown` rather than
+  producing a violation, which keeps the linter from infinite-looping
+  on cyclic local refs but means the user sees no signal at all.
+  `TestE006_TransitiveLocalCycle_DoesNotPanic` in
+  `checker/checks_test.go:1103` exercises the recursive path and is
+  the canonical no-panic regression test. `terraform validate`
+  catches this (after `init`) as `Cycle in local values:
+  local.a, local.b`; flagged on PR #7 as a surprising gap.
+  Implementation needs:
+    1. A new `Violation` emission path from `resolveExprTypeRecursive`
+       (and possibly `varTypeToSchemaKind` if module-input cycles
+       should be surfaced too). The `seen` map currently only stores
+       names; it should record the cycle path so the message can list
+       the participating locals in order.
+    2. The check should be skippable via `--checks=` like the
+       others (and ideally enabled by default since it's a
+       correctness check, not a style one). Add `E009` to the
+       canonical `CheckList` in `checker/checks.go`.
+    3. Test fixtures: 2-cycle, 3-cycle, and a self-reference
+       (`local.a = local.a + 1`). Extend
+       `TestE006_TransitiveLocalCycle_DoesNotPanic` or add a
+       parallel `TestE009_*` family.
+    4. Interaction with E003 (undefined local) and E004 (type
+       mismatch): the cycle participants currently degrade to
+       `TypeUnknown`, which suppresses downstream E004; once E009
+       fires, decide whether to keep suppressing E004 (one error
+       per cycle) or surface both (could be noisy).
+
 ### Tests & benchmarks
+
+- **Isolate the `violations[]` ordering guarantee in a regression
+  test.** `Run` in `checker/checks.go:195` ends with a
+  `sort.SliceStable(violations, ...)` keyed on `(File, Line)` so the
+  documented "ordered by `file` then `line`" contract (README JSON
+  schema row + SKILL.md) survives Go's per-call map-iteration
+  randomisation at the W001 / E003 / E007 append sites. The sort is
+  currently exercised only implicitly via golden-output assertions
+  in other tests; if a future refactor moved violation accumulation
+  into a streaming output path (e.g. dropping the slice in favour of
+  emitting violations as they're discovered), the sort could be
+  silently dropped and only the eyeball tests would notice. Add a
+  `TestRun_Violations_OrderedByFileThenLine` that constructs a
+  multi-file fixture with at least one map-iteration-driven check
+  per file (W001 is the easiest), runs `Run` N≥10 times, and
+  asserts every run yields byte-identical ordering. Surfaced during
+  PR #7 round-3 review when Copilot flagged the ordering doc as
+  potentially unenforced — verified false empirically, but the gap
+  in dedicated coverage is real.
+
+- **Lint British English in `.md` prose, not just `.go` comments.**
+  golangci-lint's `misspell` plugin only operates on `.go` files —
+  prose drift in `.md` docs (the larger surface area for v0.1.0)
+  slips through. PR #7 surfaced four US-spelled words in CHANGELOG
+  / SECURITY (`defense`, `sanitization`) that the linter never had
+  a chance to flag. Add a `make lint-prose` target (or fold into
+  `make verify`) that runs `misspell -locale=UK` against `**/*.md`
+  with the same identifier ignore-list as the Go side. Could also
+  catch other UK/US drift: `color/colour`, `organize/organise`,
+  `analyze/analyse`, `recognize/recognise`, etc. Tiny target — the
+  misspell binary is already installed via `make tools` once
+  promoted from a transitive golangci-lint dep.
 
 - **Additional benchmark coverage**
   - Small-scale benchmark (2–5 files) to measure goroutine overhead
