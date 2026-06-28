@@ -151,23 +151,6 @@ it up or wants to discuss it.
   - Violation-heavy benchmark to stress the `append` path in `Run`
   - Isolated `walkExpressions` benchmark
 
-- **Move chmod-based E000 tests behind `//go:build unix`.**
-  `checker/checks_test.go` has `TestE000_AlwaysEmitted_WhenDirUnreadable`
-  and `TestParseDir_UnreadableFile_EmitsE000` that drive `ParseDir` into
-  the E000 path via `os.Chmod(dir, 0o000)`. Both currently rely on
-  `if err := os.Chmod(...); err != nil { t.Skip(...) }` for platform
-  divergence, but Windows `os.Chmod` doesn't actually return an error
-  on `0o000` — it just doesn't enforce read permissions the same way
-  POSIX does. The tests would silently produce a false negative on
-  Windows (skip-but-look-clean rather than skip-with-reason). The PR A2
-  follow-up (#6) already factored the same pattern into
-  `e000_exit_code_unix_test.go` with a `//go:build unix` constraint
-  and a comment explaining the rationale (Plan 9 / js/wasm also lack
-  the POSIX permission model and `os.Geteuid()`). These two siblings
-  in `checker/checks_test.go` should get the same treatment — split
-  into a `checks_unix_test.go` companion file (or comparable name)
-  with the build constraint at the top. Small, mechanical, ~30 LOC.
-
 ### Performance
 
 - **HCL AST cache for watch mode** — profiling shows ~75% of
