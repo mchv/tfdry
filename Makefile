@@ -13,7 +13,7 @@ GOFUMPT_VERSION       := v0.10.0
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := v1.4.0
 
-.PHONY: help build test verify tools tools-fmt tools-lint tools-vuln fmt fmt-check lint vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
+.PHONY: help build test verify tools tools-fmt tools-lint tools-vuln fmt fmt-check tidy-check lint vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -31,7 +31,7 @@ test: ## Run unit tests across all packages.
 # in PR B1's pipeline. Composed of fine-grained sub-targets so contributors
 # can run pieces in isolation when debugging a specific finding.
 
-verify: fmt-check vet lint check-no-markers test-race vuln cross-build ## Run the full pre-PR verification pipeline.
+verify: fmt-check tidy-check vet lint check-no-markers test-race vuln cross-build ## Run the full pre-PR verification pipeline.
 
 tools: tools-fmt tools-lint tools-vuln ## Install every dev tool used by `make verify` (gofumpt, golangci-lint, govulncheck) into GOPATH/bin.
 
@@ -64,6 +64,33 @@ fmt-check: ## Verify gofumpt formatting is clean. Fails with a diff if not.
 		echo "Run 'make fmt' to fix."; \
 		exit 1; \
 	fi
+
+tidy-check: ## Verify go.mod / go.sum are canonical. Fails with a diff if `go mod tidy` would change anything.
+	@# `go mod tidy -diff` (Go 1.23+) is the read-only version of
+	@# `go mod tidy`: prints the diff and exits non-zero if go.mod /
+	@# go.sum aren't canonical, without rewriting them. Two reasons we
+	@# want this in `make verify` rather than relying on the goreleaser
+	@# `before.hooks` check alone:
+	@#
+	@#   1. Shift-left. PRs catch un-tidy state at review time rather
+	@#      than waiting for a tag to fail. The goreleaser hook stays
+	@#      as defense-in-depth at release time.
+	@#   2. Artefact-vs-tag reproducibility. If un-tidy go.mod ever
+	@#      slipped to main and got tagged, a contributor cloning the
+	@#      tag and running `go build` would produce a slightly different
+	@#      binary than the published one (because `go build` resolves
+	@#      against go.sum, which would carry stale entries). Catching
+	@#      it pre-merge eliminates that drift category entirely.
+	@#
+	@# We capture combined output so the error contains both the diff
+	@# and a concrete fix hint, rather than just a bare exit code.
+	@out=$$(go mod tidy -diff 2>&1) || { \
+		echo "go.mod / go.sum need tidying:"; \
+		echo "$$out"; \
+		echo ""; \
+		echo "Run 'go mod tidy' locally and commit the resulting go.mod / go.sum."; \
+		exit 1; \
+	}
 
 vet: ## Run go vet.
 	go vet ./...

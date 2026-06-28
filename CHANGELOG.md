@@ -131,6 +131,7 @@ shipped; for the per-PR breakdown see the merged PRs in the
 ### Tooling
 
 - **`make verify`** runs the full pre-PR pipeline: `gofumpt -l .`,
+  `go mod tidy -diff` (asserts go.mod / go.sum stay canonical),
   `go vet`, `golangci-lint run` (with 11 linters), `go test -race`,
   `govulncheck`, cross-builds for `darwin-arm64`, `linux-amd64`,
   `linux-arm64`, `windows-amd64`, plus a marker-policy check that
