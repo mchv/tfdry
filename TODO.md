@@ -111,6 +111,25 @@ it up or wants to discuss it.
 
 ### Tests & benchmarks
 
+- **Isolate the `violations[]` ordering guarantee in a regression
+  test.** `Run` in `checker/checks.go:195` ends with a
+  `sort.SliceStable(violations, ...)` keyed on `(File, Line)` so the
+  documented "ordered by `file` then `line`" contract (README JSON
+  schema row + SKILL.md) survives Go's per-call map-iteration
+  randomisation at the W001 / E003 / E007 append sites. The sort is
+  currently exercised only implicitly via golden-output assertions
+  in other tests; if a future refactor moved violation accumulation
+  into a streaming output path (e.g. dropping the slice in favour of
+  emitting violations as they're discovered), the sort could be
+  silently dropped and only the eyeball tests would notice. Add a
+  `TestRun_Violations_OrderedByFileThenLine` that constructs a
+  multi-file fixture with at least one map-iteration-driven check
+  per file (W001 is the easiest), runs `Run` N≥10 times, and
+  asserts every run yields byte-identical ordering. Surfaced during
+  PR #7 round-3 review when Copilot flagged the ordering doc as
+  potentially unenforced — verified false empirically, but the gap
+  in dedicated coverage is real.
+
 - **Lint British English in `.md` prose, not just `.go` comments.**
   golangci-lint's `misspell` plugin only operates on `.go` files —
   prose drift in `.md` docs (the larger surface area for v0.1.0)
