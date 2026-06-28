@@ -132,18 +132,27 @@ it up or wants to discuss it.
   potentially unenforced — verified false empirically, but the gap
   in dedicated coverage is real.
 
-- **Lint British English in `.md` prose, not just `.go` comments.**
+- **Lint British English in non-`.go` prose (`.md`, `Makefile`,
+  workflow YAML, goreleaser config).**
   golangci-lint's `misspell` plugin only operates on `.go` files —
   prose drift in `.md` docs (the larger surface area for v0.1.0)
-  slips through. PR #7 surfaced four US-spelled words in CHANGELOG
-  / SECURITY (`defense`, `sanitization`) that the linter never had
-  a chance to flag. Add a `make lint-prose` target (or fold into
-  `make verify`) that runs `misspell -locale=UK` against `**/*.md`
-  with the same identifier ignore-list as the Go side. Could also
-  catch other UK/US drift: `color/colour`, `organize/organise`,
-  `analyze/analyse`, `recognize/recognise`, etc. Tiny target — the
-  misspell binary is already installed via `make tools` once
-  promoted from a transitive golangci-lint dep.
+  and in Makefile / `.github/workflows/*.yml` / `.goreleaser.yaml`
+  comments slips through. PR #7 surfaced four US-spelled words in
+  CHANGELOG / SECURITY (`defense`, `sanitization`) that the linter
+  never had a chance to flag; PR #12 surfaced the same gap in
+  Makefile comments (Gemini caught `defense-in-depth` only because
+  it diffs the human prose, not because misspell ran).
+  Add a `make lint-prose` target (or fold into `make verify`) that
+  runs `misspell -locale=UK` against `**/*.md` plus the
+  `Makefile`, `.github/workflows/*.yml`, and `.goreleaser.yaml`
+  using the same identifier ignore-list as the Go side, plus the
+  documented idiomatic exceptions (notably "defense in depth" —
+  see the misspell config block in `.golangci.yml` for the
+  rationale). Could also catch other UK/US drift:
+  `color/colour`, `organize/organise`, `analyze/analyse`,
+  `recognize/recognise`, etc. Tiny target — the misspell binary
+  is already installed via `make tools` once promoted from a
+  transitive golangci-lint dep.
 
 - **Additional benchmark coverage**
   - Small-scale benchmark (2–5 files) to measure goroutine overhead

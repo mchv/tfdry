@@ -82,15 +82,32 @@ tidy-check: ## Verify go.mod / go.sum are canonical. Fails with a diff if `go mo
 	@#      against go.sum, which would carry stale entries). Catching
 	@#      it pre-merge eliminates that drift category entirely.
 	@#
-	@# We capture combined output so the error contains both the diff
-	@# and a concrete fix hint, rather than just a bare exit code.
-	@out=$$(go mod tidy -diff 2>&1) || { \
-		echo "go.mod / go.sum need tidying:"; \
-		echo "$$out"; \
-		echo ""; \
-		echo "Run 'go mod tidy' locally and commit the resulting go.mod / go.sum."; \
+	@# The error path uses `printf` (not `echo`) because the captured
+	@# diff output can contain leading dashes (`---`, `+++`) that some
+	@# `echo` implementations treat as flags. `printf '%s\n'` is portable
+	@# and treats every argument as literal text.
+	@#
+	@# The failure message stays mode-agnostic ("tidy-check failed")
+	@# because non-zero exit from `go mod tidy -diff` covers several
+	@# scenarios beyond "needs tidying":
+	@#   * Un-tidy go.mod (the common case) → output is a unified diff
+	@#   * Go < 1.23 lacking the -diff flag → "flag provided but not defined"
+	@#   * Module download / proxy errors → network-shaped messages
+	@# The captured output above tells the user which mode they hit; the
+	@# hint below explains what to do for each.
+	@if ! out=$$(go mod tidy -diff 2>&1); then \
+		printf 'tidy-check failed:\n\n%s\n\n' "$$out"; \
+		printf '%s\n' \
+			'If the output above is a unified diff against go.mod / go.sum,' \
+			"run 'go mod tidy' locally and commit the resulting go.mod / go.sum." \
+			'' \
+			"If it reports 'flag provided but not defined: -diff', your local Go" \
+			'is older than 1.23 — upgrade to match the `go` line in go.mod.' \
+			'' \
+			'Other non-zero exits (e.g. module-download or proxy failures) are' \
+			'reported verbatim above.'; \
 		exit 1; \
-	}
+	fi
 
 vet: ## Run go vet.
 	go vet ./...

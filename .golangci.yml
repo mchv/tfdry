@@ -141,6 +141,17 @@ linters:
       # test names like `correctBehavior_*` that pre-date PR A1).
       # locale=UK aligns the linter with the author's chosen prose
       # variant; ignore-rules below cover the identifier exceptions.
+      #
+      # Idiomatic-exception note: the fixed phrase "defense in depth"
+      # uses the US spelling everywhere in tech writing (NIST, OWASP,
+      # MITRE) and reads as a term of art rather than free prose. We
+      # leave it as-is when it appears in comments. Not added to
+      # ignore-rules below because misspell's ignore-rules are
+      # word-level — adding bare "defense" would whitelist the word
+      # in every context, broader than the intended exception.
+      # misspell also currently scans .go only, so Makefile / .md
+      # prose isn't enforced here either way (tracked by the
+      # `make lint-prose` TODO in TODO.md).
       locale: UK
       ignore-rules:
         - sanitize    # output.Sanitize is a public identifier we don't rename
