@@ -27,6 +27,13 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    # Skip on private repositories. CodeQL on private repos requires
+    # GitHub Advanced Security (a paid add-on), and the underlying
+    # 'github/codeql-action/analyze' step otherwise fails with
+    # 'Code scanning is not enabled for this repository.' Public repos
+    # get CodeQL free, so the job activates automatically the moment
+    # tfdry flips to public visibility — no workflow edit needed.
+    if: github.event.repository.private == false
     timeout-minutes: 15
     strategy:
       fail-fast: false
