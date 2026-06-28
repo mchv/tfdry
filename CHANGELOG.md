@@ -27,7 +27,10 @@ Each release entry groups changes under the following headings (omitted if empty
   `SKILL.md` link.
 - **CI workflows** (`.github/workflows/`):
   - `ci.yml` — runs `make verify` on every PR + main push across
-    Linux, macOS, and Windows runners with Go 1.26.3.
+    Linux, macOS, and Windows runners with Go 1.26.3. The Linux job
+    additionally generates a coverprofile and uploads it to Codecov
+    via the official `codecov/codecov-action` (informational only —
+    PR comments with delta + badge, no CI failures on regression).
   - `codeql.yml` — CodeQL security analysis with the
     `security-extended` query pack, on every PR + weekly schedule.
   - `govulncheck.yml` — daily scheduled vulnerability scan against

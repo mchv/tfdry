@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Codecov configuration for tfdry.
+# Schema: https://docs.codecov.com/docs/codecov-yaml
+# Validate this file with `curl --data-binary @codecov.yml https://codecov.io/validate`.
+
+codecov:
+  # Only ingest coverage from successful CI runs — avoids reporting
+  # coverage from runs that failed verify and may have skipped tests.
+  require_ci_to_pass: true
+
+coverage:
+  precision: 1
+  round: down
+  # Colour bands on the PR comment and badge: red below 70%, yellow
+  # 70–90%, green above 90%. Current local baseline is ~88.1% so we
+  # land in yellow — the range is calibrated for "good but room to
+  # improve" rather than aspirational.
+  range: "70...90"
+
+  # INFORMATIONAL ONLY for v0.1.0. Codecov posts the PR comment with
+  # the project + patch delta and updates the badge, but does NOT
+  # post a failing GitHub status check on coverage regressions. We
+  # can flip `informational: false` once we have a stable post-release
+  # baseline and want regressions to block merges.
+  status:
+    project:
+      default:
+        target: auto          # baseline = coverage on the base branch
+        threshold: 1%         # tolerate ≤ 1% absolute drop before flagging
+        informational: true   # no CI failure on regression
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+
+# `_test.go` files don't appear in Go's coverprofile output — Go's
+# `cover` tooling instruments only the source-under-test, not the
+# tests themselves. The glob below is belt-and-braces in case the
+# convention ever changes. `bench/` is shell + Docker scaffolding
+# with no Go production code that would appear in a coverprofile;
+# excluded so the path doesn't appear in dashboards as 0% coverage.
+ignore:
+  - "bench/"
+  - "**/*_test.go"
+
+comment:
+  # Update the existing comment in place on each push rather than
+  # spamming new comments. `default` here means Codecov edits the
+  # most recent comment if the bot owns it, otherwise posts a new one.
+  behavior: default
+
+  # Post the comment even on the first PR with no base coverage,
+  # and even when coverage didn't change — both cases give reviewers
+  # a useful snapshot of where the file sits.
+  require_changes: false
+  require_base: false
