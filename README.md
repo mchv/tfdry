@@ -24,8 +24,12 @@ pre-commit hooks, CI pipelines, and editor integrations.
 
 ## Why tfdry?
 
-- **Fast.** Pure static analysis: ~10× quicker than `terraform validate`
-  on a typical module because there's no provider download or state lookup.
+- **Fast.** Pure-AST analysis — no provider gRPC, no schema lookup, no
+  init step. On the `bench/` fixtures: ~14× faster than `terraform validate`
+  and ~3.5× faster than `terraform fmt -check` on a 100-file module
+  (more on smaller ones). The speedup persists with `terraform init`
+  already warmed — it's the provider-load round-trip we skip, not just
+  the network.
 - **Focused.** Nine deterministic lint checks (E001–E008 + W001) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
@@ -246,6 +250,16 @@ repos:
 
 ### GitHub Actions
 
+The minimal recipe fails the build on lint violations:
+
+```yaml
+- name: tfdry
+  run: tfdry .
+```
+
+To keep a JSON report for downstream steps (artifact upload, `jq`
+filters), pipe through `tee`:
+
 ```yaml
 - name: tfdry
   shell: bash
@@ -254,17 +268,12 @@ repos:
     tfdry --json . | tee tfdry.json
 ```
 
-The `set -euo pipefail` line is important: without `pipefail`, the
-`tfdry --json . | tee tfdry.json` pipeline would mask tfdry's
-non-zero exit code (the pipeline's exit code would come from `tee`,
-which is almost always `0`). With `pipefail`, tfdry's exit code
-propagates — so a tool error (exit `2`) surfaces in CI as the tool
-error it is, and lint violations (exit `1`) fail the step directly.
-GitHub Actions' Linux shell default does set `pipefail` already, but
-being explicit keeps the recipe portable to other CI runners and to
-local `bash` invocations. The `tee` keeps a copy of the JSON for any
-downstream step (artifact upload, custom failure-mode rules in `jq`,
-etc.).
+The `set -o pipefail` line matters *because of the pipe*, not because
+of CI. Without it, the pipeline's exit code would come from `tee`
+(almost always `0`), masking tfdry's `1` (violations) or `2` (tool
+error). GitHub Actions' Linux shell default already enables
+`pipefail`, but stating it explicitly keeps the recipe portable to
+other CI runners and to local `bash` invocations.
 
 ### Other CI
 
