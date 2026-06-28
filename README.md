@@ -40,10 +40,27 @@ pre-commit hooks, CI pipelines, and editor integrations.
 
 ## Quick start
 
-```sh
-# Install
-go install github.com/mchv/tfdry@latest
+Install via Homebrew (macOS + Linux):
 
+```sh
+brew tap mchv/tfdry
+brew install --cask tfdry
+```
+
+Or via `go install`:
+
+```sh
+go install github.com/mchv/tfdry@latest
+```
+
+Or download a signed binary from the [latest release][rel] — every
+artifact is cosign-signed and ships with a Syft SBOM.
+
+[rel]: https://github.com/mchv/tfdry/releases/latest
+
+Then:
+
+```sh
 # Lint the current directory
 tfdry .
 

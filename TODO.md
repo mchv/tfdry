@@ -46,6 +46,7 @@ This file tracks two things:
       workflows: PR validation matrix (Linux + macOS + Windows),
       `codeql.yml`, `release.yml` driven by goreleaser with cosign
       keyless signing, Syft SBOMs, dependabot config.
+      *(In review.)*
 - [ ] **Phase C — Tag v0.1.0 + go public.** Create
       `mchv/homebrew-tfdry` tap repo, tag `v0.1.0`, verify the release
       workflow produces all artifacts and auto-PRs the tap formula,

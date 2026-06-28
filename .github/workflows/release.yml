@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Release pipeline. Triggered by tag pushes matching `v*.*.*` (semver
+# tags). Drives goreleaser to:
+#   - Build the binary for darwin-arm64, linux-amd64, linux-arm64,
+#     windows-amd64 (all CGO_ENABLED=0).
+#   - Inject the version into output.Version via -ldflags.
+#   - Produce tar.gz archives (Linux/macOS) and zip archives (Windows).
+#   - Generate SHA256 checksums.
+#   - Sign every artifact with cosign in keyless mode (uses the OIDC
+#     token from this workflow run; verifiable via `cosign verify-blob`).
+#   - Generate a Syft SBOM (SPDX JSON format) per archive.
+#   - Auto-commit an updated Homebrew formula to mchv/homebrew-tfdry.
+#
+# Prerequisites before the first tag fires:
+#   1. Create `mchv/homebrew-tfdry` as an empty public repository.
+#   2. Create a fine-grained PAT with write access to
+#      `mchv/homebrew-tfdry` (contents: read+write) and store it as the
+#      `HOMEBREW_TAP_GITHUB_TOKEN` secret on `mchv/tfdry`. The default
+#      GITHUB_TOKEN cannot push cross-repo.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# A release is a one-shot per tag — cancelling mid-run would leave
+# partial artifacts uploaded. Keep concurrency simple: serialise on the
+# workflow + tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # publish the GitHub release + upload artifacts
+  id-token: write       # cosign keyless signing via OIDC
+  attestations: write   # SLSA provenance attestations
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # goreleaser's changelog generation needs the full commit
+          # history, not just the tagged commit.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.3
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.6.0
+
+      - name: Install syft (for SBOMs)
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cross-repo write for the Homebrew formula commit. Configure
+          # this secret on the repo before the first tag fires (see the
+          # header comment for setup steps).
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

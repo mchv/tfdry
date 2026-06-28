@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dependabot keeps Go module dependencies and GitHub Actions versions
+# up to date. Weekly schedule so the PR noise is manageable for a
+# small project; bump to daily if a higher cadence becomes useful.
+#
+# Tool versions pinned in the Makefile (GOFUMPT_VERSION,
+# GOLANGCI_LINT_VERSION, GOVULNCHECK_VERSION) are NOT managed here —
+# they're Go-installed binaries, not module dependencies. Dependabot's
+# `gomod` ecosystem only tracks `go.mod` / `go.sum`. Updating the
+# Makefile pins is a manual step (or a future custom workflow).
+
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    labels:
+      - dependencies
+      - go
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    labels:
+      - dependencies
+      - github-actions

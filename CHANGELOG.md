@@ -25,6 +25,36 @@ Each release entry groups changes under the following headings (omitted if empty
   Latest Release, CI status, codecov, govulncheck, Conventional
   Commits, Contributor Covenant, Terraform compatibility, and a custom
   `SKILL.md` link.
+- **CI workflows** (`.github/workflows/`):
+  - `ci.yml` — runs `make verify` on every PR + main push across
+    Linux, macOS, and Windows runners with Go 1.26.3.
+  - `codeql.yml` — CodeQL security analysis with the
+    `security-extended` query pack, on every PR + weekly schedule.
+  - `govulncheck.yml` — daily scheduled vulnerability scan against
+    `vuln.go.dev` to catch CVE drift in dependencies between PRs.
+- **Release workflow** (`.github/workflows/release.yml`):
+  - Triggered by `v*.*.*` tag pushes.
+  - Uses goreleaser v2 to build `darwin-arm64`, `linux-amd64`,
+    `linux-arm64`, and `windows-amd64` binaries with version
+    injected via `-ldflags`.
+  - Signs every archive and the `checksums.txt` with cosign in
+    keyless mode (OIDC identity, no key management).
+  - Generates a Syft SBOM (SPDX JSON) per archive.
+  - Auto-commits an updated Homebrew cask formula to the
+    `mchv/homebrew-tfdry` tap on every release.
+- **Dependabot** (`.github/dependabot.yml`) — weekly updates for Go
+  module dependencies and GitHub Actions versions, with prefixed
+  commit messages (`build(deps): ...`) and the `dependencies` label.
+- **Pinned tool versions** in the Makefile so `make tools` produces
+  reproducible builds: `gofumpt@v0.10.0`, `golangci-lint@v2.12.2`,
+  `govulncheck@v1.4.0`. Dependabot bumps these via PRs against the
+  Makefile.
+
+### Changed
+
+- README "Install" section now leads with the Homebrew tap install
+  path alongside `go install` and a "download a signed binary"
+  pointer to GitHub Releases.
 
 ## [0.1.0] — TBD
 

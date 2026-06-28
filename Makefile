@@ -4,10 +4,11 @@ LDFLAGS := -ldflags="-s -w -X github.com/mchv/tfdry/output.Version=$(VERSION)"
 
 # Tool versions are pinned in the install targets so contributors can
 # bootstrap a clean environment with `make tools` before running
-# `make verify`. CI (PR B1) installs the same versions in its runner.
-GOFUMPT_VERSION       := latest
-GOLANGCI_LINT_VERSION := latest
-GOVULNCHECK_VERSION   := latest
+# `make verify`. CI installs the same versions in its runner.
+# Dependabot will bump these via PRs against this file.
+GOFUMPT_VERSION       := v0.10.0
+GOLANGCI_LINT_VERSION := v2.12.2
+GOVULNCHECK_VERSION   := v1.4.0
 
 .PHONY: help build test verify tools fmt fmt-check lint vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
 
