@@ -14,7 +14,7 @@ GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := v1.4.0
 MISSPELL_VERSION      := v0.7.0
 
-.PHONY: help build test verify tools tools-fmt tools-lint tools-vuln tools-misspell fmt fmt-check tidy-check lint lint-prose vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
+.PHONY: help build test test-race verify tools tools-fmt tools-lint tools-vuln tools-misspell fmt fmt-check tidy-check lint lint-prose vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
