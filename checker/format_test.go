@@ -8,7 +8,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -118,33 +117,5 @@ func TestFormatFile_DirectoryPath_ReturnsError(t *testing.T) {
 }
 
 // FormatFile when the parent dir is read-only: CreateTemp fails (EACCES).
-// Skipped on root (chmod restrictions don't apply) and on Windows (unreliable).
-func TestFormatFile_ReadOnlyParentDir_ReturnsError(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("read-only dir semantics differ on Windows")
-	}
-	if os.Geteuid() == 0 {
-		t.Skip("running as root — chmod 0555 doesn't restrict writes")
-	}
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "main.tf")
-	if err := os.WriteFile(path, []byte(`locals { x="y" }
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Make the parent read-only AFTER the source file exists. writeFormatted
-	// will open the source successfully but CreateTemp in the same dir fails.
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-
-	src, _ := os.ReadFile(path)
-	err := checker.FormatFile(context.Background(), path, src)
-	if err == nil {
-		t.Fatal("expected error when parent dir is read-only, got nil")
-	}
-}
+// Lives in format_unix_test.go (//go:build unix) because chmod 0o555
+// only restricts writes on POSIX systems.

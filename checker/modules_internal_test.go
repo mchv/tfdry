@@ -372,38 +372,9 @@ func TestParseModuleVarSchemas_NotADir_CachesNil(t *testing.T) {
 //   - body type-assertion failure (hclsyntax.ParseConfig guarantees
 //     *hclsyntax.Body for a non-erroring parse; unreachable in practice).
 
-// Unreadable file (chmod 0o000) must be skipped silently, not yield
-// a partial-result for a half-read file.
-func TestParseModuleVarSchemas_UnreadableFile_SkippedSilently(t *testing.T) {
-	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses file mode permissions; cannot exercise unreadable path")
-	}
-	dir := t.TempDir()
-	// One good file with a valid schema, one unreadable file. The
-	// good file must still be parsed even though the bad file is
-	// silently skipped.
-	if err := os.WriteFile(filepath.Join(dir, "good.tf"),
-		[]byte(`variable "good" { type = string }`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	badPath := filepath.Join(dir, "bad.tf")
-	if err := os.WriteFile(badPath, []byte(`variable "bad" { type = number }`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(badPath, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(badPath, 0o644) }) // let t.TempDir clean up
-
-	got := parseModuleVarSchemas(dir, nil)
-	if _, ok := got["good"]; !ok {
-		t.Errorf("good.tf must still be parsed: got %v", got)
-	}
-	if _, ok := got["bad"]; ok {
-		t.Errorf("bad.tf (unreadable) must NOT appear in schemas: got %v", got)
-	}
-}
+// Tests requiring POSIX-only behaviour (e.g. unreadable file via
+// chmod 0o000) live in modules_internal_unix_test.go to keep this
+// file cross-platform-clean.
 
 // Malformed HCL must be skipped silently. The parseModuleVarSchemas
 // path is used to type-check `module` blocks; a broken neighbour .tf
