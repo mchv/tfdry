@@ -62,3 +62,53 @@ func TestRun_Fmt_SymlinkArg_ExitTwo(t *testing.T) {
 		t.Errorf("stderr should mention symlinked-path rejection, got %q", stderr)
 	}
 }
+
+// TestRun_Fmt_WriteError_ExitTwo covers runFmtFile's single-file
+// WriteFormatted error path (main.go:566-572): the branch where
+// WriteFormatted returns a non-cancellation error after a successful
+// parse + format. The directory-mode equivalent
+// (TestFixFormat_WriteError_ReturnsE000 in checker/format_internal_test.go)
+// exercises the same defence at the inner-loop level; this test
+// pins the single-file CLI surface.
+//
+// Strategy: write a malformed-but-parseable .tf file (so it triggers
+// the rewrite path), then make the *parent directory* read-only
+// AFTER the file is read but before the atomic-rename's temp-file
+// creation. WriteFormatted creates `path.tmpXXXXXX` in the parent
+// dir, so a read-only parent breaks the temp-file step.
+//
+// Unix-only: relies on chmod 0o500 (rx, no w) on a directory
+// behaving as POSIX expects. Skips if running as root (root
+// bypasses directory permissions).
+func TestRun_Fmt_WriteError_ExitTwo(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions; cannot block writes")
+	}
+	dir := t.TempDir()
+	// Unformatted content — fmt will want to rewrite. Use deliberate
+	// extra whitespace and odd indentation so gofumpt's normaliser
+	// kicks in.
+	path := filepath.Join(dir, "needs_format.tf")
+	if err := os.WriteFile(path, []byte("locals{x=1}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Lock the parent dir read-only AFTER writing the file. fmt will
+	// read the file (still works — read permission is unaffected by
+	// the dir's write bit), reformat in memory, then try to create
+	// the temp file alongside the target — which needs the parent's
+	// write bit. That step fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	// Restore writable permissions so t.TempDir's RemoveAll can clean up.
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	code, _, stderr := runCLI("fmt", path)
+	if code != 2 {
+		t.Errorf("WriteFormatted error in single-file mode should exit 2, got %d (stderr=%q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "Error formatting") {
+		t.Errorf("stderr should contain 'Error formatting' prefix, got %q", stderr)
+	}
+}

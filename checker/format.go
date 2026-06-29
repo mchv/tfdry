@@ -255,11 +255,24 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 	return true, nil
 }
 
-// writeFormattedBeforeRename is a test hook for the TOCTOU swap race.
-// Production callers must leave it nil; tests may set it to simulate
-// a TOCTOU race by swapping the target path between the initial
-// regular-file checks and the final pre-Rename Lstat. The nil check
-// adds negligible overhead
-// (one indirect call per write) compared to the I/O cost of the actual
-// rewrite.
+// writeFormattedBeforeRename is an intentional test-only seam for the
+// TOCTOU symlink-swap defence (the os.Lstat check immediately below
+// gates os.Rename). Production callers MUST leave it nil; tests in
+// format_internal_test.go assign a swap function to it so the race
+// path is exercised deterministically rather than by flaky timing.
+//
+// This pattern (production package-level hook nil-checked on a hot
+// path) is used in Go's own stdlib (e.g. runtime test hooks, the
+// swappable crypto/rand.Reader). The cost is one nil-check + one
+// indirect call per write — negligible against the I/O cost of the
+// rewrite. The alternative (plumbing an interface seam through every
+// caller of writeFormatted) adds ~30-50 lines for negligible
+// architectural gain and reduces the surface area of the security
+// test.
+//
+// Do NOT convert this to a function-typed parameter, struct field, or
+// interface seam without considering that the TOCTOU test
+// (TestWriteFormatted_RaceToSymlink_RefusesRename) is the canonical
+// regression guard for a security defence; any refactor must preserve
+// the deterministic mid-write swap injection capability.
 var writeFormattedBeforeRename func(path string)

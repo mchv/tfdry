@@ -38,6 +38,21 @@ func main() {
 	// signal behaviour as documented on signal.NotifyContext), then
 	// exit with the captured code.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	// Test-only ready signal: when TFDRY_TEST_READY=1 is set, emit a
+	// stable marker to stderr so a parent process can deterministically
+	// wait for full startup — signal handlers armed and Go runtime
+	// past initialisation — rather than guessing with a time.Sleep.
+	// Production users don't set TFDRY_TEST_READY, so this is a no-op
+	// for them (one getenv call at startup, ~microseconds).
+	//
+	// The marker line ("tfdry: test-ready\n") is a stable contract
+	// consumed by sigint_test.go's TestRunCLI_SIGINT_HandlesGracefully.
+	// Do not change the wording without updating that test.
+	if os.Getenv("TFDRY_TEST_READY") == "1" {
+		_, _ = fmt.Fprintln(os.Stderr, "tfdry: test-ready")
+	}
+
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)

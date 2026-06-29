@@ -154,8 +154,22 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, dir)
+	// Append TFDRY_TEST_READY=1 so the binary emits a "tfdry: test-ready"
+	// line on stderr immediately after signal.NotifyContext arms its
+	// SIGINT handlers. We block until that line arrives before delivering
+	// SIGINT, eliminating the previous 500ms timing-based handshake and
+	// its flakiness on slow CI runners.
+	cmd.Env = append(os.Environ(), "TFDRY_TEST_READY=1")
 	stderr := new(strings.Builder)
-	cmd.Stderr = stderr
+	// We need to read stderr in real time (to detect the ready marker
+	// before sending the signal) AND keep the full transcript for the
+	// post-Wait assertions. The classic pattern: pipe + tee through a
+	// goroutine that copies into the Builder while we Scan for the
+	// marker.
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("cmd.StderrPipe: %v", err)
+	}
 	cmd.Stdout = nil // discard
 	// Put the child in its own process group (PGID = child PID).
 	// Setpgid:true affects which signals reach the child, not which
@@ -172,28 +186,58 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 		t.Fatalf("cmd.Start: %v", err)
 	}
 
-	// Give the binary enough time to (a) finish Go runtime startup,
-	// (b) call signal.NotifyContext, and (c) enter the parse loop.
-	// Empirical sweep on Apple Silicon: 100ms is occasionally racy
-	// against runtime startup (1/10 trials), 200ms is 10/10 reliable
-	// locally. We use 500ms here as CI-headroom: GitHub Actions
-	// runners can be 2-3× slower than a developer laptop on
-	// process-startup-bound workloads, and the consequence of an
-	// under-budget sleep is the process exiting with -1 (terminated
-	// by signal during Go startup) instead of 130, which causes
-	// false-positive test failures. The extra 300ms is paid once
-	// per test invocation and is invisible to a developer running
-	// the full suite locally.
+	// Wait for the ready marker on stderr. We use a goroutine to
+	// stream stderr into the Builder concurrently — if we read the
+	// pipe ourselves, lines after the marker (specifically the
+	// post-SIGINT "tfdry: interrupted" line) would be lost.
 	//
-	// If scheduling delays the process so much that work completes
-	// before the signal arrives, the process would exit 0 and the
-	// assertion below would correctly catch the false positive.
-	//
-	// Future: replace the time-based handshake with a structured
-	// "ready" signal from the binary (e.g., a stderr line read by
-	// the parent, or a Unix-socket ping). Tracked alongside PR B1's
-	// Windows SIGINT coverage.
-	time.Sleep(500 * time.Millisecond)
+	// Timeout budget: 10s. On the slowest CI runners observed, Go
+	// runtime startup + first stderr flush completes well under 2s,
+	// so a 10s cap is safe headroom that still fails fast if the
+	// binary is deadlocked or panicked before reaching the marker.
+	ready := make(chan struct{})
+	scanErr := make(chan error, 1)
+	go func() {
+		defer close(scanErr)
+		buf := make([]byte, 4096)
+		var seen bool
+		for {
+			n, err := stderrPipe.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				stderr.WriteString(chunk)
+				if !seen && strings.Contains(stderr.String(), "tfdry: test-ready\n") {
+					seen = true
+					close(ready)
+				}
+			}
+			if err != nil {
+				if !seen {
+					// EOF before marker — workload finished before the
+					// ready signal was emitted (impossible if binary is
+					// correct) OR the binary crashed at startup. Signal
+					// failure path.
+					scanErr <- fmt.Errorf("stderr closed before ready marker: %v", err)
+					if !seen {
+						close(ready) // unblock the main goroutine so it can fail
+					}
+				}
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-ready:
+		// Marker received; scanner is still streaming stderr in the
+		// background. Do NOT drain scanErr here — it doesn't close
+		// until subprocess exit, so reading it pre-SIGINT would
+		// deadlock against the kill we're about to send. We drain it
+		// after cmd.Wait below.
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("subprocess did not emit ready marker within 10s; stderr:\n%s", stderr.String())
+	}
 	// Send to the entire process group via negative PID (works because
 	// Setpgid:true above made the child a group leader with PGID = its
 	// own PID). Two reasons this is preferable to cmd.Process.Signal:
@@ -206,21 +250,27 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	//      kill path, not just the harness-isolation path.
 	//
 	// A non-nil error here means the subprocess exited before we got
-	// to signal it — i.e., the workload finished within the sleep
-	// budget. Fail loudly with diagnostic context so the failure mode
-	// is obvious rather than getting masked as a generic "process
-	// already finished" error.
+	// to signal it — i.e., the workload finished before we could even
+	// observe the ready marker + dispatch the kill. Fail loudly with
+	// diagnostic context so the failure mode is obvious rather than
+	// getting masked as a generic "process already finished" error.
 	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGINT); err != nil {
 		t.Fatalf("syscall.Kill(-%d, SIGINT): subprocess exited before signal could be delivered "+
-			"(workload of %d files × %d locals + %dms sleep too small for this machine, or process startup took longer than expected): %v",
-			cmd.Process.Pid, fileCount, localsPerFile, 500, err)
+			"(workload of %d files × %d locals too small for this machine?): %v",
+			cmd.Process.Pid, fileCount, localsPerFile, err)
 	}
 
-	err := cmd.Wait()
+	waitErr := cmd.Wait()
+	// Drain remaining stderr (the "tfdry: interrupted" line and any
+	// other output between the kill and the exit). The scanner
+	// goroutine's loop terminates on the EOF that comes with process
+	// exit; we wait for it to finish so the Builder has the full
+	// transcript before we assert.
+	<-scanErr
 
 	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		t.Fatalf("expected exec.ExitError, got err=%v (cmd exited normally? stderr=%q)", err, stderr.String())
+	if !errors.As(waitErr, &exitErr) {
+		t.Fatalf("expected exec.ExitError, got err=%v (cmd exited normally? stderr=%q)", waitErr, stderr.String())
 	}
 	if got := exitErr.ExitCode(); got != 130 {
 		t.Errorf("exit code = %d, want 130 (SIGINT). stderr:\n%s", got, stderr.String())

@@ -26,6 +26,13 @@ func runCLI(args ...string) (code int, stdout, stderr string) {
 }
 
 // writeTFDir creates a temp dir with the given files and returns its path.
+//
+// Note: this helper is intentionally duplicated in checker/checks_test.go
+// (same signature, same body). The two live in different test packages
+// (main vs checker_test), so true sharing would require an
+// internal/testutil package — overkill for two identical 5-line
+// helpers. If a third duplicate appears, promote to internal/testutil
+// rather than triplicating.
 func writeTFDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -41,6 +48,7 @@ func writeTFDir(t *testing.T, files map[string]string) string {
 // ── Exit codes ───────────────────────────────────────────────────────────────
 
 func TestRun_CleanDir_ExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `locals {
   x = "ok"
@@ -58,6 +66,7 @@ output "x" {
 }
 
 func TestRun_DirWithErrors_ExitOne(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `output "x" {
   value = local.does_not_exist
@@ -71,6 +80,7 @@ func TestRun_DirWithErrors_ExitOne(t *testing.T) {
 }
 
 func TestRun_OnlyWarnings_ExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `locals {
   unused = "just a warning"
@@ -86,6 +96,7 @@ func TestRun_OnlyWarnings_ExitZero(t *testing.T) {
 // ── --json flag ──────────────────────────────────────────────────────────────
 
 func TestRun_JSONOutput_Shape(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `output "x" { value = local.missing }`,
 	})
@@ -116,6 +127,7 @@ func TestRun_JSONOutput_Shape(t *testing.T) {
 // ── --fix flag ───────────────────────────────────────────────────────────────
 
 func TestRun_Fix_RewritesUnformattedFile(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": "locals{a=\"x\"}\n",
 	})
@@ -130,6 +142,7 @@ func TestRun_Fix_RewritesUnformattedFile(t *testing.T) {
 }
 
 func TestRun_FixWithChecksFilterExcludingE008_DoesNotFix(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": "locals{a=\"x\"}\n",
 	})
@@ -150,6 +163,7 @@ func TestRun_FixWithChecksFilterExcludingE008_DoesNotFix(t *testing.T) {
 // `fixed[v.File]`; the new flow avoids the redundant Format work entirely
 // by not emitting E008 from Run in the first place.)
 func TestRun_FixSuccessfullyFixed_NoE008InOutput(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": "locals{a=\"x\"}\n",
 	})
@@ -187,6 +201,7 @@ func TestRun_FixSuccessfullyFixed_NoE008InOutput(t *testing.T) {
 // The fix is to skip Run entirely when the filtered set is empty AND
 // the original was non-empty.
 func TestRun_FixWithChecksOnlyE008_DoesNotRunOtherChecks(t *testing.T) {
+	t.Parallel()
 	// File has a duplicate-local (would trigger E002) AND is unformatted
 	// (E008). User asked for ONLY E008, so E002 must NOT be reported.
 	dir := writeTFDir(t, map[string]string{
@@ -217,6 +232,7 @@ func TestRun_FixWithChecksOnlyE008_DoesNotRunOtherChecks(t *testing.T) {
 // Regression guard for the inverse: --checks=E001,E008 --fix must still
 // run E001 (it's in the filter) but not E002 etc. and must still fix E008.
 func TestRun_FixWithMultiChecksIncludingE008_OnlyRunsRequested(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": "locals{a=\"x\"}\nlocals { a = \"y\" }\n",
 	})
@@ -242,6 +258,7 @@ func TestRun_FixWithMultiChecksIncludingE008_OnlyRunsRequested(t *testing.T) {
 // ── --checks= edge cases ─────────────────────────────────────────────────────
 
 func TestRun_ChecksEmpty_ExitTwo(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := runCLI("--checks=", ".")
 	if code != 2 {
 		t.Fatalf("expected exit 2 for empty --checks=, got %d", code)
@@ -252,6 +269,7 @@ func TestRun_ChecksEmpty_ExitTwo(t *testing.T) {
 }
 
 func TestRun_ChecksUnknownCode_ExitTwo(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := runCLI("--checks=E999", ".")
 	if code != 2 {
 		t.Fatalf("expected exit 2 for unknown check, got %d", code)
@@ -262,6 +280,7 @@ func TestRun_ChecksUnknownCode_ExitTwo(t *testing.T) {
 }
 
 func TestRun_ChecksFilters_OnlyEmitsRequestedCodes(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `output "x" { value = local.missing }
 locals {
@@ -287,6 +306,7 @@ locals {
 // `--checks=E003 --checks=W001` should be equivalent. Previously each flag
 // re-initialised checksFilter via make(), silently dropping the prior set.
 func TestRun_ChecksRepeated_Accumulate(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `output "x" { value = local.missing }
 locals {
@@ -311,6 +331,7 @@ locals {
 // ── describe subcommand ──────────────────────────────────────────────────────
 
 func TestRun_Describe_ListsChecks(t *testing.T) {
+	t.Parallel()
 	code, stdout, _ := runCLI("describe")
 	if code != 0 {
 		t.Fatalf("describe should exit 0, got %d", code)
@@ -323,6 +344,7 @@ func TestRun_Describe_ListsChecks(t *testing.T) {
 }
 
 func TestRun_DescribeJSON_ParsesAndContainsAllCodes(t *testing.T) {
+	t.Parallel()
 	code, stdout, _ := runCLI("describe", "--json")
 	if code != 0 {
 		t.Fatalf("describe --json should exit 0, got %d", code)
@@ -351,6 +373,7 @@ func TestRun_DescribeJSON_ParsesAndContainsAllCodes(t *testing.T) {
 // ── version subcommand ───────────────────────────────────────────────────────
 
 func TestRun_Version_PrintsVersion(t *testing.T) {
+	t.Parallel()
 	code, stdout, _ := runCLI("version")
 	if code != 0 {
 		t.Fatalf("version should exit 0, got %d", code)
@@ -363,6 +386,7 @@ func TestRun_Version_PrintsVersion(t *testing.T) {
 // ── default dir argument ─────────────────────────────────────────────────────
 
 func TestRun_DefaultDirIsCurrent(t *testing.T) {
+	t.Parallel()
 	// No args → defaults to ".". cwd is the project root which has no .tf files.
 	// Exit code depends on whether checker reports any errors on an empty/non-tf dir.
 	// We just verify the call returns and doesn't panic.
@@ -380,6 +404,7 @@ const (
 )
 
 func TestRun_Fmt_RewritesUnformattedFile_PrintsName_ExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})
 	code, stdout, _ := runCLI("fmt", dir)
 	if code != 0 {
@@ -395,6 +420,7 @@ func TestRun_Fmt_RewritesUnformattedFile_PrintsName_ExitZero(t *testing.T) {
 }
 
 func TestRun_Fmt_AlreadyFormatted_NoOutput_ExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"clean.tf": fmtCleanTF})
 	code, stdout, _ := runCLI("fmt", dir)
 	if code != 0 {
@@ -406,6 +432,7 @@ func TestRun_Fmt_AlreadyFormatted_NoOutput_ExitZero(t *testing.T) {
 }
 
 func TestRun_FmtCheck_PrintsButDoesntRewrite_ExitThree(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})
 	code, stdout, _ := runCLI("fmt", "-check", dir)
 	if code != 3 {
@@ -421,6 +448,7 @@ func TestRun_FmtCheck_PrintsButDoesntRewrite_ExitThree(t *testing.T) {
 }
 
 func TestRun_FmtCheck_Clean_ExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"clean.tf": fmtCleanTF})
 	code, stdout, _ := runCLI("fmt", "-check", dir)
 	if code != 0 {
@@ -432,6 +460,7 @@ func TestRun_FmtCheck_Clean_ExitZero(t *testing.T) {
 }
 
 func TestRun_FmtRecursive_FormatsNestedFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Top-level dirty.
 	if err := os.WriteFile(filepath.Join(dir, "dirty.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
@@ -469,6 +498,7 @@ func TestRun_FmtRecursive_FormatsNestedFiles(t *testing.T) {
 }
 
 func TestRun_FmtRecursive_SkipsHiddenDirs(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for _, sub := range []string{".terraform", ".git", ".hidden"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
@@ -496,6 +526,7 @@ func TestRun_FmtRecursive_SkipsHiddenDirs(t *testing.T) {
 }
 
 func TestRun_FmtRecursiveCheck_DirtyInSubdir_ExitThree(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "clean.tf"), []byte(fmtCleanTF), 0o644); err != nil {
 		t.Fatal(err)
@@ -525,6 +556,7 @@ func TestRun_FmtRecursiveCheck_DirtyInSubdir_ExitThree(t *testing.T) {
 // Unknown flags should produce an error and exit code 2 (tool error),
 // not be silently treated as a directory path.
 func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		args []string
@@ -553,6 +585,7 @@ func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
 // formatting — it would lint the dir and exit accordingly). Reject as a
 // usage error.
 func TestRun_FmtFlagsOutsideFmt_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"a.tf": `locals { a = "x" }`})
 	cases := []struct {
 		name string
@@ -581,6 +614,7 @@ func TestRun_FmtFlagsOutsideFmt_ExitTwo(t *testing.T) {
 
 // Regression: -check and -recursive must STILL work under `fmt`.
 func TestRun_FmtFlagsWithFmtSubcommand_StillWork(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"a.tf": fmtCleanTF})
 	cases := [][]string{
 		{"fmt", "-check", dir},
@@ -605,6 +639,7 @@ func TestRun_FmtFlagsWithFmtSubcommand_StillWork(t *testing.T) {
 // flags that don't apply to the chosen subcommand should reject early
 // with exit 2 instead of letting the user think they applied.
 func TestRun_LintFlagsWithFmtSubcommand_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"a.tf": fmtCleanTF})
 	cases := [][]string{
 		// --json doesn't apply (fmt has its own stdout contract: filenames).
@@ -633,6 +668,7 @@ func TestRun_LintFlagsWithFmtSubcommand_ExitTwo(t *testing.T) {
 
 // Known flags and the bare dir argument should all keep working.
 func TestRun_KnownFlagsStillWork(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": `locals {
   a = "x"
@@ -660,6 +696,7 @@ func TestRun_KnownFlagsStillWork(t *testing.T) {
 
 // `tfdry dir1 dir2` should error rather than silently using dir2.
 func TestRun_MultiplePositionalDirs_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir1 := writeTFDir(t, map[string]string{"a.tf": `locals { x = "y" }` + "\n"})
 	dir2 := writeTFDir(t, map[string]string{"b.tf": `locals { y = "z" }` + "\n"})
 	code, _, stderr := runCLI(dir1, dir2)
@@ -673,6 +710,7 @@ func TestRun_MultiplePositionalDirs_ExitTwo(t *testing.T) {
 
 // Extra args after `describe` / `version` should error.
 func TestRun_ExtrasAfterSubcommand_ExitTwo(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		args []string
@@ -700,6 +738,7 @@ func TestRun_ExtrasAfterSubcommand_ExitTwo(t *testing.T) {
 // Previously the bare basename was printed (e.g. `bad.tf`) — when the same
 // filename exists under multiple subdirs the message is ambiguous.
 func TestRun_FmtRecursive_ParseError_PrefixesSubdirPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "infra", "prod"), 0o755); err != nil {
 		t.Fatal(err)
@@ -728,6 +767,7 @@ func TestRun_FmtRecursive_ParseError_PrefixesSubdirPath(t *testing.T) {
 // `.tf` filenames. The fix routes those values through the same
 // Sanitize helper used by output.NewReport.
 func TestRun_Fmt_SanitizesFilenameInOutput(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filesystem rejects most control chars in filenames")
 	}
@@ -764,6 +804,7 @@ func TestRun_Fmt_SanitizesFilenameInOutput(t *testing.T) {
 // invalid .tf whose name contains ESC must not propagate that ESC to
 // stderr.
 func TestRun_FmtRecursive_SanitizesParseErrorPath(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filesystem rejects most control chars in filenames")
 	}
@@ -886,6 +927,7 @@ func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
 
 // `tfdry fmt path1 path2` should also error — fmt takes at most one path.
 func TestRun_FmtMultiplePaths_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir1 := writeTFDir(t, nil)
 	dir2 := writeTFDir(t, nil)
 	code, _, stderr := runCLI("fmt", dir1, dir2)
@@ -902,6 +944,7 @@ func TestRun_FmtMultiplePaths_ExitTwo(t *testing.T) {
 
 // fmt on a dirty file path: rewrite, print path, exit 0.
 func TestRun_Fmt_SingleDirtyFile_RewritesPrintsExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})
 	path := filepath.Join(dir, "dirty.tf")
 	code, stdout, stderr := runCLI("fmt", path)
@@ -919,6 +962,7 @@ func TestRun_Fmt_SingleDirtyFile_RewritesPrintsExitZero(t *testing.T) {
 
 // fmt on an already-clean file: no output, exit 0, file unchanged.
 func TestRun_Fmt_SingleCleanFile_NoOutputExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"clean.tf": fmtCleanTF})
 	path := filepath.Join(dir, "clean.tf")
 	code, stdout, stderr := runCLI("fmt", path)
@@ -936,6 +980,7 @@ func TestRun_Fmt_SingleCleanFile_NoOutputExitZero(t *testing.T) {
 
 // fmt -check on a dirty file: print path, exit 3, file unchanged.
 func TestRun_FmtCheck_SingleDirtyFile_PrintsExitThree(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})
 	path := filepath.Join(dir, "dirty.tf")
 	code, stdout, stderr := runCLI("fmt", "-check", path)
@@ -953,6 +998,7 @@ func TestRun_FmtCheck_SingleDirtyFile_PrintsExitThree(t *testing.T) {
 
 // fmt -check on a clean file: no output, exit 0.
 func TestRun_FmtCheck_SingleCleanFile_NoOutputExitZero(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"clean.tf": fmtCleanTF})
 	path := filepath.Join(dir, "clean.tf")
 	code, stdout, stderr := runCLI("fmt", "-check", path)
@@ -970,6 +1016,7 @@ func TestRun_FmtCheck_SingleCleanFile_NoOutputExitZero(t *testing.T) {
 // 0 even when bad.tf has invalid HCL — the user is left thinking the
 // file was successfully formatted when it wasn't.
 func TestRun_Fmt_SingleFileWithSyntaxError_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"bad.tf": `resource "x" "y" { @@@`, // invalid HCL
 	})
@@ -991,6 +1038,7 @@ func TestRun_Fmt_SingleFileWithSyntaxError_ExitTwo(t *testing.T) {
 // Same for fmt -check: a syntax-broken file is a tool error (exit 2),
 // not a "would change" condition (exit 3).
 func TestRun_FmtCheck_SingleFileWithSyntaxError_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
 		"bad.tf": `resource "x" "y" { @@@`,
 	})
@@ -1006,6 +1054,7 @@ func TestRun_FmtCheck_SingleFileWithSyntaxError_ExitTwo(t *testing.T) {
 
 // fmt on a non-existent path: exit 2 with a useful error message.
 func TestRun_Fmt_NonExistentPath_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, nil)
 	missing := filepath.Join(dir, "does-not-exist.tf")
 	code, _, stderr := runCLI("fmt", missing)
@@ -1019,6 +1068,7 @@ func TestRun_Fmt_NonExistentPath_ExitTwo(t *testing.T) {
 
 // fmt -recursive on a file path is meaningless; reject with exit 2.
 func TestRun_Fmt_RecursiveOnFile_ExitTwo(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"a.tf": fmtCleanTF})
 	path := filepath.Join(dir, "a.tf")
 	code, _, stderr := runCLI("fmt", "-recursive", path)
@@ -1034,6 +1084,7 @@ func TestRun_Fmt_RecursiveOnFile_ExitTwo(t *testing.T) {
 // rename would later destroy the symlink. The Lstat precheck rejects
 // symlinks consistently across platforms before any I/O against the target.
 func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
 	realPath := filepath.Join(dir, "real.tf")
 	link := filepath.Join(dir, "link.tf")
@@ -1071,6 +1122,7 @@ func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 // Read-only path: fmt -check on a symlink should also reject (no read
 // follows, no exit-3 false positive, just a usage error).
 func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
 	realPath := filepath.Join(dir, "real.tf")
 	link := filepath.Join(dir, "link.tf")
@@ -1091,6 +1143,7 @@ func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
 // with file-path symlink rejection (round 4 decision: avoid TOCTOU and
 // surprising traversal into unintended directories).
 func TestRun_Fmt_SymlinkedDirRoot_Rejected(t *testing.T) {
+	t.Parallel()
 	realDir := writeTFDir(t, map[string]string{"main.tf": fmtDirtyTF})
 	parent := t.TempDir()
 	link := filepath.Join(parent, "linked")
@@ -1146,6 +1199,7 @@ func (e errWriter) Write(p []byte) (int, error) { return 0, e.err }
 // behaviour of the main `--json` path. Previously the error was swallowed via
 // `_ = output.WriteChecksJSON(...)`, causing silent success on broken pipe.
 func TestRun_DescribeJSON_PropagatesWriteError(t *testing.T) {
+	t.Parallel()
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
 	code := run(context.Background(), []string{"describe", "--json"}, stdout, &stderr)
@@ -1161,6 +1215,7 @@ func TestRun_DescribeJSON_PropagatesWriteError(t *testing.T) {
 // Symmetry test: the main `--json` path already returns 2 on stdout failure;
 // guard that behaviour against regression too.
 func TestRun_MainJSON_PropagatesWriteError(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
@@ -1175,6 +1230,7 @@ func TestRun_MainJSON_PropagatesWriteError(t *testing.T) {
 // same exit code semantics as the JSON path, otherwise success is reported
 // even when stdout is broken (closed pipe, full disk, etc.).
 func TestRun_MainHuman_PropagatesWriteError(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
@@ -1191,6 +1247,7 @@ func TestRun_MainHuman_PropagatesWriteError(t *testing.T) {
 // No-violations branch: the early "No violations found" path also
 // writes to stdout and must propagate write errors.
 func TestRun_MainHuman_NoViolationsBranch_PropagatesWriteError(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
@@ -1206,6 +1263,7 @@ func TestRun_MainHuman_NoViolationsBranch_PropagatesWriteError(t *testing.T) {
 // JSON path propagated write errors but text path silently continued.
 // Symmetric fix.
 func TestRun_DescribeText_PropagatesWriteError(t *testing.T) {
+	t.Parallel()
 	stdout := errWriter{err: io.ErrClosedPipe}
 	var stderr bytes.Buffer
 	code := run(context.Background(), []string{"describe"}, stdout, &stderr)
@@ -1239,6 +1297,7 @@ func (s shortWriter) Write(p []byte) (int, error) {
 // spec-violating Writer that silently truncated would slip through and
 // report success.
 func TestRun_DescribeText_DetectsShortWrite(t *testing.T) {
+	t.Parallel()
 	stdout := shortWriter{accept: 5} // accept first 5 bytes only
 	var stderr bytes.Buffer
 	code := run(context.Background(), []string{"describe"}, stdout, &stderr)
@@ -1254,6 +1313,7 @@ func TestRun_DescribeText_DetectsShortWrite(t *testing.T) {
 // Same property for the main human-output path. WriteHuman previously
 // used `w.Write(b.Bytes())` which couldn't surface short writes either.
 func TestRun_MainHuman_DetectsShortWrite(t *testing.T) {
+	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"main.tf": `locals { x = "y" }` + "\n"})
 	stdout := shortWriter{accept: 5}
 	var stderr bytes.Buffer

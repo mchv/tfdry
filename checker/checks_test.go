@@ -15,7 +15,15 @@ import (
 	"github.com/mchv/tfdry/checker"
 )
 
-func writeFiles(t *testing.T, files map[string]string) string {
+// writeTFDir creates a temp dir with the given files and returns its path.
+//
+// Note: this helper is intentionally duplicated from main_test.go's
+// writeTFDir. The two live in different test packages
+// (checker_test vs main_test), so true sharing would require an
+// internal/testutil package — overkill for two identical 5-line
+// helpers. If a third duplicate appears, promote to internal/testutil
+// rather than triplicating.
+func writeTFDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range files {
@@ -28,7 +36,7 @@ func writeFiles(t *testing.T, files map[string]string) string {
 
 func run(t *testing.T, files map[string]string) []checker.Violation {
 	t.Helper()
-	dir := writeFiles(t, files)
+	dir := writeTFDir(t, files)
 	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
 	violations := slices.Concat(parseViolations, mustRun(context.Background(), parsed, nil, dir))
 	return violations
@@ -246,7 +254,7 @@ output "o" { value = local.name }
 // CheckSet filtering
 func TestCheckSetFilter(t *testing.T) {
 	t.Parallel()
-	dir := writeFiles(t, map[string]string{
+	dir := writeTFDir(t, map[string]string{
 		"main.tf": `
 locals { unused = "foo" }
 output "o" { value = local.typo }
@@ -305,7 +313,7 @@ output "o3" { value = local.typo3 }
 	}
 	first := run(t, files)
 	// Re-run on same content via a fresh dir to get a second ordering.
-	dir2 := writeFiles(t, files)
+	dir2 := writeTFDir(t, files)
 	parsed2, pv2, _ := checker.ParseDir(context.Background(), dir2)
 	second := slices.Concat(pv2, mustRun(context.Background(), parsed2, nil, dir2))
 
@@ -638,7 +646,7 @@ func TestParseDir_FileTooLarge_EmitsE000(t *testing.T) {
 // E000/E001 are emitted even when --checks= restricts to other codes.
 func TestParseViolations_AlwaysEmitted_WithRestrictiveChecks(t *testing.T) {
 	t.Parallel()
-	dir := writeFiles(t, map[string]string{
+	dir := writeTFDir(t, map[string]string{
 		"bad.tf": `resource "x" "y" { bad syntax !!!`,
 	})
 	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
@@ -1388,7 +1396,7 @@ module "m" {
 // We verify this at the Run level: with --checks=E003, E008 must not appear.
 func TestRun_FixNotCalledWhenE008Excluded(t *testing.T) {
 	t.Parallel()
-	dir := writeFiles(t, map[string]string{
+	dir := writeTFDir(t, map[string]string{
 		"main.tf": "locals {\na=\"foo\"\n}\n",
 	})
 	files, _, _ := checker.ParseDir(context.Background(), dir)
