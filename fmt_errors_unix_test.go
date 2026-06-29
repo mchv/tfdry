@@ -12,16 +12,15 @@ import (
 	"testing"
 )
 
-// runFmtFile must reject symlinks upfront with exit 2. The earlier
-// symlink check at runFmt (main.go:397) catches symlinked arguments
-// to `fmt`; runFmtFile's own Lstat check (main.go:510-513) is a
-// defensive belt-and-braces guard for callers that bypass runFmt.
+// TestRun_Fmt_SymlinkArg_ExitTwo exercises runFmt's outer symlink
+// rejection (main.go:396-399) — the entry-point check that catches
+// symlinks passed as `tfdry fmt` arguments. The inner runFmtFile
+// Lstat check (main.go:510-513) is structurally similar but
+// unreachable from the CLI surface because runFmt fires first; it
+// stays as defensive belt-and-braces for callers that bypass runFmt
+// (none exist today; future caller graph could).
 //
-// We can only observe the outer check from the CLI surface, which
-// is what callers see. The inner check is exercised by code-path
-// audit and stays uncovered via tests by design.
-//
-// Without these checks, `-check` would follow the symlink at
+// Without the outer check, `-check` would follow the symlink at
 // os.ReadFile and exit 3 if the target was dirty, while a write pass
 // would later destroy the symlink on Windows (where O_NOFOLLOW is a
 // no-op). Reject upfront so the failure mode is identical across
@@ -31,7 +30,7 @@ import (
 // default; the equivalent path on Windows is the post-open IsRegular()
 // check in checker/nofollow_windows.go, which the TODO.md "Proper
 // Windows symlink protection" entry tracks separately.
-func TestRun_FmtFile_Symlink_ExitTwo(t *testing.T) {
+func TestRun_Fmt_SymlinkArg_ExitTwo(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
