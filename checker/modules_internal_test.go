@@ -276,9 +276,12 @@ func TestResolveExprTypeRecursive_Cycle(t *testing.T) {
 	}
 }
 
-// parseModuleVarSchemas cache hit: second call with the same dir + cache
-// returns the cached value, not a re-read. Asserts via cache state — the
-// cache entry must exist after the first call.
+// parseModuleVarSchemas cache hit: the first call must populate the
+// cache (proving it would return the cached value on subsequent calls
+// without redoing I/O). The cache-presence check is positioned
+// immediately after the first call so the assertion matches its
+// stated intent — checking after the second call would prove only
+// that *some* call populated the cache, not that the first did.
 func TestParseModuleVarSchemas_CacheHit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -287,14 +290,21 @@ func TestParseModuleVarSchemas_CacheHit(t *testing.T) {
 		t.Fatal(err)
 	}
 	cache := make(map[string]map[string]TypeSchema)
+
+	// First call: must read the dir AND populate the cache.
 	first := parseModuleVarSchemas(dir, cache)
 	if _, ok := first["foo"]; !ok {
 		t.Fatalf("first call: missing 'foo' in result %v", first)
 	}
-	second := parseModuleVarSchemas(dir, cache)
 	if _, hit := cache[dir]; !hit {
-		t.Errorf("cache entry missing after first call; second would redo I/O")
+		t.Fatalf("cache entry missing after FIRST call; subsequent calls would redo I/O")
 	}
+
+	// Second call: must return the cached value (we don't have a
+	// direct hook to assert "no I/O happened" without an interface
+	// seam, but the result must equal the first call's result and
+	// the cache entry must still be there).
+	second := parseModuleVarSchemas(dir, cache)
 	if len(second) != len(first) {
 		t.Errorf("second call returned %d entries, want %d", len(second), len(first))
 	}

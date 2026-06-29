@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mchv/tfdry/checker"
@@ -192,18 +194,75 @@ func TestParseDir_ContextBackground_NoRegression(t *testing.T) {
 // must rely on the real context.Cancel / Deadline semantics. The
 // alternative (running cancel() from a goroutine to race against the
 // loop) is non-deterministic and would flake.
+//
+// `calls` is an atomic counter so the wrapper is safe to call from
+// multiple goroutines. The production callers in ParseDir today only
+// call wrapper.Err() from the main goroutine (workers use the derived
+// errgroup gctx), but a future refactor that adds a worker-side parent
+// check would silently introduce a data race — locked in by
+// TestNthErrCtx_ConcurrentErrCallsAreRaceFree below.
 type nthErrCtx struct {
 	context.Context
-	n     int
-	calls int
+	n     int32
+	calls atomic.Int32
 }
 
 func (c *nthErrCtx) Err() error {
-	c.calls++
-	if c.calls >= c.n {
+	if c.calls.Add(1) >= c.n {
 		return context.Canceled
 	}
 	return nil
+}
+
+// TestNthErrCtx_ConcurrentErrCallsAreRaceFree pins the test helper's
+// concurrency contract: Err() must be safe to call from multiple
+// goroutines simultaneously.
+//
+// In the current production code, the only concurrent caller of a
+// wrapped ctx in ParseDir is errgroup's internal propagation —
+// propagateCancel calls parent.Err() at most once when setting up the
+// derived gctx, and that happens on the goroutine that called
+// errgroup.WithContext (the main test goroutine in our case). Workers
+// call gctx.Err() (the derived ctx), not the wrapper. So the wrapper
+// is in practice serially accessed.
+//
+// However, this is an implementation detail of errgroup + the stdlib
+// context propagation machinery, and a future Go version (or a future
+// tfdry refactor that adds a worker-side parent-ctx check) could call
+// the wrapper's Err() from multiple goroutines. Without atomic, that
+// would be a data race that the race detector only catches when the
+// scheduler interleaves the increments — flaky CI on a unit-test
+// helper is worse than a tiny atomic overhead.
+//
+// This test exists to fail loudly under -race if the wrapper is ever
+// re-introduced without atomic semantics; it's the regression guard.
+func TestNthErrCtx_ConcurrentErrCallsAreRaceFree(t *testing.T) {
+	t.Parallel()
+	c := &nthErrCtx{Context: context.Background(), n: 1_000_000}
+	const goroutines = 64
+	const callsPer = 1000
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < callsPer; j++ {
+				_ = c.Err()
+			}
+		}()
+	}
+	wg.Wait()
+	// We don't assert on c.calls' final value (race-y to read without
+	// the same atomic discipline); the assertion is that -race reports
+	// no data race. Sanity-check the cancellation logic still fires
+	// once we cross n.
+	c2 := &nthErrCtx{Context: context.Background(), n: 2}
+	if err := c2.Err(); err != nil {
+		t.Errorf("nthErrCtx(n=2) first call: err=%v, want nil", err)
+	}
+	if err := c2.Err(); !errors.Is(err, context.Canceled) {
+		t.Errorf("nthErrCtx(n=2) second call: err=%v, want Canceled", err)
+	}
 }
 
 func TestFormatFile_RespectsContext(t *testing.T) {
