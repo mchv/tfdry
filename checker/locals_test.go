@@ -53,8 +53,18 @@ func TestInferFuncReturnType(t *testing.T) {
 		{"", TypeUnknown},
 	}
 	for _, c := range cases {
-		if got := inferFuncReturnType(c.name); got != c.want {
-			t.Errorf("inferFuncReturnType(%q) = %v, want %v", c.name, got, c.want)
+		c := c
+		// Empty input ("") needs a placeholder subtest name — Go accepts
+		// empty t.Run names but renders them as "#00" which is opaque.
+		name := c.name
+		if name == "" {
+			name = "<empty>"
 		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := inferFuncReturnType(c.name); got != c.want {
+				t.Errorf("inferFuncReturnType(%q) = %v, want %v", c.name, got, c.want)
+			}
+		})
 	}
 }

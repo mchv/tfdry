@@ -353,3 +353,183 @@ func TestParseModuleVarSchemas_NotADir_CachesNil(t *testing.T) {
 		t.Errorf("cache entry = %v, want nil (negative caching)", cached)
 	}
 }
+
+// ── P1.4: defensive continue paths in parseModuleVarSchemas ──────────────────
+//
+// The integration-level E006/E007 tests exercise parseModuleVarSchemas
+// indirectly via Run(). These tests target the individual `continue`
+// branches inside the per-entry loop (modules.go:104-148) so a
+// regression in one of them surfaces as a sharp, targeted failure
+// instead of a confusing E006 false-positive in an integration test.
+//
+// Untested branches that stay uncovered by design:
+//   - Stat error after a successful Open (essentially unreachable on
+//     normal filesystems; would need fault injection).
+//   - readAll error after a successful Stat (same as above).
+//   - Oversize file (> 10 MiB) — already covered via parseDir's
+//     TestRun_E000_FileExceedsSize_ExitTwo and writing a 10 MiB
+//     fixture per test bloats CI.
+//   - body type-assertion failure (hclsyntax.ParseConfig guarantees
+//     *hclsyntax.Body for a non-erroring parse; unreachable in practice).
+
+// Unreadable file (chmod 0o000) must be skipped silently, not yield
+// a partial-result for a half-read file.
+func TestParseModuleVarSchemas_UnreadableFile_SkippedSilently(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file mode permissions; cannot exercise unreadable path")
+	}
+	dir := t.TempDir()
+	// One good file with a valid schema, one unreadable file. The
+	// good file must still be parsed even though the bad file is
+	// silently skipped.
+	if err := os.WriteFile(filepath.Join(dir, "good.tf"),
+		[]byte(`variable "good" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	badPath := filepath.Join(dir, "bad.tf")
+	if err := os.WriteFile(badPath, []byte(`variable "bad" { type = number }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(badPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(badPath, 0o644) }) // let t.TempDir clean up
+
+	got := parseModuleVarSchemas(dir, nil)
+	if _, ok := got["good"]; !ok {
+		t.Errorf("good.tf must still be parsed: got %v", got)
+	}
+	if _, ok := got["bad"]; ok {
+		t.Errorf("bad.tf (unreadable) must NOT appear in schemas: got %v", got)
+	}
+}
+
+// Malformed HCL must be skipped silently. The parseModuleVarSchemas
+// path is used to type-check `module` blocks; a broken neighbour .tf
+// shouldn't cascade into spurious E006s on the well-formed files.
+func TestParseModuleVarSchemas_ParseError_SkippedSilently(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "good.tf"),
+		[]byte(`variable "good" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Intentionally unterminated block.
+	if err := os.WriteFile(filepath.Join(dir, "broken.tf"),
+		[]byte(`variable "broken" { type = `), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := parseModuleVarSchemas(dir, nil)
+	if _, ok := got["good"]; !ok {
+		t.Errorf("good.tf must still be parsed: got %v", got)
+	}
+	if _, ok := got["broken"]; ok {
+		t.Errorf("broken.tf (parse error) must NOT appear in schemas: got %v", got)
+	}
+}
+
+// Variable block without a `type` attribute should map to SchemaUnknown
+// (so compareExprToSchema can't generate E006 against a module variable
+// whose declared shape is unknown).
+func TestParseModuleVarSchemas_VariableWithoutType_ReturnsUnknown(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vars.tf"),
+		[]byte(`variable "untyped" { default = "x" }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := parseModuleVarSchemas(dir, nil)
+	schema, ok := got["untyped"]
+	if !ok {
+		t.Fatalf("variable 'untyped' missing from schemas: got %v", got)
+	}
+	if schema.Kind != SchemaUnknown {
+		t.Errorf("variable without `type` should map to SchemaUnknown, got %v", schema.Kind)
+	}
+}
+
+// Non-`variable` blocks (resource, output, module, ...) must be
+// skipped silently — only `variable` blocks contribute to the schema
+// map. Bug-shape: a typo in the block-type check could silently
+// accept resource blocks and produce noise.
+func TestParseModuleVarSchemas_NonVariableBlocks_Skipped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	src := `
+variable "real" { type = string }
+
+output "x" { value = "y" }
+
+resource "aws_s3_bucket" "b" {
+  bucket = "name"
+}
+
+module "m" {
+  source = "./m"
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "mixed.tf"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := parseModuleVarSchemas(dir, nil)
+	if len(got) != 1 {
+		t.Errorf("expected exactly 1 schema entry (the variable), got %d: %v", len(got), got)
+	}
+	if _, ok := got["real"]; !ok {
+		t.Errorf("variable 'real' missing: got %v", got)
+	}
+}
+
+// variable block with the wrong number of labels (e.g. zero or two)
+// must be skipped silently. Real HCL requires exactly one label for
+// a variable block, but a malformed module file shouldn't crash the
+// parser.
+func TestParseModuleVarSchemas_MalformedVariableLabels_Skipped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Zero labels — `variable {}` parses (HCL doesn't reject it at
+	// syntactic level; it's a Terraform semantic error). Must skip.
+	if err := os.WriteFile(filepath.Join(dir, "noname.tf"),
+		[]byte(`variable { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Valid neighbour to confirm the loop continued.
+	if err := os.WriteFile(filepath.Join(dir, "valid.tf"),
+		[]byte(`variable "v" { type = number }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := parseModuleVarSchemas(dir, nil)
+	if _, ok := got["v"]; !ok {
+		t.Errorf("valid.tf's 'v' variable missing: got %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected exactly 1 schema entry (only the well-formed variable), got %d: %v", len(got), got)
+	}
+}
+
+// Non-.tf files in the module dir must be skipped silently — the
+// loop's filepath.Ext filter is the gate. A file named "README" or
+// "vars.tf.json" must not be opened.
+func TestParseModuleVarSchemas_NonTFFiles_Skipped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vars.tf"),
+		[]byte(`variable "v" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// These must NOT be parsed:
+	for _, name := range []string{"README.md", "vars.tf.json", "config.yaml", ".hidden"} {
+		if err := os.WriteFile(filepath.Join(dir, name),
+			[]byte(`variable "should_not_appear" { type = bool }`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := parseModuleVarSchemas(dir, nil)
+	if _, ok := got["should_not_appear"]; ok {
+		t.Errorf("non-.tf files must not contribute to schemas: got %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected exactly 1 entry (from vars.tf), got %d: %v", len(got), got)
+	}
+}
