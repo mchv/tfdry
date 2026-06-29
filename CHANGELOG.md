@@ -27,7 +27,10 @@ Each release entry groups changes under the following headings (omitted if empty
   `SKILL.md` link.
 - **CI workflows** (`.github/workflows/`):
   - `ci.yml` — runs `make verify` on every PR + main push across
-    Linux, macOS, and Windows runners with Go 1.26.3.
+    Linux, macOS, and Windows runners with Go 1.26.3. The Linux job
+    additionally generates a coverprofile and uploads it to Codecov
+    via the official `codecov/codecov-action` (informational only —
+    PR comments with delta + badge, no CI failures on regression).
   - `codeql.yml` — CodeQL security analysis with the
     `security-extended` query pack, on every PR + weekly schedule.
   - `govulncheck.yml` — daily scheduled vulnerability scan against
@@ -131,10 +134,15 @@ shipped; for the per-PR breakdown see the merged PRs in the
 ### Tooling
 
 - **`make verify`** runs the full pre-PR pipeline: `gofumpt -l .`,
-  `go vet`, `golangci-lint run` (with 11 linters), `go test -race`,
-  `govulncheck`, cross-builds for `darwin-arm64`, `linux-amd64`,
-  `linux-arm64`, `windows-amd64`, plus a marker-policy check that
-  refuses `C##` / `G##` review-finding markers in `.go` source.
+  `go mod tidy -diff` (asserts go.mod / go.sum stay canonical),
+  `go vet`, `golangci-lint run` (with 11 linters), `make lint-prose`
+  (`misspell -locale UK` against `README.md`, `CHANGELOG.md`, the
+  other root `.md` docs, `Makefile`, `.github/workflows/*.yml`
+  except `codeql.yml`, `.github/dependabot.yml`, and
+  `.goreleaser.yaml`), `go test -race`, `govulncheck`, cross-builds
+  for `darwin-arm64`, `linux-amd64`, `linux-arm64`, `windows-amd64`,
+  plus a marker-policy check that refuses `C##` / `G##`
+  review-finding markers in `.go` source.
 - **`.golangci.yml`** with `staticcheck`, `errcheck`, `gosec`,
   `revive`, `gocritic`, `unconvert`, `unused`, `ineffassign`,
   `misspell` (UK locale), `noctx`, and `unparam`.

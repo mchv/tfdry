@@ -61,3 +61,51 @@ jobs:
         # ships GNU find/grep with the runner image.
         shell: bash
         run: make verify
+
+      # Coverage is generated once on the ubuntu runner only — the
+      # coverprofile is platform-agnostic for our code (no //go:build
+      # gates affect the measured statements meaningfully), so running
+      # it on three OSes would just burn macOS / windows minutes for an
+      # identical report. Runs AFTER make verify so a verify failure is
+      # not masked by a coverage upload error.
+      #
+      # `-covermode=atomic` is required when combined with `-race`
+      # (which we don't pass here, but atomic stays correct for any
+      # future race-mode coverage run and is the mode Codecov expects
+      # for accurate hit counts).
+      - name: Generate coverage report
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+
+      # codecov-action v5 supports both token-required (private repo)
+      # and tokenless (public repo) flows. The token stays harmless
+      # once tfdry flips public — it just becomes optional rather than
+      # required.
+      #
+      # Two independent non-blocking guards:
+      #
+      #   1. `fail_ci_if_error: false` (action input) — tells the
+      #      codecov-action's own logic not to exit non-zero when
+      #      the upload itself fails (network error, invalid token,
+      #      Codecov API outage).
+      #   2. `continue-on-error: true` (step-level, GitHub Actions
+      #      native) — tells the runner to mark the job as
+      #      successful even if THIS STEP exits non-zero. Belt-and-
+      #      braces for failure modes the action input doesn't cover
+      #      (e.g. action bootstrap failure, runner can't download
+      #      the action, secret unavailable on fork PRs, future
+      #      changes to the input's semantics).
+      #
+      # Together they make "Codecov outage / misconfig must not fail
+      # an otherwise-green CI run" deterministic regardless of which
+      # layer the failure surfaces at. The step shows ✗ in the UI on
+      # failure but the job stays green — matching the advisory intent.
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

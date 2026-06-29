@@ -132,19 +132,6 @@ it up or wants to discuss it.
   potentially unenforced — verified false empirically, but the gap
   in dedicated coverage is real.
 
-- **Lint British English in `.md` prose, not just `.go` comments.**
-  golangci-lint's `misspell` plugin only operates on `.go` files —
-  prose drift in `.md` docs (the larger surface area for v0.1.0)
-  slips through. PR #7 surfaced four US-spelled words in CHANGELOG
-  / SECURITY (`defense`, `sanitization`) that the linter never had
-  a chance to flag. Add a `make lint-prose` target (or fold into
-  `make verify`) that runs `misspell -locale=UK` against `**/*.md`
-  with the same identifier ignore-list as the Go side. Could also
-  catch other UK/US drift: `color/colour`, `organize/organise`,
-  `analyze/analyse`, `recognize/recognise`, etc. Tiny target — the
-  misspell binary is already installed via `make tools` once
-  promoted from a transitive golangci-lint dep.
-
 - **Additional benchmark coverage**
   - Small-scale benchmark (2–5 files) to measure goroutine overhead
     vs. sequential

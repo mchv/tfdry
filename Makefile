@@ -12,8 +12,9 @@ LDFLAGS := -ldflags="-s -w -X github.com/mchv/tfdry/output.Version=$(VERSION)"
 GOFUMPT_VERSION       := v0.10.0
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := v1.4.0
+MISSPELL_VERSION      := v0.7.0
 
-.PHONY: help build test verify tools tools-fmt tools-lint tools-vuln fmt fmt-check lint vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
+.PHONY: help build test test-race verify tools tools-fmt tools-lint tools-vuln tools-misspell fmt fmt-check tidy-check lint lint-prose vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -31,9 +32,9 @@ test: ## Run unit tests across all packages.
 # in PR B1's pipeline. Composed of fine-grained sub-targets so contributors
 # can run pieces in isolation when debugging a specific finding.
 
-verify: fmt-check vet lint check-no-markers test-race vuln cross-build ## Run the full pre-PR verification pipeline.
+verify: fmt-check tidy-check vet lint lint-prose check-no-markers test-race vuln cross-build ## Run the full pre-PR verification pipeline.
 
-tools: tools-fmt tools-lint tools-vuln ## Install every dev tool used by `make verify` (gofumpt, golangci-lint, govulncheck) into GOPATH/bin.
+tools: tools-fmt tools-lint tools-vuln tools-misspell ## Install every dev tool used by `make verify` (gofumpt, golangci-lint, govulncheck, misspell) into GOPATH/bin.
 
 tools-fmt: ## Install gofumpt only.
 	go install mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
@@ -43,6 +44,9 @@ tools-lint: ## Install golangci-lint only.
 
 tools-vuln: ## Install govulncheck only — used by the standalone scheduled vuln-scan workflow.
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+tools-misspell: ## Install misspell only — used by the lint-prose target to lint .md / Makefile / workflow prose.
+	go install github.com/golangci/misspell/cmd/misspell@$(MISSPELL_VERSION)
 
 fmt: ## Apply gofumpt formatting in place. Use this to fix `make fmt-check` failures.
 	@command -v gofumpt >/dev/null 2>&1 || { \
@@ -65,6 +69,50 @@ fmt-check: ## Verify gofumpt formatting is clean. Fails with a diff if not.
 		exit 1; \
 	fi
 
+tidy-check: ## Verify go.mod / go.sum are canonical. Fails with a diff if `go mod tidy` would change anything.
+	@# `go mod tidy -diff` (Go 1.23+) is the read-only version of
+	@# `go mod tidy`: prints the diff and exits non-zero if go.mod /
+	@# go.sum aren't canonical, without rewriting them. Two reasons we
+	@# want this in `make verify` rather than relying on the goreleaser
+	@# `before.hooks` check alone:
+	@#
+	@#   1. Shift-left. PRs catch un-tidy state at review time rather
+	@#      than waiting for a tag to fail. The goreleaser hook stays
+	@#      as defense-in-depth at release time.
+	@#   2. Artefact-vs-tag reproducibility. If un-tidy go.mod ever
+	@#      slipped to main and got tagged, a contributor cloning the
+	@#      tag and running `go build` would produce a slightly different
+	@#      binary than the published one (because `go build` resolves
+	@#      against go.sum, which would carry stale entries). Catching
+	@#      it pre-merge eliminates that drift category entirely.
+	@#
+	@# The error path uses `printf` (not `echo`) because the captured
+	@# diff output can contain leading dashes (`---`, `+++`) that some
+	@# `echo` implementations treat as flags. `printf '%s\n'` is portable
+	@# and treats every argument as literal text.
+	@#
+	@# The failure message stays mode-agnostic ("tidy-check failed")
+	@# because non-zero exit from `go mod tidy -diff` covers several
+	@# scenarios beyond "needs tidying":
+	@#   * Un-tidy go.mod (the common case) → output is a unified diff
+	@#   * Go < 1.23 lacking the -diff flag → "flag provided but not defined"
+	@#   * Module download / proxy errors → network-shaped messages
+	@# The captured output above tells the user which mode they hit; the
+	@# hint below explains what to do for each.
+	@if ! out=$$(go mod tidy -diff 2>&1); then \
+		printf 'tidy-check failed:\n\n%s\n\n' "$$out"; \
+		printf '%s\n' \
+			'If the output above is a unified diff against go.mod / go.sum,' \
+			"run 'go mod tidy' locally and commit the resulting go.mod / go.sum." \
+			'' \
+			"If it reports 'flag provided but not defined: -diff', your local Go" \
+			'is older than 1.23 — upgrade to match the `go` line in go.mod.' \
+			'' \
+			'Other non-zero exits (e.g. module-download or proxy failures) are' \
+			'reported verbatim above.'; \
+		exit 1; \
+	fi
+
 vet: ## Run go vet.
 	go vet ./...
 
@@ -74,6 +122,68 @@ lint: ## Run golangci-lint with the project's config.
 		exit 1; \
 	}
 	golangci-lint run ./...
+
+# ----- Prose linting --------------------------------------------------------
+# golangci-lint's `misspell` plugin only scans .go files, so prose drift
+# in user-facing docs (README, CHANGELOG, ...) and in build/CI config
+# comments (Makefile, .github/workflows/, .goreleaser.yaml) slipped
+# through until this target. `misspell -locale UK -error` flags US
+# spellings and exits non-zero, mirroring the Go-side convention.
+#
+# Files we scan: README.md, CHANGELOG.md, CONTRIBUTING.md, SECURITY.md,
+# SKILL.md, Makefile, the workflow YAMLs (except codeql.yml — see
+# below), .github/dependabot.yml, and .goreleaser.yaml.
+#
+# Files we deliberately skip, with rationale:
+#
+#   * CODE_OF_CONDUCT.md — Contributor Covenant 2.1 verbatim text. We
+#     ship the upstream wording unchanged so contributors recognise the
+#     canonical document; rewriting US spellings inside a boilerplate
+#     clause would muddy that contract for zero benefit.
+#
+#   * .github/workflows/codeql.yml — the step names come from CodeQL's
+#     own product naming. They're identifiers in GitHub's UI / matrix
+#     logs, not free prose.
+#
+#   * TODO.md — internal planning prose that intentionally references
+#     US/UK drift pairs as worked examples (mentioning both spellings
+#     of common words). Linting it would either require word-level
+#     whitelists so broad they defeat the purpose, or per-line
+#     suppression markers misspell doesn't support. Internal scratch
+#     doc, low public visibility, acceptable to skip.
+#
+# Ignore-rules (`-i`): mirror .golangci.yml's Go-side list (identifier
+# references that misspell would otherwise want to rewrite — notably
+# the public `output.Sanitize` API and Go-stdlib-adjacent terms like
+# `initialize`/`artifact`). Plus `defense` for the documented
+# idiomatic exception (the security-engineering phrase that uses the
+# US spelling everywhere even in UK-localised writing — see
+# .golangci.yml's misspell block for the rationale). `defense` is
+# broader than strictly necessary (would whitelist the word in every
+# context, not just inside the phrase), but misspell only supports
+# word-level ignores and the word is rare enough in tfdry's
+# tech-focused prose that the false-negative risk is acceptable.
+PROSE_FILES := \
+	README.md \
+	CHANGELOG.md \
+	CONTRIBUTING.md \
+	SECURITY.md \
+	SKILL.md \
+	Makefile \
+	.github/workflows/ci.yml \
+	.github/workflows/govulncheck.yml \
+	.github/workflows/release.yml \
+	.github/dependabot.yml \
+	.goreleaser.yaml
+
+PROSE_IGNORE := sanitize,sanitized,sanitizes,sanitizing,behavior,initialize,categorizes,unrecognized,artifact,artifacts,defense
+
+lint-prose: ## Lint Markdown / Makefile / workflow / goreleaser prose for US→UK drift.
+	@command -v misspell >/dev/null 2>&1 || { \
+		echo "misspell not found in PATH. Run 'make tools' first."; \
+		exit 1; \
+	}
+	@misspell -locale UK -error -i '$(PROSE_IGNORE)' $(PROSE_FILES)
 
 test-race: ## Run tests with the race detector + a fresh build (no cache).
 	go test ./... -race -count=1
