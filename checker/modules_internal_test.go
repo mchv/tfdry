@@ -123,10 +123,12 @@ func parseExprForTest(t *testing.T, src string) hclsyntax.Expression {
 	return body.Attributes["x"].Expr
 }
 
-// Tiny indirection to keep the top-of-file imports identical to the
-// pre-existing helpers — hclv2ParseConfigForTest wraps the
-// hcl/v2/hclsyntax.ParseConfig signature so the test file doesn't have
-// to import hcl.Pos at the top (still imported via the wrapper).
+// hclv2ParseConfigForTest hides the hcl.Pos{Line: 1, Column: 1}
+// boilerplate from callers — hcl/v2 is already imported at the top
+// of this file (for hcl.File / hcl.Diagnostics types), so the
+// wrapper doesn't save an import. The win is purely call-site
+// brevity: tests can write `hclv2ParseConfigForTest(src, name)`
+// instead of repeating the always-(1,1) start position.
 func hclv2ParseConfigForTest(src []byte, filename string) (*hcl.File, hcl.Diagnostics) {
 	return hclsyntax.ParseConfig(src, filename, hcl.Pos{Line: 1, Column: 1})
 }
@@ -290,6 +292,14 @@ func TestResolveExprTypeRecursive_Cycle(t *testing.T) {
 // immediately after the first call so the assertion matches its
 // stated intent — checking after the second call would prove only
 // that *some* call populated the cache, not that the first did.
+//
+// The second call asserts cache identity via a mutation marker: we
+// insert a sentinel key into `first` BEFORE calling again. If `second`
+// is the SAME map instance returned from cache, the marker is visible;
+// if `second` is a freshly-built map (i.e. parseModuleVarSchemas
+// re-parsed the directory despite the cache entry being present),
+// the marker is absent. Length-comparison alone would miss a bug that
+// re-parses but still rebuilds an equivalently-sized map.
 func TestParseModuleVarSchemas_CacheHit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -308,13 +318,16 @@ func TestParseModuleVarSchemas_CacheHit(t *testing.T) {
 		t.Fatalf("cache entry missing after FIRST call; subsequent calls would redo I/O")
 	}
 
-	// Second call: must return the cached value (we don't have a
-	// direct hook to assert "no I/O happened" without an interface
-	// seam, but the result must equal the first call's result and
-	// the cache entry must still be there).
+	// Second call: must return the same map instance (proving cache
+	// hit, not a re-parse that coincidentally produces an
+	// equivalently-shaped map). The mutation marker is a sentinel key
+	// the production parser would never emit — its presence in the
+	// second result is observable iff first === second.
+	const markerKey = "__cache_hit_assertion_marker__"
+	first[markerKey] = TypeSchema{Kind: SchemaBool}
 	second := parseModuleVarSchemas(dir, cache)
-	if len(second) != len(first) {
-		t.Errorf("second call returned %d entries, want %d", len(second), len(first))
+	if _, ok := second[markerKey]; !ok {
+		t.Errorf("second call returned a fresh map (cache miss); want cached map instance")
 	}
 }
 
