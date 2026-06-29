@@ -19,9 +19,11 @@
 package main_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +33,13 @@ import (
 	"testing"
 	"time"
 )
+
+// readyMarker is the stable test-only stderr line that the binary emits
+// after signal.NotifyContext arms its handlers (gated by TFDRY_TEST_READY=1
+// in the environment, see main.go). The trailing newline is part of the
+// marker — used as a frame delimiter so partial reads can't false-match
+// on a substring like "tfdry: test-ready-something-else".
+const readyMarker = "tfdry: test-ready\n"
 
 // tfdryBin builds the tfdry binary once for SIGINT-style subprocess tests
 // and returns its path. The binary lives in a temporary directory that
@@ -223,27 +232,65 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 		defer close(scanErr)
 		buf := make([]byte, 4096)
 		var seen bool
+		// markerBuf is a bounded rolling window over the most recently
+		// read bytes — large enough to detect the marker even when it
+		// straddles a chunk boundary. We do NOT scan the full
+		// accumulated `stderr` builder on every chunk: that's O(N²)
+		// over total bytes and unnecessary, since the marker arrives
+		// within the first few stderr reads in practice. Once the
+		// marker is observed (`seen=true`), we drop markerBuf
+		// entirely and stop scanning.
+		//
+		// Trim policy: keep the trailing (len(readyMarker)-1) bytes
+		// after each non-matching scan so a marker that crosses the
+		// next read boundary is still detectable. Memory ceiling per
+		// goroutine: ~4 KiB (one chunk) + 17 bytes (tail).
+		var markerBuf []byte
+
 		for {
 			n, err := stderrPipe.Read(buf)
 			if n > 0 {
-				chunk := string(buf[:n])
-				stderr.WriteString(chunk)
-				if !seen && strings.Contains(stderr.String(), "tfdry: test-ready\n") {
-					seen = true
-					close(ready)
+				chunk := buf[:n]
+				stderr.Write(chunk)
+				if !seen {
+					markerBuf = append(markerBuf, chunk...)
+					if bytes.Contains(markerBuf, []byte(readyMarker)) {
+						seen = true
+						close(ready)
+						markerBuf = nil // free; further scanning is unnecessary
+					} else if len(markerBuf) >= len(readyMarker) {
+						// Keep only enough trailing bytes to detect a
+						// marker that straddles the next read boundary.
+						markerBuf = markerBuf[len(markerBuf)-(len(readyMarker)-1):]
+					}
 				}
 			}
 			if err != nil {
-				if !seen {
-					// EOF before marker — workload finished before the
-					// ready signal was emitted (impossible if binary is
-					// correct) OR the binary crashed at startup. Send
-					// error THEN close(ready) so main's non-blocking
-					// post-ready check observes the value reliably.
-					scanErr <- fmt.Errorf("stderr closed before ready marker: %w", err)
-					close(ready)
+				switch {
+				case errors.Is(err, io.EOF):
+					// Normal pipe close: subprocess exited. If we
+					// never saw the marker, the binary completed all
+					// its work or crashed before reaching the
+					// notify-ready point — surface as failure.
+					if !seen {
+						scanErr <- fmt.Errorf("stderr closed before ready marker: %w", err)
+						close(ready)
+					}
+					return
+				default:
+					// Anomalous read error (broken pipe, I/O failure,
+					// context cancellation propagated to the pipe).
+					// Report regardless of `seen`. Without this, a
+					// post-marker read error would be silently
+					// swallowed, and the post-Wait drain on
+					// `<-scanErr` would receive nil — letting the
+					// test continue with a partial stderr transcript.
+					scanErr <- fmt.Errorf("stderr read error (seen=%v): %w", seen, err)
+					if !seen {
+						close(ready)
+					}
+					return
 				}
-				return
 			}
 		}
 	}()
