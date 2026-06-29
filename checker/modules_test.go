@@ -180,21 +180,22 @@ func TestParseTypeSchema_TemplateWrapExpr(t *testing.T) {
 // TestTypeSchema_label covers all branches of TypeSchema.label().
 func TestTypeSchema_label(t *testing.T) {
 	cases := []struct {
+		name string
 		kind SchemaKind
 		want string
 	}{
-		{SchemaString, "string"},
-		{SchemaNumber, "number"},
-		{SchemaBool, "bool"},
-		{SchemaObject, "object"},
-		{SchemaList, "list"},
-		{SchemaMap, "map"},
-		{SchemaSet, "set"},
-		{SchemaUnknown, "unknown"},
-		{SchemaKind(99), "unknown"}, // default branch
+		{"string", SchemaString, "string"},
+		{"number", SchemaNumber, "number"},
+		{"bool", SchemaBool, "bool"},
+		{"object", SchemaObject, "object"},
+		{"list", SchemaList, "list"},
+		{"map", SchemaMap, "map"},
+		{"set", SchemaSet, "set"},
+		{"explicit_unknown", SchemaUnknown, "unknown"},
+		{"out_of_range_defaults_to_unknown", SchemaKind(99), "unknown"}, // default branch
 	}
 	for _, tc := range cases {
-		t.Run(tc.want, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			s := TypeSchema{Kind: tc.kind}
 			if got := s.label(); got != tc.want {
 				t.Errorf("TypeSchema{Kind:%v}.label() = %q, want %q", tc.kind, got, tc.want)

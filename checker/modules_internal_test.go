@@ -175,22 +175,30 @@ func TestSchemaKindToVarType_ExhaustiveCases(t *testing.T) {
 // TestTypeSchema_label in modules_test.go tests the TypeSchema.label()
 // method; this one tests the underlying schemaKindLabel helper which
 // production code calls directly in some places.
+//
+// Subtest names are derived from the *input* SchemaKind, not the
+// expected output, so the default-branch (SchemaString → "unknown")
+// and explicit-unknown (SchemaUnknown → "unknown") cases don't
+// collide. With colliding names Go appends "#01" to disambiguate,
+// but failure attribution becomes ambiguous and `go test -run` can't
+// target individual cases.
 func TestSchemaKindLabel_ExhaustiveCases(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
+		name string
 		in   SchemaKind
 		want string
 	}{
-		{SchemaList, "list"},
-		{SchemaMap, "map"},
-		{SchemaSet, "set"},
-		{SchemaObject, "object"},
-		{SchemaString, "unknown"},  // default branch
-		{SchemaUnknown, "unknown"}, // explicit unknown
+		{"list", SchemaList, "list"},
+		{"map", SchemaMap, "map"},
+		{"set", SchemaSet, "set"},
+		{"object", SchemaObject, "object"},
+		{"string_input_defaults_to_unknown", SchemaString, "unknown"}, // default branch
+		{"explicit_unknown", SchemaUnknown, "unknown"},
 	}
 	for _, tc := range cases {
 		tc := tc
-		t.Run(tc.want, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := schemaKindLabel(tc.in); got != tc.want {
 				t.Errorf("schemaKindLabel(%v) = %q, want %q", tc.in, got, tc.want)

@@ -9,18 +9,19 @@ import "testing"
 // default fallthrough for unrecognised values.
 func TestVarType_Label(t *testing.T) {
 	cases := []struct {
+		name string
 		t    VarType
 		want string
 	}{
-		{TypeString, "string"},
-		{TypeNumber, "number"},
-		{TypeBool, "bool"},
-		{TypeObject, "object"},
-		{TypeUnknown, "unknown"},
-		{VarType(99), "unknown"}, // default branch
+		{"string", TypeString, "string"},
+		{"number", TypeNumber, "number"},
+		{"bool", TypeBool, "bool"},
+		{"object", TypeObject, "object"},
+		{"explicit_unknown", TypeUnknown, "unknown"},
+		{"out_of_range_defaults_to_unknown", VarType(99), "unknown"}, // default branch
 	}
 	for _, tc := range cases {
-		t.Run(tc.want, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.t.Label(); got != tc.want {
 				t.Errorf("VarType(%v).Label() = %q, want %q", tc.t, got, tc.want)
 			}
