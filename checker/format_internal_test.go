@@ -100,7 +100,10 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	if err := os.WriteFile(otherTarget, []byte("locals { y = 2 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	original, _ := os.ReadFile(otherTarget)
+	original, err := os.ReadFile(otherTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Install the hook: between the initial check and the final rename,
 	// the hook removes `target` and replaces it with a symlink to
@@ -132,7 +135,10 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	//      file from elsewhere.tf), but it could also have followed the
 	//      symlink in some implementations. Either way, otherTarget's
 	//      content must be unchanged.
-	final, _ := os.ReadFile(otherTarget)
+	final, err := os.ReadFile(otherTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(final, original) {
 		t.Errorf("symlink target file was modified despite TOCTOU check; got %q want %q",
 			string(final), string(original))

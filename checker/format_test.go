@@ -64,14 +64,22 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
   a="foo"
 }
 `)
-	os.WriteFile(path, unformatted, 0o644)
+	if err := os.WriteFile(path, unformatted, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	src, _ := os.ReadFile(path)
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := checker.FormatFile(context.Background(), path, src); err != nil {
 		t.Fatalf("FormatFile error: %v", err)
 	}
 
-	got, _ := os.ReadFile(path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// After formatting, a = "foo" should be properly spaced.
 	if bytes.Equal(got, unformatted) {
 		t.Fatal("FormatFile did not change the file content")
@@ -80,7 +88,10 @@ func TestFormatFile_WritesFormattedContent(t *testing.T) {
 	if err := checker.FormatFile(context.Background(), path, got); err != nil {
 		t.Fatal(err)
 	}
-	got2, _ := os.ReadFile(path)
+	got2, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(got, got2) {
 		t.Fatal("FormatFile is not idempotent")
 	}

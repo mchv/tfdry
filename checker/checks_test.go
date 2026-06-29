@@ -1588,7 +1588,10 @@ func TestFixFormat_RewritesFiles(t *testing.T) {
 	if len(vs) != 0 {
 		t.Fatalf("expected no violations, got %v", vs)
 	}
-	got, _ := os.ReadFile(path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if bytes.Equal(got, unformatted) {
 		t.Fatal("FixFormat did not rewrite the file")
 	}
@@ -2036,7 +2039,10 @@ func TestFormatFile_Symlink_ReturnsError(t *testing.T) {
 	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
-	src, _ := os.ReadFile(realPath)
+	src, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := checker.FormatFile(context.Background(), link, src); err == nil {
 		t.Fatal("expected error when formatting a symlink path, got nil")
 	}
