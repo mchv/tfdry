@@ -135,7 +135,10 @@ func TestRun_Fix_RewritesUnformattedFile(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit 0 after --fix, got %d", code)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "main.tf"))
+	got, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(got), "a = \"x\"") {
 		t.Errorf("file was not reformatted; got: %q", got)
 	}
@@ -146,9 +149,15 @@ func TestRun_FixWithChecksFilterExcludingE008_DoesNotFix(t *testing.T) {
 	dir := writeTFDir(t, map[string]string{
 		"main.tf": "locals{a=\"x\"}\n",
 	})
-	original, _ := os.ReadFile(filepath.Join(dir, "main.tf"))
+	original, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	code, _, _ := runCLI("--fix", "--checks=E001,E002", dir)
-	got, _ := os.ReadFile(filepath.Join(dir, "main.tf"))
+	got, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(original, got) {
 		t.Errorf("--fix should not run when E008 is excluded by --checks=, but file was modified")
 	}
@@ -185,7 +194,10 @@ func TestRun_FixSuccessfullyFixed_NoE008InOutput(t *testing.T) {
 		}
 	}
 	// And the file must actually be reformatted.
-	contents, _ := os.ReadFile(filepath.Join(dir, "main.tf"))
+	contents, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(contents), "a = \"x\"") {
 		t.Errorf("file was not reformatted: %q", contents)
 	}
@@ -413,7 +425,10 @@ func TestRun_Fmt_RewritesUnformattedFile_PrintsName_ExitZero(t *testing.T) {
 	if !strings.Contains(stdout, "dirty.tf") {
 		t.Fatalf("expected dirty.tf in output, got %q", stdout)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "dirty.tf"))
+	got, err := os.ReadFile(filepath.Join(dir, "dirty.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(got) != fmtCleanTF {
 		t.Fatalf("file not formatted:\nexpected: %q\ngot:      %q", fmtCleanTF, string(got))
 	}
@@ -441,7 +456,10 @@ func TestRun_FmtCheck_PrintsButDoesntRewrite_ExitThree(t *testing.T) {
 	if !strings.Contains(stdout, "dirty.tf") {
 		t.Fatalf("expected dirty.tf in output, got %q", stdout)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "dirty.tf"))
+	got, err := os.ReadFile(filepath.Join(dir, "dirty.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(got) != fmtDirtyTF {
 		t.Fatalf("fmt -check must not rewrite the file, got %q", string(got))
 	}
@@ -490,7 +508,10 @@ func TestRun_FmtRecursive_FormatsNestedFiles(t *testing.T) {
 		}
 	}
 	for _, p := range []string{"dirty.tf", "subdir/nested.tf", "subdir/deep/deep.tf"} {
-		got, _ := os.ReadFile(filepath.Join(dir, p))
+		got, err := os.ReadFile(filepath.Join(dir, p))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(got) != fmtCleanTF {
 			t.Errorf("%s not formatted: %q", p, string(got))
 		}
@@ -518,7 +539,10 @@ func TestRun_FmtRecursive_SkipsHiddenDirs(t *testing.T) {
 			t.Errorf("expected %s/x.tf to be skipped, got output: %q", sub, stdout)
 		}
 		// And must not be rewritten.
-		got, _ := os.ReadFile(filepath.Join(dir, sub, "x.tf"))
+		got, err := os.ReadFile(filepath.Join(dir, sub, "x.tf"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(got) != fmtDirtyTF {
 			t.Errorf("file in hidden dir %s was modified: %q", sub, string(got))
 		}
@@ -545,7 +569,10 @@ func TestRun_FmtRecursiveCheck_DirtyInSubdir_ExitThree(t *testing.T) {
 		t.Errorf("expected subdir/nested.tf in stdout, got %q", stdout)
 	}
 	// Must not be rewritten.
-	got, _ := os.ReadFile(filepath.Join(dir, "subdir", "nested.tf"))
+	got, err := os.ReadFile(filepath.Join(dir, "subdir", "nested.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(got) != fmtDirtyTF {
 		t.Errorf("file rewritten despite -check: %q", string(got))
 	}
@@ -954,7 +981,10 @@ func TestRun_Fmt_SingleDirtyFile_RewritesPrintsExitZero(t *testing.T) {
 	if !strings.Contains(stdout, path) && !strings.Contains(stdout, "dirty.tf") {
 		t.Errorf("expected file path in stdout, got %q", stdout)
 	}
-	got, _ := os.ReadFile(path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(got) != fmtCleanTF {
 		t.Fatalf("file not formatted:\nexpected: %q\ngot:      %q", fmtCleanTF, string(got))
 	}
@@ -972,7 +1002,10 @@ func TestRun_Fmt_SingleCleanFile_NoOutputExitZero(t *testing.T) {
 	if strings.TrimSpace(stdout) != "" {
 		t.Errorf("expected no stdout on already-formatted file, got %q", stdout)
 	}
-	got, _ := os.ReadFile(path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(got) != fmtCleanTF {
 		t.Fatalf("clean file should not be modified, got %q", string(got))
 	}
@@ -990,7 +1023,10 @@ func TestRun_FmtCheck_SingleDirtyFile_PrintsExitThree(t *testing.T) {
 	if !strings.Contains(stdout, "dirty.tf") {
 		t.Errorf("expected dirty.tf in stdout, got %q", stdout)
 	}
-	got, _ := os.ReadFile(path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(got) != fmtDirtyTF {
 		t.Fatalf("fmt -check must not modify the file; got %q", string(got))
 	}
@@ -1029,7 +1065,10 @@ func TestRun_Fmt_SingleFileWithSyntaxError_ExitTwo(t *testing.T) {
 		t.Error("expected an error message on stderr explaining the syntax error")
 	}
 	// The original bad content must NOT have been overwritten.
-	contents, _ := os.ReadFile(path)
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(contents) != `resource "x" "y" { @@@` {
 		t.Errorf("bad-syntax file was modified despite parse failure: %q", contents)
 	}
@@ -1113,7 +1152,10 @@ func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 	}
 
 	// The target file must still contain the dirty content.
-	target, _ := os.ReadFile(realPath)
+	target, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(target) != fmtDirtyTF {
 		t.Fatalf("symlink target was modified through the symlink; got %q", string(target))
 	}

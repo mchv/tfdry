@@ -44,8 +44,11 @@ func TestFormatFile_ReadOnlyParentDir_ReturnsError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	src, _ := os.ReadFile(path)
-	err := checker.FormatFile(context.Background(), path, src)
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = checker.FormatFile(context.Background(), path, src)
 	if err == nil {
 		t.Fatal("expected error when parent dir is read-only, got nil")
 	}
