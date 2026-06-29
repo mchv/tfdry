@@ -4,6 +4,7 @@
 package checker_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -167,5 +168,233 @@ func TestParseDir_ContextBackground_NoRegression(t *testing.T) {
 		if strings.HasPrefix(v.Code, "E001") {
 			t.Errorf("unexpected parse violation: %+v", v)
 		}
+	}
+}
+
+// ── Bucket B: mid-loop cancellation + per-function entry coverage ────────────
+//
+// The pre-cancel tests above cover the ENTRY ctx checks (the first
+// instruction of each function). The tests below cover the INSIDE-LOOP
+// ctx checks (per-iteration responsiveness contract) plus the public
+// entry points the original sweep didn't pin (FormatFile,
+// WriteFormatted) and the f.Src == nil skip branches (parse-failed
+// files must be skipped silently, not crashed on).
+
+// nthErrCtx is a context whose Err() returns nil for the first n-1
+// calls and context.Canceled on the n-th call onwards. Used to drive
+// mid-loop ctx checks deterministically: pre-cancelling would
+// short-circuit at the function's entry check before the loop is
+// reached, so a static cancel can't exercise the per-iteration path.
+// With n=2: entry check sees nil, the first loop-body check sees
+// Canceled.
+//
+// This wrapping is exclusively a test-only construct — production code
+// must rely on the real context.Cancel / Deadline semantics. The
+// alternative (running cancel() from a goroutine to race against the
+// loop) is non-deterministic and would flake.
+type nthErrCtx struct {
+	context.Context
+	n     int
+	calls int
+}
+
+func (c *nthErrCtx) Err() error {
+	c.calls++
+	if c.calls >= c.n {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestFormatFile_RespectsContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// path / src are not dereferenced before the entry ctx check.
+	err := checker.FormatFile(ctx, "/dev/null/should-not-be-touched", []byte("locals {}\n"))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("FormatFile with cancelled ctx: err=%v, want context.Canceled", err)
+	}
+}
+
+func TestWriteFormatted_RespectsContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := checker.WriteFormatted(ctx, "/dev/null/should-not-be-touched", []byte("ok"))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("WriteFormatted with cancelled ctx: err=%v, want context.Canceled", err)
+	}
+}
+
+// TestWriteFormatted_HappyPath exercises the body of WriteFormatted
+// (the atomic rewrite) — distinct from FormatFile, which formats from
+// raw source. Callers that already hold the formatted bytes (e.g. the
+// runFmt path in main.go) use WriteFormatted to skip the redundant
+// hclwrite.Format pass.
+func TestWriteFormatted_HappyPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.tf")
+	if err := os.WriteFile(path, []byte("locals{a=1}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	formatted := []byte("locals {\n  a = 1\n}\n")
+	if err := checker.WriteFormatted(context.Background(), path, formatted); err != nil {
+		t.Fatalf("WriteFormatted: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, formatted) {
+		t.Errorf("file not rewritten: got %q, want %q", got, formatted)
+	}
+}
+
+// TestCheckFormat_MidLoopCancel exercises the per-iteration ctx check
+// inside CheckFormat. Uses nthErrCtx: entry-check passes (call 1
+// returns nil), the inside-loop check on the first iteration fires
+// (call 2 returns context.Canceled).
+func TestCheckFormat_MidLoopCancel(t *testing.T) {
+	t.Parallel()
+	ctx := &nthErrCtx{Context: context.Background(), n: 2}
+	files := []checker.ParsedFile{
+		{Name: "a.tf", Src: []byte("locals { x = 1 }")},
+		{Name: "b.tf", Src: []byte("locals { y = 2 }")},
+	}
+	_, err := checker.CheckFormat(ctx, files)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("CheckFormat mid-loop cancel: err=%v, want context.Canceled", err)
+	}
+}
+
+// TestCheckFormat_NilSrc_Skipped pins the contract that a ParsedFile
+// whose Src is nil (parse failure earlier in the pipeline) is skipped
+// silently — no E008 emission, no panic on the bytes.Equal call.
+func TestCheckFormat_NilSrc_Skipped(t *testing.T) {
+	t.Parallel()
+	files := []checker.ParsedFile{
+		{Name: "broken.tf", Src: nil},
+	}
+	vs, err := checker.CheckFormat(context.Background(), files)
+	if err != nil {
+		t.Fatalf("CheckFormat with nil-Src file: unexpected err=%v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("nil-Src ParsedFile should produce no E008; got %v", vs)
+	}
+}
+
+// TestFixFormat_MidLoopCancel — same idea as CheckFormat above, but
+// also pins the partial-results contract (fixed map non-nil even when
+// the loop bails early on cancellation).
+func TestFixFormat_MidLoopCancel(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctx := &nthErrCtx{Context: context.Background(), n: 2}
+	files := []checker.ParsedFile{
+		{Name: "a.tf", Src: []byte("locals { x = 1 }")},
+	}
+	fixed, _, err := checker.FixFormat(ctx, files, dir)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("FixFormat mid-loop cancel: err=%v, want context.Canceled", err)
+	}
+	if fixed == nil {
+		t.Errorf("fixed map must be non-nil on mid-loop cancel for partial-results contract consistency")
+	}
+}
+
+// TestFixFormat_NilSrc_Skipped — parse-failed files must not crash the
+// fix pass on the bytes.Equal / hclwrite.Format calls below the skip.
+func TestFixFormat_NilSrc_Skipped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	files := []checker.ParsedFile{
+		{Name: "broken.tf", Src: nil},
+	}
+	fixed, vs, err := checker.FixFormat(context.Background(), files, dir)
+	if err != nil {
+		t.Fatalf("FixFormat with nil-Src file: unexpected err=%v", err)
+	}
+	if len(fixed) != 0 {
+		t.Errorf("nil-Src file should not be fixed; got %v", fixed)
+	}
+	if len(vs) != 0 {
+		t.Errorf("nil-Src file should produce no violations; got %v", vs)
+	}
+}
+
+// TestRun_MidLoopCancel exercises the per-file ctx check inside Run's
+// main file-iteration loop (checker/checks.go:115). Same nthErrCtx
+// pattern as CheckFormat/FixFormat above.
+func TestRun_MidLoopCancel(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
+		[]byte("locals { x = 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, _, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &nthErrCtx{Context: context.Background(), n: 2}
+	_, err = checker.Run(ctx, files, nil, dir)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Run mid-loop cancel: err=%v, want context.Canceled", err)
+	}
+}
+
+// TestParseDir_SequentialMidLoopCancel exercises the per-entry ctx
+// check in ParseDir's sequential branch (<= 4 .tf files). Two files
+// are sufficient: nthErrCtx with n=3 passes the entry check (call 1),
+// passes the first loop iteration (call 2 from the loop's ctx.Err),
+// fails the second loop iteration (call 3).
+func TestParseDir_SequentialMidLoopCancel(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"a.tf", "b.tf"} {
+		if err := os.WriteFile(filepath.Join(dir, name),
+			[]byte("locals { x = 1 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := &nthErrCtx{Context: context.Background(), n: 3}
+	_, _, err := checker.ParseDir(ctx, dir)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("ParseDir sequential mid-loop cancel: err=%v, want context.Canceled", err)
+	}
+}
+
+// TestParseDir_ConcurrentPath_RespectsContext exercises the concurrent
+// branch of ParseDir (> 4 .tf files, errgroup-based parallel parse).
+// Pre-cancels the ctx so errgroup workers see the cancellation
+// immediately and propagate via g.Wait().
+func TestParseDir_ConcurrentPath_RespectsContext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// 10 files comfortably above the sequential/concurrent threshold (4).
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("f%d.tf", i)
+		if err := os.WriteFile(filepath.Join(dir, name),
+			[]byte("locals { x = 1 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Pre-cancel: the entry check at ParseDir's top fires before
+	// reaching the concurrent dispatch. To actually hit the
+	// errgroup paths we wrap ctx so the entry check passes (n=2)
+	// and the dispatcher / worker see the cancellation on a
+	// subsequent Err() call.
+	wrapped := &nthErrCtx{Context: ctx, n: 2}
+	_, _, err := checker.ParseDir(wrapped, dir)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("ParseDir concurrent path: err=%v, want context.Canceled", err)
 	}
 }

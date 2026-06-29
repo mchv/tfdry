@@ -144,6 +144,19 @@ func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error
 			files, violations := collectResults(results)
 			return files, violations, err
 		}
+		// Dispatcher break path: if the per-iteration gctx.Err() check
+		// fires BEFORE any g.Go call (immediate cancellation as the
+		// concurrent branch is entered), no workers run, so g.Wait
+		// has nothing to surface and returns nil. Without this guard
+		// ParseDir would return (partial files, no E000, nil err)
+		// even though the contract documented above says cancellation
+		// must propagate as ctx.Err(). Explicitly surface it here so
+		// the early-cancel case behaves identically to the
+		// mid-execution case.
+		if err := ctx.Err(); err != nil {
+			files, violations := collectResults(results)
+			return files, violations, err
+		}
 	}
 
 	files, violations := collectResults(results)
