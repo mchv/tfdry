@@ -41,8 +41,12 @@ func TestRun_Fmt_SymlinkArg_ExitTwo(t *testing.T) {
 	}
 
 	// Create the symlink. Skip rather than fail if symlink creation
-	// is unavailable (e.g. running inside a container without
-	// CAP_SYS_ADMIN); the test is meaningful only when symlinks work.
+	// is unavailable — common blockers are filesystem support (FAT,
+	// some overlay/bind-mount setups don't model symlinks),
+	// container sandbox restrictions (seccomp filters that deny
+	// the symlinkat syscall), or read-only filesystems. The test
+	// is meaningful only when symlinks work; on a hostile
+	// environment, skipping is the right signal.
 	link := filepath.Join(dir, "link.tf")
 	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("cannot create symlink:", err)
