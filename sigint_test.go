@@ -205,22 +205,34 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	//   - Scanner goroutine has EXCLUSIVE write access to `stderr`
 	//     while it's running.
 	//   - Main goroutine must NOT read `stderr.String()` until the
-	//     scanner has finished, i.e. has closed `scanErr` via its
-	//     `defer close(scanErr)`. We achieve this via a join: every
-	//     site that reads stderr first does `<-scanErr` to wait for
-	//     scanner completion. The pattern below routes every failure
-	//     path through this join.
+	//     scanner has fully exited. We use TWO channels for this:
+	//       * `scanErr` (buffered): carries an error value if the
+	//         scanner observed one. Send happens-before any receive,
+	//         so the value is delivered reliably, but receiving from
+	//         a buffered channel only synchronises with the SEND,
+	//         not with the goroutine's exit — the sender may still
+	//         be executing code after the send.
+	//       * `done` (unbuffered, closed via `defer`): closed AFTER
+	//         all of the goroutine's deferred statements have run.
+	//         `<-done` is a strict happens-after barrier for the
+	//         goroutine's full exit — every prior stderr.Write call
+	//         is provably visible after this receive.
+	//   - Every site that reads `stderr.String()` from the main
+	//     goroutine first does `<-done` to wait for full scanner
+	//     exit. The pattern below routes every failure path through
+	//     this barrier.
 	//
 	// Failure modes and how each is handled:
 	//   A. EOF before marker — scanner sends to scanErr, then closes
 	//      `ready` so main wakes up; main does a non-blocking receive
-	//      on scanErr and observes the error.
+	//      on scanErr, observes the error, kills + waits the
+	//      subprocess, then joins via `<-done` before reading stderr.
 	//   B. Marker observed, then SIGINT delivery and graceful exit —
 	//      happy path. Scanner keeps running until subprocess exits;
-	//      main's post-Wait `<-scanErr` joins.
+	//      main's post-Wait `<-done` joins.
 	//   C. 10s timeout with no marker — main kills the subprocess
 	//      (forcing stderrPipe EOF), waits for the process, then
-	//      `<-scanErr` joins before reading stderr for diagnostics.
+	//      `<-done` joins before reading stderr for diagnostics.
 	//
 	// Timeout budget: 10s. On the slowest CI runners observed, Go
 	// runtime startup + first stderr flush completes well under 2s,
@@ -228,7 +240,12 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	// binary is deadlocked or panicked before reaching the marker.
 	ready := make(chan struct{})
 	scanErr := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
+		// LIFO defer order: close(scanErr) runs first, then
+		// close(done). So `<-done` is a strict "scanner has fully
+		// exited; scanErr is closed; no further stderr writes" barrier.
+		defer close(done)
 		defer close(scanErr)
 		buf := make([]byte, 4096)
 		var seen bool
@@ -308,11 +325,11 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 		case err, ok := <-scanErr:
 			if ok && err != nil {
 				// Error path: kill + wait the subprocess to drain
-				// the pipe, then join (which is automatic — scanErr
-				// is already closed by `defer` after the error send)
-				// and surface the diagnostic.
+				// the pipe, then strict-join via `<-done` so the
+				// scanner has fully exited before reading stderr.
 				_ = cmd.Process.Kill()
 				_ = cmd.Wait()
+				<-done
 				t.Fatalf("scanner failed before ready marker: %v\nstderr:\n%s", err, stderr.String())
 			}
 			// ok=false means scanErr was already closed without an
@@ -326,13 +343,14 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		// Kill the subprocess so stderrPipe EOFs, then Wait so the
-		// subprocess is fully gone. `<-scanErr` then joins the
-		// scanner goroutine (which sees EOF, exits its loop, runs
-		// `defer close(scanErr)`). Only after the join is it safe
-		// to read `stderr.String()`.
+		// subprocess is fully gone. `<-done` strict-joins the
+		// scanner goroutine (waits for `defer close(done)` to run,
+		// which happens AFTER `defer close(scanErr)` due to LIFO
+		// defer order). Only after the join is it safe to read
+		// `stderr.String()`.
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		<-scanErr
+		<-done
 		t.Fatalf("subprocess did not emit ready marker within 10s; stderr:\n%s", stderr.String())
 	}
 	// Send to the entire process group via negative PID (works because
@@ -349,22 +367,24 @@ func TestRunCLI_SIGINT_HandlesGracefully(t *testing.T) {
 	// A non-nil error here means the subprocess exited before we got
 	// to signal it — i.e., the workload finished before we could even
 	// observe the ready marker + dispatch the kill. Wait for subprocess
-	// + join scanner before reading stderr to keep diagnostics race-free.
+	// + strict-join scanner via `<-done` before reading stderr.
 	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGINT); err != nil {
 		_ = cmd.Wait()
-		<-scanErr
+		<-done
 		t.Fatalf("syscall.Kill(-%d, SIGINT): subprocess exited before signal could be delivered "+
 			"(workload of %d files × %d locals too small for this machine?): %v\nstderr:\n%s",
 			cmd.Process.Pid, fileCount, localsPerFile, err, stderr.String())
 	}
 
 	waitErr := cmd.Wait()
-	// Join: scanner goroutine's loop terminates on the EOF that comes
-	// with subprocess exit; we wait for `defer close(scanErr)` to run
-	// so the Builder is guaranteed quiescent before we read it. If
-	// scanner reported an error during normal operation (e.g. a
-	// pipe-read failure other than EOF), surface it loudly rather
-	// than silently letting it slip through.
+	// Strict join: wait for `defer close(done)` to run, which
+	// happens AFTER the scanner's loop exit AND AFTER
+	// `defer close(scanErr)`. After this barrier:
+	//   - The scanner is provably done writing to stderr.
+	//   - scanErr is provably closed; a non-blocking receive
+	//     returns the buffered error (if any) or nil.
+	// Reading `stderr.String()` and `<-scanErr` are both safe.
+	<-done
 	if err := <-scanErr; err != nil {
 		t.Fatalf("scanner reported error after subprocess exit: %v\nstderr:\n%s", err, stderr.String())
 	}
