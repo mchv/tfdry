@@ -12,6 +12,12 @@
 #   misspell      — typos in comments/strings
 #   noctx         — net/http requests without context
 #   unparam       — unused function parameters
+#   exhaustive    — enforce exhaustive switch on enum-like iota consts.
+#                   Catches missing enum branches at lint time, which is
+#                   the property Go's compiler doesn't provide natively.
+#                   Combined with `default: panic(...)` in private label
+#                   functions this is belt-and-braces: linter is the
+#                   primary net, panic is the backstop if lint is skipped.
 #
 # Notable omissions (deliberate, not oversight):
 #   - gofmt / gofumpt as a linter: enforced via `make verify` calling
@@ -45,6 +51,7 @@ linters:
     - misspell
     - noctx
     - unparam
+    - exhaustive
 
   settings:
     errcheck:
@@ -183,6 +190,35 @@ linters:
       # Surface unused params in EXPORTED functions too — the public
       # checker API is documented and we want to keep it tight.
       check-exported: true
+
+    exhaustive:
+      # Which construct kinds to check. Only 'switch' is relevant to us
+      # today; adding 'map' would flag map-literal patterns keyed by
+      # enum types, of which we have none currently.
+      check:
+        - switch
+      # A `default:` clause does NOT satisfy exhaustiveness on its own.
+      # Every enum value must be listed explicitly. This is the whole
+      # point of enabling the linter: silent fallthrough of a newly
+      # added enum value into a `default:` branch is exactly what we
+      # want to prevent.
+      default-signifies-exhaustive: false
+      # A `default:` clause is NOT required. Some switches are pure
+      # dispatch and don't need a fallback (e.g., schemaKindToVarType
+      # in modules.go falls through to a `return TypeUnknown` after
+      # the switch; a `default:` there would just duplicate that
+      # return). Keep flexibility.
+      default-case-required: false
+      # Check every switch on enum types by default. To opt out for
+      # an intentionally-partial switch (e.g., "only handle these two
+      # compound kinds; other kinds are handled by an outer if"), the
+      # switch must carry a `//exhaustive:ignore` directive with a
+      # rationale comment.
+      explicit-exhaustive-switch: false
+      # Check function-scoped enum types too, not just package-scope.
+      # We have no function-scoped enums today, but future-proofing
+      # against a helper that defines a local iota block.
+      package-scope-only: false
 
   exclusions:
     rules:

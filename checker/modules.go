@@ -394,6 +394,13 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 	// type errors; this branch only fires when the kinds match and we have
 	// an Elem schema to validate the contents against.
 	if schema.Elem != nil && schema.Elem.Kind != schemaUnknown {
+		// Intentional partial switch: only the compound-with-Elem
+		// kinds (list, set, map) are handled here. schemaObject has
+		// its own Fields-based handling below; other kinds never
+		// have Elem populated by parseTypeSchema, so are unreachable
+		// under the enclosing `Elem != nil` guard. The exhaustive
+		// linter would flag the missing cases without this directive.
+		//exhaustive:ignore
 		switch schema.Kind {
 		case schemaList, schemaSet:
 			if tup, ok := unwrapExpr(expr).(*hclsyntax.TupleConsExpr); ok {
@@ -479,6 +486,10 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 }
 
 // schemaKindToVarType maps a scalar schemaKind to its VarType equivalent.
+// Compound kinds (list/map/set/object) and schemaUnknown map to
+// TypeUnknown because VarType is a flat enum with no compound
+// representation — the caller uses this only in scalar-comparison
+// contexts.
 func schemaKindToVarType(k schemaKind) VarType {
 	switch k {
 	case schemaString:
@@ -487,8 +498,11 @@ func schemaKindToVarType(k schemaKind) VarType {
 		return TypeNumber
 	case schemaBool:
 		return TypeBool
+	case schemaUnknown, schemaObject, schemaList, schemaMap, schemaSet:
+		return TypeUnknown
+	default:
+		panic(fmt.Sprintf("unrecognised schemaKind: %d", k))
 	}
-	return TypeUnknown
 }
 
 // varTypeToSchemaKind infers the structural schemaKind from an expression's AST shape,
