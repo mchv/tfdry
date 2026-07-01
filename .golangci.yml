@@ -203,11 +203,23 @@ linters:
       # added enum value into a `default:` branch is exactly what we
       # want to prevent.
       default-signifies-exhaustive: false
-      # A `default:` clause is NOT required. Some switches are pure
-      # dispatch and don't need a fallback (e.g., schemaKindToVarType
-      # in modules.go falls through to a `return TypeUnknown` after
-      # the switch; a `default:` there would just duplicate that
-      # return). Keep flexibility.
+      # A `default:` clause is NOT required. Since
+      # default-signifies-exhaustive is false above, every enum value
+      # must already be listed as an explicit case; requiring an
+      # additional `default:` on top would just force a dead-code
+      # fallback. Each callsite picks whichever shape reads best:
+      #   * `default: panic(...)` — defence-in-depth in unexported
+      #     code (typeSchema.label, schemaKindLabel,
+      #     schemaKindToVarType in checker/modules.go). Fires only
+      #     if a caller constructs an out-of-range value directly.
+      #   * `default: return "unknown"` — graceful fallback for
+      #     public rendering functions (VarType.Label in
+      #     checker/vartype.go), so external callers who bypass the
+      #     enum discipline via reflection or JSON round-trip get
+      #     a benign result instead of a crash.
+      #   * no `default:` at all — for intentional partial dispatch
+      #     annotated with `//exhaustive:ignore` (e.g., the Elem-only
+      #     switch in compareExprToSchema).
       default-case-required: false
       # Check every switch on enum types by default. To opt out for
       # an intentionally-partial switch (e.g., "only handle these two

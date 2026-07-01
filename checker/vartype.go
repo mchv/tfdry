@@ -50,10 +50,11 @@ func (t VarType) IsScalar() bool {
 // callers can hold VarType values acquired through means that bypass Go's
 // enum discipline (JSON round-trip, reflection). A rendering function
 // crashing on such input is user-hostile; returning "unknown" is idiomatic
-// for public rendering paths (compare strconv.Itoa, fmt.Sprintf which
-// never panic regardless of input). The exhaustive linter still enforces
-// that every declared VarType constant has an explicit case here — the
-// `default:` is only reached for out-of-range values.
+// for public rendering paths (compare strconv.Itoa, a pure int-to-string
+// conversion that never panics regardless of input). The exhaustive
+// linter still enforces that every declared VarType constant has an
+// explicit case here — the `default:` is only reached for out-of-range
+// values.
 func (t VarType) Label() string {
 	switch t {
 	case TypeString:
