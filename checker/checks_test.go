@@ -805,7 +805,7 @@ variable "name" {
 // like `type = mystery` or a custom-type reference tfdry doesn't recognise)
 // must not produce a false-positive at the caller. The module is broken,
 // not the caller, so the safe behaviour is to skip type-mismatch checks for
-// that variable (treat as SchemaUnknown).
+// that variable (treat as schemaUnknown).
 func TestE006_UnknownTraversalType_NoFalsePositive(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
@@ -882,7 +882,7 @@ variable "v" {
 // Malformed object() expressions (no args, too many args, or non-object
 // argument) must not produce false-positive E007 at the caller. With an
 // empty Fields map, every key in the caller's literal would otherwise be
-// flagged as an unknown field. SchemaUnknown short-circuits the check.
+// flagged as an unknown field. schemaUnknown short-circuits the check.
 func TestE007_MalformedObjectType_NoFalsePositive(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

@@ -98,7 +98,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	locals, dupViolations := BuildLocalsMap(files)
+	locals, dupViolations := buildLocalsMap(files)
 
 	var violations []Violation
 
@@ -109,7 +109,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 	// Single-pass: collect used locals + expression violations in one walk per file.
 	usedLocals := make(map[string]struct{}, len(locals))
 	// Cache for module variable schemas — avoids re-reading the same module dir.
-	moduleCache := make(map[string]map[string]TypeSchema)
+	moduleCache := make(map[string]map[string]typeSchema)
 
 	for _, f := range files {
 		if err := ctx.Err(); err != nil {
@@ -203,7 +203,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 	return violations, nil
 }
 
-func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[string]LocalInfo) *Violation {
+func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[string]localInfo) *Violation {
 	ref, ok := expr.(*hclsyntax.ScopeTraversalExpr)
 	if !ok || len(ref.Traversal) < 2 || ref.Traversal.RootName() != "local" {
 		return nil

@@ -1,7 +1,7 @@
 // Copyright 2026 Mariot Chauvin
 // SPDX-License-Identifier: Apache-2.0
 
-package checker_test
+package checker
 
 import (
 	"context"
@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/mchv/tfdry/checker"
 )
 
 // sink prevents the compiler from eliminating benchmark results (dead code elimination).
@@ -91,7 +89,7 @@ func BenchmarkParseDir(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				f, v, _ := checker.ParseDir(context.Background(), dir)
+				f, v, _ := ParseDir(context.Background(), dir)
 				sink = f
 				sink = v
 			}
@@ -99,18 +97,18 @@ func BenchmarkParseDir(b *testing.B) {
 	}
 }
 
-// ── BuildLocalsMap: parameterised by local count ──────────────────────────────
+// ── buildLocalsMap: parameterised by local count ──────────────────────────────
 // Use: benchstat -col /locals results.txt
 
 func BenchmarkBuildLocalsMap(b *testing.B) {
 	for _, locals := range []int{10, 50, 200} {
 		b.Run(fmt.Sprintf("locals=%d", locals), func(b *testing.B) {
 			dir := tfDir(b, 5, locals/5)
-			files, _, _ := checker.ParseDir(context.Background(), dir)
+			files, _, _ := ParseDir(context.Background(), dir)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				m, v := checker.BuildLocalsMap(files)
+				m, v := buildLocalsMap(files)
 				sink = m
 				sink = v
 			}
@@ -125,12 +123,12 @@ func BenchmarkRun(b *testing.B) {
 	for _, files := range []int{0, 1, 5, 10, 50} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
 			dir := tfDir(b, files, 10)
-			parsed, _, _ := checker.ParseDir(context.Background(), dir)
+			parsed, _, _ := ParseDir(context.Background(), dir)
 			b.ReportAllocs()
 			b.ReportMetric(float64(files), "files/op")
 			b.ResetTimer()
 			for range b.N {
-				v, _ := checker.Run(context.Background(), parsed, nil, dir)
+				v, _ := Run(context.Background(), parsed, nil, dir)
 				sink = v
 			}
 		})
@@ -147,8 +145,8 @@ func BenchmarkPipeline(b *testing.B) {
 			b.ReportMetric(float64(files), "files/op")
 			b.ResetTimer()
 			for range b.N {
-				parsed, _, _ := checker.ParseDir(context.Background(), dir)
-				v, _ := checker.Run(context.Background(), parsed, nil, dir)
+				parsed, _, _ := ParseDir(context.Background(), dir)
+				v, _ := Run(context.Background(), parsed, nil, dir)
 				sink = v
 			}
 		})
@@ -161,11 +159,11 @@ func BenchmarkCheckFormat(b *testing.B) {
 	for _, files := range []int{1, 10, 50} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
 			dir := tfDirUnformatted(b, files)
-			parsed, _, _ := checker.ParseDir(context.Background(), dir)
+			parsed, _, _ := ParseDir(context.Background(), dir)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				v, _ := checker.CheckFormat(context.Background(), parsed)
+				v, _ := CheckFormat(context.Background(), parsed)
 				sink = v
 			}
 		})
@@ -182,9 +180,9 @@ func BenchmarkFixFormat(b *testing.B) {
 			for range b.N {
 				b.StopTimer()
 				dir := tfDirUnformatted(b, files)
-				parsed, _, _ := checker.ParseDir(context.Background(), dir)
+				parsed, _, _ := ParseDir(context.Background(), dir)
 				b.StartTimer()
-				fixed, v, _ := checker.FixFormat(context.Background(), parsed, dir)
+				fixed, v, _ := FixFormat(context.Background(), parsed, dir)
 				sink = fixed
 				sink = v
 			}
@@ -198,12 +196,12 @@ func BenchmarkRunModuleChecks(b *testing.B) {
 	for _, files := range []int{1, 5, 20} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
 			dir := tfDirWithModule(b, files)
-			parsed, _, _ := checker.ParseDir(context.Background(), dir)
-			cs := checker.CheckSet{"E006": {}, "E007": {}}
+			parsed, _, _ := ParseDir(context.Background(), dir)
+			cs := CheckSet{"E006": {}, "E007": {}}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				v, _ := checker.Run(context.Background(), parsed, cs, dir)
+				v, _ := Run(context.Background(), parsed, cs, dir)
 				sink = v
 			}
 		})
