@@ -16,60 +16,11 @@ Each release entry groups changes under the following headings (omitted if empty
 
 ## [Unreleased]
 
-### Added
-
-- `LICENSE` (Apache-2.0), `CONTRIBUTING.md`, `SECURITY.md`,
-  `CODE_OF_CONDUCT.md`, this `CHANGELOG.md`, and SPDX headers on every
-  `.go` file in preparation for v0.1.0 public release.
-- README badges: Go Reference, Go Report Card, Go version, License,
-  Latest Release, CI status, codecov, govulncheck, Conventional
-  Commits, Contributor Covenant, Terraform compatibility, and a custom
-  `SKILL.md` link.
-- **CI workflows** (`.github/workflows/`):
-  - `ci.yml` — runs `make verify` on every PR + main push across
-    Linux, macOS, and Windows runners with Go 1.26.3. The Linux job
-    additionally generates a coverprofile and uploads it to Codecov
-    via the official `codecov/codecov-action` (informational only —
-    PR comments with delta + badge, no CI failures on regression).
-  - `codeql.yml` — CodeQL security analysis with the
-    `security-extended` query pack, on every PR + weekly schedule.
-  - `govulncheck.yml` — daily scheduled vulnerability scan against
-    `vuln.go.dev` to catch CVE drift in dependencies between PRs.
-- **Release workflow** (`.github/workflows/release.yml`):
-  - Triggered by `v*.*.*` tag pushes.
-  - Uses goreleaser v2 to build `darwin-arm64`, `linux-amd64`,
-    `linux-arm64`, and `windows-amd64` binaries with version
-    injected via `-ldflags`.
-  - Signs every archive and the `checksums.txt` with cosign in
-    keyless mode (OIDC identity, no key management).
-  - Generates a Syft SBOM (SPDX JSON) per archive.
-  - Auto-commits an updated Homebrew cask formula to the
-    `mchv/homebrew-tfdry` tap on every release.
-- **Dependabot** (`.github/dependabot.yml`) — weekly updates for Go
-  module dependencies and GitHub Actions versions. Commits land as
-  `build(gomod): bump <pkg> from <a> to <b>` (Go modules ecosystem) or
-  `build(github-actions): bump <action> from <a> to <b>` (GitHub
-  Actions ecosystem) — the conventional-commit scope makes the source
-  ecosystem visible at a glance. Both are excluded from goreleaser's
-  release-notes via the `^build(\(.+\))?:` exclude regex.
-- **Pinned tool versions** in the Makefile so `make tools` produces
-  reproducible builds: `gofumpt@v0.10.0`, `golangci-lint@v2.12.2`,
-  `govulncheck@v1.4.0`. Dependabot's `gomod` ecosystem can't track
-  Makefile variables (it only watches `go.mod` / `go.sum`), so these
-  pins are bumped manually during release-prep — usually a one-line
-  edit per tool.
-
-### Changed
-
-- README "Install" section now leads with the Homebrew tap install
-  path alongside `go install` and a "download a signed binary"
-  pointer to GitHub Releases.
-
-## [0.1.0] — TBD
+## [0.1.0] — 2026-07-01
 
 First public release. The sections below summarise the surface that
 shipped; for the per-PR breakdown see the merged PRs in the
-`mchv/tfdry` repository (#1 through #6 covered the v0.1.0 prep work).
+`mchv/tfdry` repository.
 
 ### Added
 
@@ -118,8 +69,63 @@ shipped; for the per-PR breakdown see the merged PRs in the
   and embedded newlines / tabs before reaching stdout, stderr, or
   the JSON output's `directory` field. Mitigates CVE-2021-42574-class
   attacks via malicious `.tf` file names or content.
+- `LICENSE` (Apache-2.0), `CONTRIBUTING.md`, `SECURITY.md`,
+  `CODE_OF_CONDUCT.md`, this `CHANGELOG.md`, and SPDX headers on
+  every `.go` file.
+- README badges: Go Reference, Go Report Card, Go version, License,
+  Latest Release, CI status, codecov, govulncheck, Conventional
+  Commits, Contributor Covenant, Terraform compatibility, and a
+  custom `SKILL.md` link.
 - **GitHub issue and PR templates** (`.github/ISSUE_TEMPLATE/`,
   `.github/PULL_REQUEST_TEMPLATE.md`).
+- **CI workflows** (`.github/workflows/`):
+  - `ci.yml` — runs `make verify` on every PR + main push across
+    Linux, macOS, and Windows runners with Go 1.26.3. The Linux job
+    additionally generates a coverprofile and uploads it to Codecov
+    via the official `codecov/codecov-action` (informational only —
+    PR comments with delta + badge, no CI failures on regression).
+  - `codeql.yml` — CodeQL security analysis with the
+    `security-extended` query pack, on every PR + weekly schedule.
+  - `govulncheck.yml` — daily scheduled vulnerability scan against
+    `vuln.go.dev` to catch CVE drift in dependencies between PRs.
+- **Release workflow** (`.github/workflows/release.yml`):
+  - Triggered by `v*.*.*` tag pushes.
+  - Uses goreleaser v2 to build `darwin-arm64`, `linux-amd64`,
+    `linux-arm64`, and `windows-amd64` binaries with version
+    injected via `-ldflags`.
+  - Signs every archive and the `checksums.txt` with cosign in
+    keyless mode (OIDC identity, no key management).
+  - Generates a Syft SBOM (SPDX JSON) per archive.
+  - Auto-commits an updated Homebrew cask formula to the
+    `mchv/homebrew-tfdry` tap on every release.
+- **Dependabot** (`.github/dependabot.yml`) — weekly updates for Go
+  module dependencies and GitHub Actions versions. Commits land as
+  `build(gomod): bump <pkg> from <a> to <b>` (Go modules ecosystem) or
+  `build(github-actions): bump <action> from <a> to <b>` (GitHub
+  Actions ecosystem) — the conventional-commit scope makes the source
+  ecosystem visible at a glance. Both are excluded from goreleaser's
+  release-notes via the `^build(\(.+\))?:` exclude regex.
+- **Pinned tool versions** in the Makefile so `make tools` produces
+  reproducible builds: `gofumpt@v0.10.0`, `golangci-lint@v2.12.2`,
+  `govulncheck@v1.4.0`. Dependabot's `gomod` ecosystem can't track
+  Makefile variables (it only watches `go.mod` / `go.sum`), so these
+  pins are bumped manually during release-prep — usually a one-line
+  edit per tool.
+
+### Changed
+
+- README "Install" section leads with the Homebrew tap install path
+  alongside `go install` and a "download a signed binary" pointer
+  to GitHub Releases.
+- **Public API surface trimmed** before the v0.1.0 SemVer boundary.
+  Types that represented internal checker analysis state were
+  unexported: `SchemaKind` (+ its eight enum constants
+  `SchemaUnknown` / `SchemaString` / `SchemaNumber` / `SchemaBool` /
+  `SchemaObject` / `SchemaList` / `SchemaMap` / `SchemaSet`),
+  `TypeSchema`, `LocalInfo`, and `BuildLocalsMap`. Zero external
+  references existed at rename time. The checker's public entry
+  points remain `ParseDir`, `Run`, `CheckFormat`, `FixFormat`, and
+  `CheckSet`.
 
 ### Exit codes
 
@@ -135,7 +141,7 @@ shipped; for the per-PR breakdown see the merged PRs in the
 
 - **`make verify`** runs the full pre-PR pipeline: `gofumpt -l .`,
   `go mod tidy -diff` (asserts go.mod / go.sum stay canonical),
-  `go vet`, `golangci-lint run` (with 11 linters), `make lint-prose`
+  `go vet`, `golangci-lint run` (with 12 linters), `make lint-prose`
   (`misspell -locale UK` against `README.md`, `CHANGELOG.md`, the
   other root `.md` docs, `Makefile`, `.github/workflows/*.yml`
   except `codeql.yml`, `.github/dependabot.yml`, and
@@ -145,7 +151,20 @@ shipped; for the per-PR breakdown see the merged PRs in the
   review-finding markers in `.go` source.
 - **`.golangci.yml`** with `staticcheck`, `errcheck`, `gosec`,
   `revive`, `gocritic`, `unconvert`, `unused`, `ineffassign`,
-  `misspell` (UK locale), `noctx`, and `unparam`.
+  `misspell` (UK locale), `noctx`, `unparam`, and `exhaustive`.
+  The `exhaustive` linter enforces that every declared value of an
+  `iota`-based enum has an explicit case in every switch on that
+  enum type — closing the "forgot to update the switch when I
+  added a new enum value" bug class at CI time.
+- **Test suite** — 92% coverage across the `checker` and `output`
+  packages, running under `-race` by default. Pre-v0.1.0 test
+  hygiene pass: parallelised the `TestRun_*` set (~5× speedup);
+  replaced the time-based ready-signal in
+  `TestRunCLI_SIGINT_HandlesGracefully` with an env-gated stderr
+  marker (`TFDRY_TEST_READY=1` → `tfdry: test-ready\n`) for
+  deterministic subprocess synchronisation; added defensive-path
+  coverage for `parseModuleVarSchemas` and a unix-only chmod-based
+  test for `runFmt` write-failure paths.
 
 ### Supported platforms
 
