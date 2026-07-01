@@ -68,8 +68,17 @@ func (s typeSchema) label() string {
 		return "map"
 	case schemaSet:
 		return "set"
-	default:
+	case schemaUnknown:
 		return "unknown"
+	default:
+		// Out-of-range: a new schemaKind was added without extending
+		// this switch, or a caller constructed an invalid enum value.
+		// Panic makes the mistake loud at test time rather than
+		// silently swallowing it as "unknown" in user-facing violation
+		// messages. Safe because schemaKind is unexported: every
+		// producer of these values lives in this package and only
+		// yields values from the enumerated set.
+		panic(fmt.Sprintf("unrecognised schemaKind: %d", s.Kind))
 	}
 }
 
@@ -523,8 +532,17 @@ func schemaKindLabel(k schemaKind) string {
 		return "set"
 	case schemaObject:
 		return "object"
-	default:
+	case schemaUnknown, schemaString, schemaNumber, schemaBool:
+		// schemaKindLabel intentionally groups scalar and unknown
+		// kinds under "unknown" — from callers' perspective the
+		// interesting kinds are the compound ones (list/map/set/object).
 		return "unknown"
+	default:
+		// Out-of-range: a new schemaKind was added without extending
+		// this switch, or a caller constructed an invalid enum value.
+		// Panic to catch forgotten enum extensions loudly at test
+		// time. Safe because schemaKind is unexported.
+		panic(fmt.Sprintf("unrecognised schemaKind: %d", k))
 	}
 }
 

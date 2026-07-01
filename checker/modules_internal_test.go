@@ -173,17 +173,23 @@ func TestSchemaKindToVarType_ExhaustiveCases(t *testing.T) {
 	}
 }
 
-// schemaKindLabel — every case + default. The existing
-// TestTypeSchema_label in modules_test.go tests the typeSchema.label()
-// method; this one tests the underlying schemaKindLabel helper which
-// production code calls directly in some places.
+// schemaKindLabel — every case + defensive panic on out-of-range. The
+// existing TestTypeSchema_label in modules_test.go tests the
+// typeSchema.label() method; this one tests the underlying
+// schemaKindLabel helper which production code calls directly in some
+// places.
 //
-// Subtest names are derived from the *input* schemaKind, not the
-// expected output, so the default-branch (schemaString → "unknown")
-// and explicit-unknown (schemaUnknown → "unknown") cases don't
-// collide. With colliding names Go appends "#01" to disambiguate,
-// but failure attribution becomes ambiguous and `go test -run` can't
-// target individual cases.
+// schemaKindLabel intentionally groups scalar and unknown kinds into
+// "unknown" — from its callers' perspective the interesting kinds are
+// the compound ones (list/map/set/object). Both the explicit-scalar
+// cases and the explicit-unknown case exercise the same "unknown"
+// branch; out-of-range values panic to catch forgotten enum
+// extensions loudly at test time.
+//
+// Subtest names are derived from the *input* schemaKind so cases
+// that share an output ("unknown") don't collide. With colliding
+// names Go appends "#01" to disambiguate, but failure attribution
+// becomes ambiguous and `go test -run` can't target individual cases.
 func TestSchemaKindLabel_ExhaustiveCases(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -195,7 +201,9 @@ func TestSchemaKindLabel_ExhaustiveCases(t *testing.T) {
 		{"map", schemaMap, "map"},
 		{"set", schemaSet, "set"},
 		{"object", schemaObject, "object"},
-		{"string_input_defaults_to_unknown", schemaString, "unknown"}, // default branch
+		{"string_maps_to_unknown", schemaString, "unknown"},
+		{"number_maps_to_unknown", schemaNumber, "unknown"},
+		{"bool_maps_to_unknown", schemaBool, "unknown"},
 		{"explicit_unknown", schemaUnknown, "unknown"},
 	}
 	for _, tc := range cases {
@@ -207,6 +215,21 @@ func TestSchemaKindLabel_ExhaustiveCases(t *testing.T) {
 			}
 		})
 	}
+
+	// Out-of-range values are a programmer error (someone added a new
+	// schemaKind constant without extending the switch, or constructed
+	// an invalid enum value directly). Assert that they panic so the
+	// mistake surfaces loudly at test time rather than silently
+	// swallowing the value as "unknown".
+	t.Run("out_of_range_panics", func(t *testing.T) {
+		t.Parallel()
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected schemaKindLabel(schemaKind(99)) to panic, got nil recover")
+			}
+		}()
+		_ = schemaKindLabel(schemaKind(99))
+	})
 }
 
 // "${local.x}" parses (in the only-interpolation case) directly to a

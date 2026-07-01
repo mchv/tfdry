@@ -192,7 +192,6 @@ func TestTypeSchema_label(t *testing.T) {
 		{"map", schemaMap, "map"},
 		{"set", schemaSet, "set"},
 		{"explicit_unknown", schemaUnknown, "unknown"},
-		{"out_of_range_defaults_to_unknown", schemaKind(99), "unknown"}, // default branch
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,6 +201,20 @@ func TestTypeSchema_label(t *testing.T) {
 			}
 		})
 	}
+
+	// Out-of-range values are a programmer error (someone added a new
+	// schemaKind constant without extending the switch, or constructed
+	// an invalid enum value directly). Assert that they panic so the
+	// mistake surfaces loudly at test time rather than silently
+	// swallowing the value as "unknown".
+	t.Run("out_of_range_panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected typeSchema{Kind:99}.label() to panic, got nil recover")
+			}
+		}()
+		_ = typeSchema{Kind: schemaKind(99)}.label()
+	})
 }
 
 // TestTypeSchema_isScalar covers all branches of typeSchema.isScalar().

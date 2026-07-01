@@ -9,16 +9,17 @@ package checker
 // values, attribute values). It is used by:
 //   - E004 (non-scalar in string interpolation) — via [VarType.IsScalar]
 //     in checks.go:checkInterpolationScalar
-//   - E006 (module input type mismatch) — via [resolveExprType] in
+//   - E006 (module input type mismatch) — via resolveExprType in
 //     modules.go, which feeds compareExprToSchema
 //
 // E003 and E005 do not consume VarType (E003 is an existence check; E005
 // is a count/for_each block check that doesn't look at value types).
 //
-// For *module-side* declared variable types — which are recursive (objects,
-// lists, maps) — see [typeSchema] in modules.go. The two types are used
-// together in E006 module-input checking, where typeSchema describes what
-// a module declared and VarType describes what the caller passed.
+// For *module-side* declared variable types — which can be recursive
+// (objects, lists, maps) — the checker uses a separate internal
+// representation. The two are used together in E006 module-input
+// checking: the internal representation describes what a module declared
+// and VarType describes what the caller passed.
 type VarType int
 
 // VarType is the coarse-grained classification tfdry assigns to a
