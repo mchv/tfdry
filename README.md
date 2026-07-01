@@ -253,12 +253,15 @@ repos:
         name: tfdry
         entry: tfdry --json terraform/
         language: system
-        files: ^terraform/.*\.tf$
+        files: ^terraform/[^/]+\.tf$
         pass_filenames: false
 ```
 
 Adjust `entry:` and `files:` to match your workspace path
-(`infra/`, `deployments/`, etc.).
+(`infra/`, `deployments/`, etc.). The `[^/]+` (rather than `.*`)
+constrains the regex to direct-child `.tf` files, matching what
+`tfdry` will actually lint — subdirectory changes aren't linted
+by a single invocation without `--recursive`.
 
 ### GitHub Actions
 
