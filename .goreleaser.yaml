@@ -135,6 +135,14 @@ changelog:
   # `build(gomod): bump …` and `build(github-actions): bump …`
   # commits are filtered out alongside the plain prefixes. Same
   # `[^)]+` discipline as the groups above.
+  #
+  # `Merge pull request` filters merge commits from the changelog —
+  # the underlying PR content is already surfaced via the individual
+  # commit lines it introduced, so the merge line is redundant noise.
+  # `lint`, `perf`, `todo`, and `tfdry` are non-Conventional-Commits
+  # prefixes used during pre-release development that fell into the
+  # "Other" bucket in v0.1.0; excluding them keeps future release
+  # notes focused on user-facing changes.
   filters:
     exclude:
       - '^docs(\([^)]+\))?:'
@@ -145,6 +153,11 @@ changelog:
       - '^refactor(\([^)]+\))?:'
       - '^style(\([^)]+\))?:'
       - '^review(\([^)]+\))?:'
+      - '^Merge pull request'
+      - '^lint(\([^)]+\))?:'
+      - '^perf(\([^)]+\))?:'
+      - '^todo(\([^)]+\))?:'
+      - '^tfdry(\([^)]+\))?:'
 
 homebrew_casks:
   - name: tfdry
