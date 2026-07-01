@@ -96,6 +96,21 @@ sboms:
 changelog:
   use: github
   sort: asc
+  # Attribution policy for per-commit lines. Default goreleaser format
+  # is `{sha}: {message} ({author name} <{author email}>)`, which is
+  # more verbose than the GitHub convention of `(@handle)`. This custom
+  # template:
+  #   1. Omits attribution for maintainer commits — matched either by
+  #      GitHub-resolved `@mchv` or by the "Mariot Chauvin" git author
+  #      name when the commit's git email isn't linked to a verified
+  #      GitHub identity (which suppresses the API-side lookup).
+  #   2. Uses `(@handle)` for contributors whose commit is linked to a
+  #      GitHub account.
+  #   3. Falls back to bare `(name)` (no email) for external
+  #      contributors whose git email isn't linked to any GitHub
+  #      account — rare but possible for cherry-picked or CI-authored
+  #      commits.
+  format: '* {{ .SHA }}: {{ .Message }}{{ if .AuthorUsername }}{{ if ne .AuthorUsername "mchv" }} (@{{ .AuthorUsername }}){{ end }}{{ else if ne .AuthorName "Mariot Chauvin" }} ({{ .AuthorName }}){{ end }}'
   # Conventional-commit grouping. Patterns are RE2 (Go's stdlib regexp
   # engine) — no lazy quantifiers like .*? or ??. Each group matches
   # the prefix at the start of the subject with an optional scope and
