@@ -235,6 +235,15 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 
 ### Pre-commit hook
 
+`tfdry` lints one Terraform workspace directory at a time — the same
+scoping model as `terraform validate`. Point `entry:` at the
+directory containing your `.tf` files, and scope `files:` to that
+directory so the hook only fires on relevant changes. For repos with
+multiple workspaces (e.g. `terraform/staging/` and
+`terraform/production/`), define one hook per workspace, or wait for
+`--recursive` on the lint command (planned for v0.2.0 —
+[#21](https://github.com/mchv/tfdry/issues/21)).
+
 ```yaml
 # .pre-commit-config.yaml
 repos:
@@ -242,11 +251,14 @@ repos:
     hooks:
       - id: tfdry
         name: tfdry
-        entry: tfdry --json
+        entry: tfdry --json terraform/
         language: system
-        files: \.tf$
+        files: ^terraform/.*\.tf$
         pass_filenames: false
 ```
+
+Adjust `entry:` and `files:` to match your workspace path
+(`infra/`, `deployments/`, etc.).
 
 ### GitHub Actions
 
