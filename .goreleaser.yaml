@@ -96,21 +96,29 @@ sboms:
 changelog:
   use: github
   sort: asc
-  # Attribution policy for per-commit lines. Default goreleaser format
-  # is `{sha}: {message} ({author name} <{author email}>)`, which is
-  # more verbose than the GitHub convention of `(@handle)`. This custom
-  # template:
-  #   1. Omits attribution for maintainer commits — matched either by
-  #      GitHub-resolved `@mchv` or by the "Mariot Chauvin" git author
-  #      name when the commit's git email isn't linked to a verified
-  #      GitHub identity (which suppresses the API-side lookup).
-  #   2. Uses `(@handle)` for contributors whose commit is linked to a
-  #      GitHub account.
-  #   3. Falls back to bare `(name)` (no email) for external
-  #      contributors whose git email isn't linked to any GitHub
-  #      account — rare but possible for cherry-picked or CI-authored
-  #      commits.
-  format: '* {{ .SHA }}: {{ .Message }}{{ if .AuthorUsername }}{{ if ne .AuthorUsername "mchv" }} (@{{ .AuthorUsername }}){{ end }}{{ else if ne .AuthorName "Mariot Chauvin" }} ({{ .AuthorName }}){{ end }}'
+  # Attribution policy for per-commit lines. GoReleaser's default
+  # format is `{sha}: {message} ({author name} <{author email}>)`,
+  # which is more verbose than the GitHub convention of `(@handle)`
+  # and — more importantly — leaks the committer's email address into
+  # public release notes. This custom template:
+  #
+  #   1. Never references `.Author.Name` or `.Author.Email`, so a
+  #      contributor's email address can never appear in the rendered
+  #      output — even in adversarial edge cases (author-name field
+  #      manually set to an email string, unusual git configs, etc.).
+  #   2. Uses `(@handle)` for contributors resolvable via the GitHub
+  #      API (requires `use: github` above).
+  #   3. Omits attribution when the maintainer (@mchv) authored the
+  #      commit — no attribution noise for the primary author.
+  #   4. Omits attribution when the GitHub API lookup can't resolve a
+  #      username, chosen over a `.Author.Name` fallback so a
+  #      weirdly-configured commit can never expose more than we
+  #      intend. Contributors who want credit should link their
+  #      commit email to a verified GitHub identity.
+  #
+  # `.Author.Username` is the modern GoReleaser v2.14+ nested field;
+  # the older top-level `.AuthorUsername` was deprecated in v2.14.
+  format: '* {{ .SHA }}: {{ .Message }}{{ with .Author.Username }}{{ if ne . "mchv" }} (@{{ . }}){{ end }}{{ end }}'
   # Conventional-commit grouping. Patterns are RE2 (Go's stdlib regexp
   # engine) — no lazy quantifiers like .*? or ??. Each group matches
   # the prefix at the start of the subject with an optional scope and
