@@ -9,18 +9,18 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
-// LocalInfo holds the resolved type (TypeUnknown if unresolvable) and source location.
-type LocalInfo struct {
+// localInfo holds the resolved type (TypeUnknown if unresolvable) and source location.
+type localInfo struct {
 	Type VarType
 	Expr hclsyntax.Expression // original expression, for structural kind resolution
 	File string
 	Line int
 }
 
-// BuildLocalsMap walks all parsed files and returns:
-//   - a map of local name -> LocalInfo (all defined locals, type may be TypeUnknown)
+// buildLocalsMap walks all parsed files and returns:
+//   - a map of local name -> localInfo (all defined locals, type may be TypeUnknown)
 //   - E002 violations for duplicate definitions
-func BuildLocalsMap(files []ParsedFile) (map[string]LocalInfo, []Violation) {
+func buildLocalsMap(files []ParsedFile) (map[string]localInfo, []Violation) {
 	// Pre-size the map: count attributes in all locals blocks in one O(blocks)
 	// pass so the underlying hashmap allocates the right number of buckets up
 	// front. Without the hint, Go's map grows by doubling its bucket array as
@@ -35,7 +35,7 @@ func BuildLocalsMap(files []ParsedFile) (map[string]LocalInfo, []Violation) {
 			}
 		}
 	}
-	locals := make(map[string]LocalInfo, hint)
+	locals := make(map[string]localInfo, hint)
 	var violations []Violation
 
 	for _, f := range files {
@@ -54,7 +54,7 @@ func BuildLocalsMap(files []ParsedFile) (map[string]LocalInfo, []Violation) {
 					})
 					continue
 				}
-				locals[name] = LocalInfo{
+				locals[name] = localInfo{
 					Type: inferExprType(attr.Expr),
 					Expr: attr.Expr,
 					File: f.Name,

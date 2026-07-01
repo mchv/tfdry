@@ -134,14 +134,14 @@ func hclv2ParseConfigForTest(src []byte, filename string) (*hcl.File, hcl.Diagno
 }
 
 // Unrecognised bare identifier in `type = ...` (typo / custom-type
-// reference tfdry doesn't model) must fall through to SchemaUnknown
+// reference tfdry doesn't model) must fall through to schemaUnknown
 // so downstream compareExprToSchema doesn't emit misleading E006
 // against a broken module declaration.
 func TestParseTypeSchema_UnrecognisedTraversal_ReturnsUnknown(t *testing.T) {
 	t.Parallel()
 	expr := parseExprForTest(t, "mystery_type")
-	if got := parseTypeSchema(expr); got.Kind != SchemaUnknown {
-		t.Errorf("parseTypeSchema(`mystery_type`) = %v, want SchemaUnknown", got.Kind)
+	if got := parseTypeSchema(expr); got.Kind != schemaUnknown {
+		t.Errorf("parseTypeSchema(`mystery_type`) = %v, want schemaUnknown", got.Kind)
 	}
 }
 
@@ -150,17 +150,17 @@ func TestSchemaKindToVarType_ExhaustiveCases(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		in   SchemaKind
+		in   schemaKind
 		want VarType
 	}{
-		{"string", SchemaString, TypeString},
-		{"number", SchemaNumber, TypeNumber},
-		{"bool", SchemaBool, TypeBool},
-		{"list → unknown (no scalar mapping)", SchemaList, TypeUnknown},
-		{"map → unknown", SchemaMap, TypeUnknown},
-		{"set → unknown", SchemaSet, TypeUnknown},
-		{"object → unknown", SchemaObject, TypeUnknown},
-		{"unknown → unknown", SchemaUnknown, TypeUnknown},
+		{"string", schemaString, TypeString},
+		{"number", schemaNumber, TypeNumber},
+		{"bool", schemaBool, TypeBool},
+		{"list → unknown (no scalar mapping)", schemaList, TypeUnknown},
+		{"map → unknown", schemaMap, TypeUnknown},
+		{"set → unknown", schemaSet, TypeUnknown},
+		{"object → unknown", schemaObject, TypeUnknown},
+		{"unknown → unknown", schemaUnknown, TypeUnknown},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -174,13 +174,13 @@ func TestSchemaKindToVarType_ExhaustiveCases(t *testing.T) {
 }
 
 // schemaKindLabel — every case + default. The existing
-// TestTypeSchema_label in modules_test.go tests the TypeSchema.label()
+// TestTypeSchema_label in modules_test.go tests the typeSchema.label()
 // method; this one tests the underlying schemaKindLabel helper which
 // production code calls directly in some places.
 //
-// Subtest names are derived from the *input* SchemaKind, not the
-// expected output, so the default-branch (SchemaString → "unknown")
-// and explicit-unknown (SchemaUnknown → "unknown") cases don't
+// Subtest names are derived from the *input* schemaKind, not the
+// expected output, so the default-branch (schemaString → "unknown")
+// and explicit-unknown (schemaUnknown → "unknown") cases don't
 // collide. With colliding names Go appends "#01" to disambiguate,
 // but failure attribution becomes ambiguous and `go test -run` can't
 // target individual cases.
@@ -188,15 +188,15 @@ func TestSchemaKindLabel_ExhaustiveCases(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		in   SchemaKind
+		in   schemaKind
 		want string
 	}{
-		{"list", SchemaList, "list"},
-		{"map", SchemaMap, "map"},
-		{"set", SchemaSet, "set"},
-		{"object", SchemaObject, "object"},
-		{"string_input_defaults_to_unknown", SchemaString, "unknown"}, // default branch
-		{"explicit_unknown", SchemaUnknown, "unknown"},
+		{"list", schemaList, "list"},
+		{"map", schemaMap, "map"},
+		{"set", schemaSet, "set"},
+		{"object", schemaObject, "object"},
+		{"string_input_defaults_to_unknown", schemaString, "unknown"}, // default branch
+		{"explicit_unknown", schemaUnknown, "unknown"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -230,22 +230,22 @@ func TestUnwrapExpr_TemplateWrapStrips(t *testing.T) {
 }
 
 // varTypeToSchemaKind edge branches — non-local refs and undefined
-// locals must return SchemaUnknown rather than crash on nil. The
+// locals must return schemaUnknown rather than crash on nil. The
 // CyclicLocals case is already covered by the existing
 // TestVarTypeToSchemaKind_CyclicLocals_NoPanic in checks_test.go.
 func TestVarTypeToSchemaKind_NonLocalRef(t *testing.T) {
 	t.Parallel()
 	expr := parseExprForTest(t, "var.foo")
-	if got := varTypeToSchemaKind(expr, nil, nil); got != SchemaUnknown {
-		t.Errorf("varTypeToSchemaKind(var.foo) = %v, want SchemaUnknown", got)
+	if got := varTypeToSchemaKind(expr, nil, nil); got != schemaUnknown {
+		t.Errorf("varTypeToSchemaKind(var.foo) = %v, want schemaUnknown", got)
 	}
 }
 
 func TestVarTypeToSchemaKind_UndefinedLocal(t *testing.T) {
 	t.Parallel()
 	expr := parseExprForTest(t, "local.missing")
-	if got := varTypeToSchemaKind(expr, map[string]LocalInfo{}, nil); got != SchemaUnknown {
-		t.Errorf("varTypeToSchemaKind(local.missing) = %v, want SchemaUnknown", got)
+	if got := varTypeToSchemaKind(expr, map[string]localInfo{}, nil); got != schemaUnknown {
+		t.Errorf("varTypeToSchemaKind(local.missing) = %v, want schemaUnknown", got)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestResolveExprTypeRecursive_NonTraversal(t *testing.T) {
 func TestResolveExprTypeRecursive_UndefinedLocal(t *testing.T) {
 	t.Parallel()
 	expr := parseExprForTest(t, "local.missing")
-	if got := resolveExprTypeRecursive(expr, map[string]LocalInfo{}, nil); got != TypeUnknown {
+	if got := resolveExprTypeRecursive(expr, map[string]localInfo{}, nil); got != TypeUnknown {
 		t.Errorf("resolveExprTypeRecursive(local.missing) = %v, want TypeUnknown", got)
 	}
 }
@@ -277,7 +277,7 @@ func TestResolveExprTypeRecursive_Cycle(t *testing.T) {
 	t.Parallel()
 	exprA := parseExprForTest(t, "local.b")
 	exprB := parseExprForTest(t, "local.a")
-	locals := map[string]LocalInfo{
+	locals := map[string]localInfo{
 		"a": {Expr: exprA},
 		"b": {Expr: exprB},
 	}
@@ -307,7 +307,7 @@ func TestParseModuleVarSchemas_CacheHit(t *testing.T) {
 		[]byte(`variable "foo" { type = string }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cache := make(map[string]map[string]TypeSchema)
+	cache := make(map[string]map[string]typeSchema)
 
 	// First call: must read the dir AND populate the cache.
 	first := parseModuleVarSchemas(dir, cache)
@@ -324,7 +324,7 @@ func TestParseModuleVarSchemas_CacheHit(t *testing.T) {
 	// the production parser would never emit — its presence in the
 	// second result is observable iff first === second.
 	const markerKey = "__cache_hit_assertion_marker__"
-	first[markerKey] = TypeSchema{Kind: SchemaBool}
+	first[markerKey] = typeSchema{Kind: schemaBool}
 	second := parseModuleVarSchemas(dir, cache)
 	if _, ok := second[markerKey]; !ok {
 		t.Errorf("second call returned a fresh map (cache miss); want cached map instance")
@@ -341,7 +341,7 @@ func TestParseModuleVarSchemas_NotADir_CachesNil(t *testing.T) {
 	if err := os.WriteFile(notADir, []byte("content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cache := make(map[string]map[string]TypeSchema)
+	cache := make(map[string]map[string]typeSchema)
 	if got := parseModuleVarSchemas(notADir, cache); got != nil {
 		t.Errorf("parseModuleVarSchemas(not-a-dir) = %v, want nil", got)
 	}
@@ -400,7 +400,7 @@ func TestParseModuleVarSchemas_ParseError_SkippedSilently(t *testing.T) {
 	}
 }
 
-// Variable block without a `type` attribute should map to SchemaUnknown
+// Variable block without a `type` attribute should map to schemaUnknown
 // (so compareExprToSchema can't generate E006 against a module variable
 // whose declared shape is unknown).
 func TestParseModuleVarSchemas_VariableWithoutType_ReturnsUnknown(t *testing.T) {
@@ -415,8 +415,8 @@ func TestParseModuleVarSchemas_VariableWithoutType_ReturnsUnknown(t *testing.T) 
 	if !ok {
 		t.Fatalf("variable 'untyped' missing from schemas: got %v", got)
 	}
-	if schema.Kind != SchemaUnknown {
-		t.Errorf("variable without `type` should map to SchemaUnknown, got %v", schema.Kind)
+	if schema.Kind != schemaUnknown {
+		t.Errorf("variable without `type` should map to schemaUnknown, got %v", schema.Kind)
 	}
 }
 

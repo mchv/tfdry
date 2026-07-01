@@ -95,41 +95,41 @@ func TestParseTypeSchema(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
-		want SchemaKind
+		want schemaKind
 	}{
-		{"primitive string traversal", "x = string", SchemaString},
-		{"primitive number traversal", "x = number", SchemaNumber},
-		{"primitive bool traversal", "x = bool", SchemaBool},
-		{"any traversal → unknown", "x = any", SchemaUnknown},
+		{"primitive string traversal", "x = string", schemaString},
+		{"primitive number traversal", "x = number", schemaNumber},
+		{"primitive bool traversal", "x = bool", schemaBool},
+		{"any traversal → unknown", "x = any", schemaUnknown},
 
-		{"primitive string function-call", "x = string()", SchemaString},
-		{"primitive number function-call", "x = number()", SchemaNumber},
-		{"primitive bool function-call", "x = bool()", SchemaBool},
-		{"any function-call → unknown", "x = any()", SchemaUnknown},
+		{"primitive string function-call", "x = string()", schemaString},
+		{"primitive number function-call", "x = number()", schemaNumber},
+		{"primitive bool function-call", "x = bool()", schemaBool},
+		{"any function-call → unknown", "x = any()", schemaUnknown},
 
-		{"unknown function-call falls through", "x = nope()", SchemaUnknown},
-		{"object()", "x = object({})", SchemaObject},
-		{"list()", "x = list(string)", SchemaList},
-		{"map()", "x = map(number)", SchemaMap},
-		{"set()", "x = set(bool)", SchemaSet},
+		{"unknown function-call falls through", "x = nope()", schemaUnknown},
+		{"object()", "x = object({})", schemaObject},
+		{"list()", "x = list(string)", schemaList},
+		{"map()", "x = map(number)", schemaMap},
+		{"set()", "x = set(bool)", schemaSet},
 
-		{"optional() unwraps to inner", "x = optional(string)", SchemaString},
-		{"optional() with no args → unknown", "x = optional()", SchemaUnknown},
+		{"optional() unwraps to inner", "x = optional(string)", schemaString},
+		{"optional() with no args → unknown", "x = optional()", schemaUnknown},
 
-		{"unknown traversal name → unknown (skip checks)", "x = mystery", SchemaUnknown},
+		{"unknown traversal name → unknown (skip checks)", "x = mystery", schemaUnknown},
 
 		// Malformed container types must return Unknown, not concrete
-		// SchemaList/Set/Map with Elem=nil. Emitting a concrete kind makes
+		// schemaList/schemaSet/schemaMap with Elem=nil. Emitting a concrete kind makes
 		// downstream compareExprToSchema produce misleading E006 ("declared
 		// list, got string") when the actual problem is the module-side type
-		// constraint. SchemaUnknown short-circuits the check, which matches
+		// constraint. schemaUnknown short-circuits the check, which matches
 		// the fail-safe stance for unrecognised types.
-		{"list() no args → unknown", "x = list()", SchemaUnknown},
-		{"list(a, b) too many args → unknown", "x = list(string, number)", SchemaUnknown},
-		{"set() no args → unknown", "x = set()", SchemaUnknown},
-		{"set(a, b) too many args → unknown", "x = set(string, number)", SchemaUnknown},
-		{"map() no args → unknown", "x = map()", SchemaUnknown},
-		{"map(a, b) too many args → unknown", "x = map(string, number)", SchemaUnknown},
+		{"list() no args → unknown", "x = list()", schemaUnknown},
+		{"list(a, b) too many args → unknown", "x = list(string, number)", schemaUnknown},
+		{"set() no args → unknown", "x = set()", schemaUnknown},
+		{"set(a, b) too many args → unknown", "x = set(string, number)", schemaUnknown},
+		{"map() no args → unknown", "x = map()", schemaUnknown},
+		{"map(a, b) too many args → unknown", "x = map(string, number)", schemaUnknown},
 
 		// Same fail-safe stance for primitives. `string`/`number`/`bool`
 		// are TYPE KEYWORDS in HCL, not function calls — they should appear
@@ -137,10 +137,10 @@ func TestParseTypeSchema(t *testing.T) {
 		// type constraint is malformed (e.g. `type = string(bad)`). Returning
 		// the matching scalar Schema would let downstream compareExprToSchema
 		// emit misleading E006 against a broken declaration.
-		{"string(bad) malformed → unknown", "x = string(bad)", SchemaUnknown},
-		{"string() with arg → unknown", `x = string("foo")`, SchemaUnknown},
-		{"number(1) malformed → unknown", "x = number(1)", SchemaUnknown},
-		{"bool(true) malformed → unknown", "x = bool(true)", SchemaUnknown},
+		{"string(bad) malformed → unknown", "x = string(bad)", schemaUnknown},
+		{"string() with arg → unknown", `x = string("foo")`, schemaUnknown},
+		{"number(1) malformed → unknown", "x = number(1)", schemaUnknown},
+		{"bool(true) malformed → unknown", "x = bool(true)", schemaUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,8 +157,8 @@ func TestParseTypeSchema(t *testing.T) {
 func TestParseTypeSchema_Optional(t *testing.T) {
 	expr := parseAttrExpr(t, "x = optional(number)")
 	got := parseTypeSchema(expr)
-	if got.Kind != SchemaNumber {
-		t.Fatalf("expected SchemaNumber, got %v", got.Kind)
+	if got.Kind != schemaNumber {
+		t.Fatalf("expected schemaNumber, got %v", got.Kind)
 	}
 	if !got.Optional {
 		t.Errorf("Optional should be true for optional(number)")
@@ -172,58 +172,58 @@ func TestParseTypeSchema_TemplateWrapExpr(t *testing.T) {
 	inner := parseAttrExpr(t, "x = string")
 	wrapped := &hclsyntax.TemplateWrapExpr{Wrapped: inner}
 	got := parseTypeSchema(wrapped)
-	if got.Kind != SchemaString {
-		t.Errorf("TemplateWrapExpr-wrapped string should resolve to SchemaString, got %v", got.Kind)
+	if got.Kind != schemaString {
+		t.Errorf("TemplateWrapExpr-wrapped string should resolve to schemaString, got %v", got.Kind)
 	}
 }
 
-// TestTypeSchema_label covers all branches of TypeSchema.label().
+// TestTypeSchema_label covers all branches of typeSchema.label().
 func TestTypeSchema_label(t *testing.T) {
 	cases := []struct {
 		name string
-		kind SchemaKind
+		kind schemaKind
 		want string
 	}{
-		{"string", SchemaString, "string"},
-		{"number", SchemaNumber, "number"},
-		{"bool", SchemaBool, "bool"},
-		{"object", SchemaObject, "object"},
-		{"list", SchemaList, "list"},
-		{"map", SchemaMap, "map"},
-		{"set", SchemaSet, "set"},
-		{"explicit_unknown", SchemaUnknown, "unknown"},
-		{"out_of_range_defaults_to_unknown", SchemaKind(99), "unknown"}, // default branch
+		{"string", schemaString, "string"},
+		{"number", schemaNumber, "number"},
+		{"bool", schemaBool, "bool"},
+		{"object", schemaObject, "object"},
+		{"list", schemaList, "list"},
+		{"map", schemaMap, "map"},
+		{"set", schemaSet, "set"},
+		{"explicit_unknown", schemaUnknown, "unknown"},
+		{"out_of_range_defaults_to_unknown", schemaKind(99), "unknown"}, // default branch
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := TypeSchema{Kind: tc.kind}
+			s := typeSchema{Kind: tc.kind}
 			if got := s.label(); got != tc.want {
-				t.Errorf("TypeSchema{Kind:%v}.label() = %q, want %q", tc.kind, got, tc.want)
+				t.Errorf("typeSchema{Kind:%v}.label() = %q, want %q", tc.kind, got, tc.want)
 			}
 		})
 	}
 }
 
-// TestTypeSchema_isScalar covers all branches of TypeSchema.isScalar().
+// TestTypeSchema_isScalar covers all branches of typeSchema.isScalar().
 func TestTypeSchema_isScalar(t *testing.T) {
 	cases := []struct {
-		kind SchemaKind
+		kind schemaKind
 		want bool
 	}{
-		{SchemaString, true},
-		{SchemaNumber, true},
-		{SchemaBool, true},
-		{SchemaObject, false},
-		{SchemaList, false},
-		{SchemaMap, false},
-		{SchemaSet, false},
-		{SchemaUnknown, false},
+		{schemaString, true},
+		{schemaNumber, true},
+		{schemaBool, true},
+		{schemaObject, false},
+		{schemaList, false},
+		{schemaMap, false},
+		{schemaSet, false},
+		{schemaUnknown, false},
 	}
 	for _, tc := range cases {
-		t.Run(TypeSchema{Kind: tc.kind}.label(), func(t *testing.T) {
-			s := TypeSchema{Kind: tc.kind}
+		t.Run(typeSchema{Kind: tc.kind}.label(), func(t *testing.T) {
+			s := typeSchema{Kind: tc.kind}
 			if got := s.isScalar(); got != tc.want {
-				t.Errorf("TypeSchema{Kind:%v}.isScalar() = %v, want %v", tc.kind, got, tc.want)
+				t.Errorf("typeSchema{Kind:%v}.isScalar() = %v, want %v", tc.kind, got, tc.want)
 			}
 		})
 	}

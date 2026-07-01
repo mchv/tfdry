@@ -16,8 +16,8 @@ package checker
 // is a count/for_each block check that doesn't look at value types).
 //
 // For *module-side* declared variable types — which are recursive (objects,
-// lists, maps) — see [TypeSchema] in modules.go. The two types are used
-// together in E006 module-input checking, where TypeSchema describes what
+// lists, maps) — see [typeSchema] in modules.go. The two types are used
+// together in E006 module-input checking, where typeSchema describes what
 // a module declared and VarType describes what the caller passed.
 type VarType int
 

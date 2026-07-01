@@ -13,60 +13,60 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
-// SchemaKind is the kind of a TypeSchema node.
-type SchemaKind int
+// schemaKind is the kind of a typeSchema node.
+type schemaKind int
 
-// SchemaKind enumerates the recognised kinds of a Terraform type
-// expression. The zero value SchemaUnknown signals an unresolvable
+// schemaKind enumerates the recognised kinds of a Terraform type
+// expression. The zero value schemaUnknown signals an unresolvable
 // schema (e.g., a remote module reference we didn't load, an unparsable
 // type literal) and gates downstream checks so they skip rather than
 // emit spurious E007 violations.
 const (
-	SchemaUnknown SchemaKind = iota // unresolvable — skip checks
-	SchemaString
-	SchemaNumber
-	SchemaBool
-	SchemaObject // Fields holds named child schemas
-	SchemaList   // Elem holds element schema
-	SchemaMap    // Elem holds value schema
-	SchemaSet    // Elem holds element schema
+	schemaUnknown schemaKind = iota // unresolvable — skip checks
+	schemaString
+	schemaNumber
+	schemaBool
+	schemaObject // Fields holds named child schemas
+	schemaList   // Elem holds element schema
+	schemaMap    // Elem holds value schema
+	schemaSet    // Elem holds element schema
 )
 
-// TypeSchema is a recursive representation of a Terraform type expression.
+// typeSchema is a recursive representation of a Terraform type expression.
 //
-// TypeSchema describes a *module-side* declared variable type (the right-hand
+// typeSchema describes a *module-side* declared variable type (the right-hand
 // side of `type = ...` in a variable block), parsed from module variables.tf
 // for E006/E007. Unlike [VarType] — which is a flat enum for caller-side
-// expressions — TypeSchema is a tree because Terraform types can nest
+// expressions — typeSchema is a tree because Terraform types can nest
 // (object({ x = list(string) })). The lowercase isScalar/label methods
 // mirror VarType.IsScalar/VarType.Label intentionally so the two can be
 // compared side-by-side at module-input check sites.
-type TypeSchema struct {
-	Kind     SchemaKind
-	Fields   map[string]TypeSchema // SchemaObject only
-	Elem     *TypeSchema           // SchemaList/Map/Set only
+type typeSchema struct {
+	Kind     schemaKind
+	Fields   map[string]typeSchema // schemaObject only
+	Elem     *typeSchema           // schemaList/schemaMap/schemaSet only
 	Optional bool
 }
 
-func (s TypeSchema) isScalar() bool {
-	return s.Kind == SchemaString || s.Kind == SchemaNumber || s.Kind == SchemaBool
+func (s typeSchema) isScalar() bool {
+	return s.Kind == schemaString || s.Kind == schemaNumber || s.Kind == schemaBool
 }
 
-func (s TypeSchema) label() string {
+func (s typeSchema) label() string {
 	switch s.Kind {
-	case SchemaString:
+	case schemaString:
 		return "string"
-	case SchemaNumber:
+	case schemaNumber:
 		return "number"
-	case SchemaBool:
+	case schemaBool:
 		return "bool"
-	case SchemaObject:
+	case schemaObject:
 		return "object"
-	case SchemaList:
+	case schemaList:
 		return "list"
-	case SchemaMap:
+	case schemaMap:
 		return "map"
-	case SchemaSet:
+	case schemaSet:
 		return "set"
 	default:
 		return "unknown"
@@ -74,15 +74,15 @@ func (s TypeSchema) label() string {
 }
 
 // parseModuleVarSchemas reads all *.tf files in moduleDir and returns a map of
-// variable name → TypeSchema. Returns nil if the directory can't be read.
+// variable name → typeSchema. Returns nil if the directory can't be read.
 // Results are cached in the provided cache map (keyed by moduleDir).
-func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSchema) map[string]TypeSchema {
+func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSchema) map[string]typeSchema {
 	// Tolerate a nil cache. Later code writes to cache[moduleDir]
 	// (both early-out paths and the success path), which would panic on
 	// a nil map. Lazy-init a local cache so callers that don't care
 	// about result memoisation (tests, one-shot callers) can pass nil.
 	if cache == nil {
-		cache = make(map[string]map[string]TypeSchema)
+		cache = make(map[string]map[string]typeSchema)
 	}
 	if cached, ok := cache[moduleDir]; ok {
 		return cached
@@ -101,7 +101,7 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSch
 		return nil
 	}
 
-	schemas := make(map[string]TypeSchema)
+	schemas := make(map[string]typeSchema)
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".tf" {
 			continue
@@ -144,7 +144,7 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSch
 			name := block.Labels[0]
 			typeAttr, ok := block.Body.Attributes["type"]
 			if !ok {
-				schemas[name] = TypeSchema{Kind: SchemaUnknown}
+				schemas[name] = typeSchema{Kind: schemaUnknown}
 				continue
 			}
 			schemas[name] = parseTypeSchema(typeAttr.Expr)
@@ -155,26 +155,26 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]TypeSch
 	return schemas
 }
 
-// parseTypeSchema converts a Terraform type expression into a TypeSchema.
-func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
+// parseTypeSchema converts a Terraform type expression into a typeSchema.
+func parseTypeSchema(expr hclsyntax.Expression) typeSchema {
 	switch e := expr.(type) {
 	case *hclsyntax.ScopeTraversalExpr:
 		switch e.Traversal.RootName() {
 		case "string":
-			return TypeSchema{Kind: SchemaString}
+			return typeSchema{Kind: schemaString}
 		case "number":
-			return TypeSchema{Kind: SchemaNumber}
+			return typeSchema{Kind: schemaNumber}
 		case "bool":
-			return TypeSchema{Kind: SchemaBool}
+			return typeSchema{Kind: schemaBool}
 		case "any":
-			return TypeSchema{Kind: SchemaUnknown}
+			return typeSchema{Kind: schemaUnknown}
 		}
 		// Unrecognised bare identifier (e.g. a typo like `type = mystery`,
 		// or a custom-type reference tfdry doesn't model). Return Unknown
 		// so type-mismatch checks at callers are skipped — the module is
 		// broken, not the caller, so we should not produce false positives
 		// downstream.
-		return TypeSchema{Kind: SchemaUnknown}
+		return typeSchema{Kind: schemaUnknown}
 
 	case *hclsyntax.FunctionCallExpr:
 		// HCL type keywords like `string` / `number` / `bool` are
@@ -187,19 +187,19 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 		switch e.Name {
 		case "string":
 			if len(e.Args) != 0 {
-				return TypeSchema{Kind: SchemaUnknown}
+				return typeSchema{Kind: schemaUnknown}
 			}
-			return TypeSchema{Kind: SchemaString}
+			return typeSchema{Kind: schemaString}
 		case "number":
 			if len(e.Args) != 0 {
-				return TypeSchema{Kind: SchemaUnknown}
+				return typeSchema{Kind: schemaUnknown}
 			}
-			return TypeSchema{Kind: SchemaNumber}
+			return typeSchema{Kind: schemaNumber}
 		case "bool":
 			if len(e.Args) != 0 {
-				return TypeSchema{Kind: SchemaUnknown}
+				return typeSchema{Kind: schemaUnknown}
 			}
-			return TypeSchema{Kind: SchemaBool}
+			return typeSchema{Kind: schemaBool}
 		case "list", "set":
 			// Malformed list()/set() (zero args) or list(a, b) (too many args)
 			// should not become a concrete container with Elem=nil — that
@@ -207,21 +207,21 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 			// caller when the actual problem is the module's broken type
 			// constraint. Fail safe: return Unknown so checks are skipped.
 			if len(e.Args) != 1 {
-				return TypeSchema{Kind: SchemaUnknown}
+				return typeSchema{Kind: schemaUnknown}
 			}
 			elem := parseTypeSchema(e.Args[0])
-			s := TypeSchema{Kind: SchemaList, Elem: &elem}
+			s := typeSchema{Kind: schemaList, Elem: &elem}
 			if e.Name == "set" {
-				s.Kind = SchemaSet
+				s.Kind = schemaSet
 			}
 			return s
 		case "map":
 			// Same fail-safe stance for map() / map(a, b) — see "list", "set".
 			if len(e.Args) != 1 {
-				return TypeSchema{Kind: SchemaUnknown}
+				return typeSchema{Kind: schemaUnknown}
 			}
 			elem := parseTypeSchema(e.Args[0])
-			return TypeSchema{Kind: SchemaMap, Elem: &elem}
+			return typeSchema{Kind: schemaMap, Elem: &elem}
 		case "object":
 			return parseObjectSchema(e)
 		case "optional":
@@ -230,31 +230,31 @@ func parseTypeSchema(expr hclsyntax.Expression) TypeSchema {
 				s.Optional = true
 				return s
 			}
-			return TypeSchema{Kind: SchemaUnknown, Optional: true}
+			return typeSchema{Kind: schemaUnknown, Optional: true}
 		case "any":
-			return TypeSchema{Kind: SchemaUnknown}
+			return typeSchema{Kind: schemaUnknown}
 		}
-		return TypeSchema{Kind: SchemaUnknown}
+		return typeSchema{Kind: schemaUnknown}
 
 	case *hclsyntax.TemplateWrapExpr:
 		return parseTypeSchema(e.Wrapped)
 	}
-	return TypeSchema{Kind: SchemaUnknown}
+	return typeSchema{Kind: schemaUnknown}
 }
 
-// parseObjectSchema parses object({key=type, ...}) into a TypeSchema.
+// parseObjectSchema parses object({key=type, ...}) into a typeSchema.
 // Malformed object() forms (wrong arity or non-object literal) return Unknown
 // so compareObjectToSchema doesn't flag every key in the caller's literal as
 // E007 "unknown field" — the real bug is the module type constraint.
-func parseObjectSchema(e *hclsyntax.FunctionCallExpr) TypeSchema {
+func parseObjectSchema(e *hclsyntax.FunctionCallExpr) typeSchema {
 	if len(e.Args) != 1 {
-		return TypeSchema{Kind: SchemaUnknown}
+		return typeSchema{Kind: schemaUnknown}
 	}
 	obj, ok := e.Args[0].(*hclsyntax.ObjectConsExpr)
 	if !ok {
-		return TypeSchema{Kind: SchemaUnknown}
+		return typeSchema{Kind: schemaUnknown}
 	}
-	s := TypeSchema{Kind: SchemaObject, Fields: make(map[string]TypeSchema)}
+	s := typeSchema{Kind: schemaObject, Fields: make(map[string]typeSchema)}
 	for _, item := range obj.Items {
 		key := objectKeyName(item.KeyExpr)
 		if key == "" {
@@ -300,7 +300,7 @@ var moduleMetaArgs = map[string]struct{}{
 
 // checkModuleInputs checks all module blocks in f for type mismatches and unknown
 // keys against the module's declared variable schemas. dir is the caller's directory.
-func checkModuleInputs(f ParsedFile, dir string, locals map[string]LocalInfo, checks CheckSet, cache map[string]map[string]TypeSchema) []Violation {
+func checkModuleInputs(f ParsedFile, dir string, locals map[string]localInfo, checks CheckSet, cache map[string]map[string]typeSchema) []Violation {
 	var violations []Violation
 	for _, block := range f.Body.Blocks {
 		if block.Type != "module" || len(block.Labels) != 1 {
@@ -368,13 +368,13 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]LocalInfo, ch
 	return violations
 }
 
-// compareExprToSchema recursively compares an expression against a TypeSchema,
+// compareExprToSchema recursively compares an expression against a typeSchema,
 // appending E006/E007 violations to out. context is a human-readable path for messages.
-func compareExprToSchema(file string, line int, context string, expr hclsyntax.Expression, schema TypeSchema, locals map[string]LocalInfo, checks CheckSet, out *[]Violation) {
-	if schema.Kind == SchemaUnknown {
+func compareExprToSchema(file string, line int, context string, expr hclsyntax.Expression, schema typeSchema, locals map[string]localInfo, checks CheckSet, out *[]Violation) {
+	if schema.Kind == schemaUnknown {
 		return
 	}
-	if schema.Kind == SchemaObject {
+	if schema.Kind == schemaObject {
 		if obj, ok := unwrapExpr(expr).(*hclsyntax.ObjectConsExpr); ok {
 			compareObjectToSchema(file, context, obj, schema, locals, checks, out)
 			return
@@ -384,9 +384,9 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 	// fall-through below still catches "passed an object where list expected"
 	// type errors; this branch only fires when the kinds match and we have
 	// an Elem schema to validate the contents against.
-	if schema.Elem != nil && schema.Elem.Kind != SchemaUnknown {
+	if schema.Elem != nil && schema.Elem.Kind != schemaUnknown {
 		switch schema.Kind {
-		case SchemaList, SchemaSet:
+		case schemaList, schemaSet:
 			if tup, ok := unwrapExpr(expr).(*hclsyntax.TupleConsExpr); ok {
 				for i, elemExpr := range tup.Exprs {
 					// Use the element's own line for multi-line literals
@@ -402,7 +402,7 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 				}
 				return
 			}
-		case SchemaMap:
+		case schemaMap:
 			if obj, ok := unwrapExpr(expr).(*hclsyntax.ObjectConsExpr); ok {
 				for _, item := range obj.Items {
 					key := objectKeyName(item.KeyExpr)
@@ -458,7 +458,7 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 	}
 	// Both non-scalar: flag list/set passed where map/object expected (or vice versa).
 	exprKind := varTypeToSchemaKind(expr, locals, nil)
-	if exprKind != SchemaUnknown && kindIsSequence(exprKind) != kindIsSequence(schema.Kind) {
+	if exprKind != schemaUnknown && kindIsSequence(exprKind) != kindIsSequence(schema.Kind) {
 		*out = append(*out, Violation{
 			Code:     "E006",
 			Severity: "error",
@@ -469,77 +469,77 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 	}
 }
 
-// schemaKindToVarType maps a scalar SchemaKind to its VarType equivalent.
-func schemaKindToVarType(k SchemaKind) VarType {
+// schemaKindToVarType maps a scalar schemaKind to its VarType equivalent.
+func schemaKindToVarType(k schemaKind) VarType {
 	switch k {
-	case SchemaString:
+	case schemaString:
 		return TypeString
-	case SchemaNumber:
+	case schemaNumber:
 		return TypeNumber
-	case SchemaBool:
+	case schemaBool:
 		return TypeBool
 	}
 	return TypeUnknown
 }
 
-// varTypeToSchemaKind infers the structural SchemaKind from an expression's AST shape,
+// varTypeToSchemaKind infers the structural schemaKind from an expression's AST shape,
 // following local references through the locals map. seen prevents infinite loops.
-func varTypeToSchemaKind(expr hclsyntax.Expression, locals map[string]LocalInfo, seen map[string]struct{}) SchemaKind {
+func varTypeToSchemaKind(expr hclsyntax.Expression, locals map[string]localInfo, seen map[string]struct{}) schemaKind {
 	e := unwrapExpr(expr)
 	switch e.(type) {
 	case *hclsyntax.TupleConsExpr:
-		return SchemaList
+		return schemaList
 	case *hclsyntax.ObjectConsExpr:
-		return SchemaObject
+		return schemaObject
 	}
 	ref, ok := e.(*hclsyntax.ScopeTraversalExpr)
 	if !ok || len(ref.Traversal) != 2 || ref.Traversal.RootName() != "local" {
-		return SchemaUnknown
+		return schemaUnknown
 	}
 	attr, ok := ref.Traversal[1].(hcl.TraverseAttr)
 	if !ok {
-		return SchemaUnknown
+		return schemaUnknown
 	}
 	if seen == nil {
 		seen = make(map[string]struct{})
 	}
 	if _, cycle := seen[attr.Name]; cycle {
-		return SchemaUnknown // cycle detected
+		return schemaUnknown // cycle detected
 	}
 	seen[attr.Name] = struct{}{}
 	if li, defined := locals[attr.Name]; defined && li.Expr != nil {
 		return varTypeToSchemaKind(li.Expr, locals, seen)
 	}
-	return SchemaUnknown
+	return schemaUnknown
 }
 
-func schemaKindLabel(k SchemaKind) string {
+func schemaKindLabel(k schemaKind) string {
 	switch k {
-	case SchemaList:
+	case schemaList:
 		return "list"
-	case SchemaMap:
+	case schemaMap:
 		return "map"
-	case SchemaSet:
+	case schemaSet:
 		return "set"
-	case SchemaObject:
+	case schemaObject:
 		return "object"
 	default:
 		return "unknown"
 	}
 }
 
-// kindIsSequence reports whether a SchemaKind is a sequence (list/set) vs a mapping (map/object).
-func kindIsSequence(k SchemaKind) bool {
-	return k == SchemaList || k == SchemaSet
+// kindIsSequence reports whether a schemaKind is a sequence (list/set) vs a mapping (map/object).
+func kindIsSequence(k schemaKind) bool {
+	return k == schemaList || k == schemaSet
 }
 
-// compareObjectToSchema checks each key of an object literal against a SchemaObject.
+// compareObjectToSchema checks each key of an object literal against a schemaObject.
 //
 // The function uses each item's own KeyExpr.StartRange() for the
 // per-key violation line — the caller's parse line is irrelevant
 // once we're inside the object literal — so no `line` parameter
 // is needed (caught by unparam in PR A3).
-func compareObjectToSchema(file, context string, obj *hclsyntax.ObjectConsExpr, schema TypeSchema, locals map[string]LocalInfo, checks CheckSet, out *[]Violation) {
+func compareObjectToSchema(file, context string, obj *hclsyntax.ObjectConsExpr, schema typeSchema, locals map[string]localInfo, checks CheckSet, out *[]Violation) {
 	for _, item := range obj.Items {
 		key := objectKeyName(item.KeyExpr)
 		if key == "" {
@@ -576,11 +576,11 @@ func unwrapExpr(expr hclsyntax.Expression) hclsyntax.Expression {
 // TypeUnknown. Transitive chains (local.b → local.a → 1) are resolved by
 // recursing through the referenced local's expression with cycle detection,
 // matching the same pattern used by varTypeToSchemaKind.
-func resolveExprType(expr hclsyntax.Expression, locals map[string]LocalInfo) VarType {
+func resolveExprType(expr hclsyntax.Expression, locals map[string]localInfo) VarType {
 	return resolveExprTypeRecursive(expr, locals, nil)
 }
 
-func resolveExprTypeRecursive(expr hclsyntax.Expression, locals map[string]LocalInfo, seen map[string]struct{}) VarType {
+func resolveExprTypeRecursive(expr hclsyntax.Expression, locals map[string]localInfo, seen map[string]struct{}) VarType {
 	if t := inferExprType(expr); t != TypeUnknown {
 		return t
 	}
