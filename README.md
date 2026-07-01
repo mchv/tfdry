@@ -265,11 +265,17 @@ actually lint.
 
 ### GitHub Actions
 
+Same single-workspace scoping model as the pre-commit example above:
+`tfdry` lints one directory at a time, so point the argument at your
+workspace path. For repos with multiple workspaces, add one step per
+workspace, or wait for `--recursive` on the lint command (planned for
+v0.2.0 — [#21](https://github.com/mchv/tfdry/issues/21)).
+
 The minimal recipe fails the build on lint violations:
 
 ```yaml
 - name: tfdry
-  run: tfdry .
+  run: tfdry terraform/
 ```
 
 To keep a JSON report for downstream steps (artifact upload, `jq`
@@ -280,8 +286,11 @@ filters), pipe through `tee`:
   shell: bash
   run: |
     set -euo pipefail
-    tfdry --json . | tee tfdry.json
+    tfdry --json terraform/ | tee tfdry.json
 ```
+
+Substitute `terraform/` for your workspace path (`infra/`,
+`deployments/`, etc.).
 
 The `set -o pipefail` line matters *because of the pipe*, not because
 of CI. Without it, the pipeline's exit code would come from `tee`
