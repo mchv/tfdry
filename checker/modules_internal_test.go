@@ -145,7 +145,12 @@ func TestParseTypeSchema_UnrecognisedTraversal_ReturnsUnknown(t *testing.T) {
 	}
 }
 
-// schemaKindToVarType — every case + default branch.
+// schemaKindToVarType — every case + defensive panic on out-of-range.
+// All 8 declared schemaKind values are enumerated below (scalars map
+// to their VarType equivalents; compound and explicit-unknown map to
+// TypeUnknown). Out-of-range values panic to catch forgotten enum
+// extensions loudly at test time — belt-and-braces alongside the
+// exhaustive linter's compile-time coverage check.
 func TestSchemaKindToVarType_ExhaustiveCases(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -171,6 +176,16 @@ func TestSchemaKindToVarType_ExhaustiveCases(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("out_of_range_panics", func(t *testing.T) {
+		t.Parallel()
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected schemaKindToVarType(schemaKind(99)) to panic, got nil recover")
+			}
+		}()
+		_ = schemaKindToVarType(schemaKind(99))
+	})
 }
 
 // schemaKindLabel — every case + defensive panic on out-of-range. The

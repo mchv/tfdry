@@ -43,7 +43,17 @@ func (t VarType) IsScalar() bool {
 }
 
 // Label returns a human-readable name for t, used in violation messages.
-// Returns "unknown" for unrecognised values.
+// Returns "unknown" for TypeUnknown and, defensively, for any out-of-range
+// values that a caller might construct via reflection or deserialisation.
+//
+// Public API note: graceful fallback (not panic) is intentional. External
+// callers can hold VarType values acquired through means that bypass Go's
+// enum discipline (JSON round-trip, reflection). A rendering function
+// crashing on such input is user-hostile; returning "unknown" is idiomatic
+// for public rendering paths (compare strconv.Itoa, fmt.Sprintf which
+// never panic regardless of input). The exhaustive linter still enforces
+// that every declared VarType constant has an explicit case here — the
+// `default:` is only reached for out-of-range values.
 func (t VarType) Label() string {
 	switch t {
 	case TypeString:
@@ -54,6 +64,8 @@ func (t VarType) Label() string {
 		return "bool"
 	case TypeObject:
 		return "object"
+	case TypeUnknown:
+		return "unknown"
 	default:
 		return "unknown"
 	}
