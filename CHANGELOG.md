@@ -104,7 +104,7 @@ shipped; for the per-PR breakdown see the merged PRs in the
   `build(github-actions): bump <action> from <a> to <b>` (GitHub
   Actions ecosystem) — the conventional-commit scope makes the source
   ecosystem visible at a glance. Both are excluded from goreleaser's
-  release-notes via the `^build(\(.+\))?:` exclude regex.
+  release-notes via the `^build(\([^)]+\))?:` exclude regex.
 - **Pinned tool versions** in the Makefile so `make tools` produces
   reproducible builds: `gofumpt@v0.10.0`, `golangci-lint@v2.12.2`,
   `govulncheck@v1.4.0`. Dependabot's `gomod` ecosystem can't track
