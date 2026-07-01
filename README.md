@@ -259,9 +259,9 @@ repos:
 
 Adjust `entry:` and `files:` to match your workspace path
 (`infra/`, `deployments/`, etc.). The `[^/]+` (rather than `.*`)
-constrains the regex to direct-child `.tf` files, matching what
-`tfdry` will actually lint — subdirectory changes aren't linted
-by a single invocation without `--recursive`.
+restricts the regex to direct-child `.tf` files — `.*` would
+over-match subdirectory files that `tfdry --json terraform/` doesn't
+actually lint.
 
 ### GitHub Actions
 
