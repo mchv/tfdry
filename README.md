@@ -289,7 +289,7 @@ filters), pipe through `tee`:
     tfdry --json terraform/ | tee tfdry.json
 ```
 
-Substitute `terraform/` for your workspace path (`infra/`,
+Replace `terraform/` with your workspace path (`infra/`,
 `deployments/`, etc.).
 
 The `set -o pipefail` line matters *because of the pipe*, not because
