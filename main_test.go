@@ -395,6 +395,120 @@ func TestRun_Version_PrintsVersion(t *testing.T) {
 	}
 }
 
+// ── --version / -v flags ─────────────────────────────────────────────────────
+
+func TestRun_VersionFlag_PrintsVersionAndExitsZero(t *testing.T) {
+	t.Parallel()
+	code, stdout, _ := runCLI("--version")
+	if code != 0 {
+		t.Fatalf("--version should exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "tfdry") {
+		t.Errorf("--version output should contain 'tfdry'; got: %q", stdout)
+	}
+}
+
+func TestRun_VersionShortFlag_PrintsVersionAndExitsZero(t *testing.T) {
+	t.Parallel()
+	code, stdout, _ := runCLI("-v")
+	if code != 0 {
+		t.Fatalf("-v should exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "tfdry") {
+		t.Errorf("-v output should contain 'tfdry'; got: %q", stdout)
+	}
+}
+
+func TestRun_VersionFlag_MatchesSubcommandOutput(t *testing.T) {
+	t.Parallel()
+	_, flagOut, _ := runCLI("--version")
+	_, subcmdOut, _ := runCLI("version")
+	if flagOut != subcmdOut {
+		t.Errorf("--version and 'version' subcommand should produce identical output\n  --version: %q\n  version:   %q", flagOut, subcmdOut)
+	}
+}
+
+// ── --help / -h flags and 'help' subcommand ──────────────────────────────────
+
+func TestRun_HelpFlag_PrintsUsageAndExitsZero(t *testing.T) {
+	t.Parallel()
+	code, stdout, _ := runCLI("--help")
+	if code != 0 {
+		t.Fatalf("--help should exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "Usage") {
+		t.Errorf("--help output should contain 'Usage'; got: %q", stdout)
+	}
+}
+
+func TestRun_HelpShortFlag_PrintsUsageAndExitsZero(t *testing.T) {
+	t.Parallel()
+	code, stdout, _ := runCLI("-h")
+	if code != 0 {
+		t.Fatalf("-h should exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "Usage") {
+		t.Errorf("-h output should contain 'Usage'; got: %q", stdout)
+	}
+}
+
+func TestRun_HelpSubcommand_PrintsUsageAndExitsZero(t *testing.T) {
+	t.Parallel()
+	code, stdout, _ := runCLI("help")
+	if code != 0 {
+		t.Fatalf("'help' subcommand should exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "Usage") {
+		t.Errorf("'help' output should contain 'Usage'; got: %q", stdout)
+	}
+}
+
+func TestRun_HelpFlag_MatchesHelpSubcommand(t *testing.T) {
+	t.Parallel()
+	_, flagOut, _ := runCLI("--help")
+	_, subcmdOut, _ := runCLI("help")
+	if flagOut != subcmdOut {
+		t.Errorf("--help and 'help' subcommand should produce identical output\n  --help: %q\n  help:   %q", flagOut, subcmdOut)
+	}
+}
+
+func TestRun_HelpOutput_ContainsKeyInformation(t *testing.T) {
+	t.Parallel()
+	_, stdout, _ := runCLI("--help")
+	// Help should mention subcommands.
+	if !strings.Contains(stdout, "fmt") {
+		t.Errorf("help should mention the 'fmt' subcommand; got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "describe") {
+		t.Errorf("help should mention the 'describe' subcommand; got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "version") {
+		t.Errorf("help should mention the 'version' subcommand; got: %q", stdout)
+	}
+	// Help should mention key flags.
+	if !strings.Contains(stdout, "--json") {
+		t.Errorf("help should mention '--json' flag; got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "--fix") {
+		t.Errorf("help should mention '--fix' flag; got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "--checks") {
+		t.Errorf("help should mention '--checks' flag; got: %q", stdout)
+	}
+}
+
+func TestRun_FmtHelp_PrintsUsageAndExitsZero(t *testing.T) {
+	t.Parallel()
+	// Subcommand-level --help: printing top-level help is acceptable.
+	code, stdout, _ := runCLI("fmt", "--help")
+	if code != 0 {
+		t.Fatalf("'fmt --help' should exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "Usage") {
+		t.Errorf("'fmt --help' output should contain 'Usage'; got: %q", stdout)
+	}
+}
+
 // ── default dir argument ─────────────────────────────────────────────────────
 
 func TestRun_DefaultDirIsCurrent(t *testing.T) {
