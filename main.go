@@ -164,17 +164,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		switch {
 		case arg == "--version" || arg == "-v":
-			if err := printVersion(stdout); err != nil {
-				fmt.Fprintln(stderr, "tfdry: error writing output:", err)
-				return 2
-			}
-			return 0
+			return runWrite(printVersion, stdout, stderr)
 		case arg == "--help" || arg == "-h":
-			if err := printUsage(stdout); err != nil {
-				fmt.Fprintln(stderr, "tfdry: error writing output:", err)
-				return 2
-			}
-			return 0
+			return runWrite(printUsage, stdout, stderr)
 		case arg == "--json":
 			jsonFlag = true
 		case arg == "--fix":
@@ -274,17 +266,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "describe":
 		return runDescribe(stdout, stderr, jsonFlag)
 	case "version":
-		if err := printVersion(stdout); err != nil {
-			fmt.Fprintln(stderr, "tfdry: error writing output:", err)
-			return 2
-		}
-		return 0
+		return runWrite(printVersion, stdout, stderr)
 	case "help":
-		if err := printUsage(stdout); err != nil {
-			fmt.Fprintln(stderr, "tfdry: error writing output:", err)
-			return 2
-		}
-		return 0
+		return runWrite(printUsage, stdout, stderr)
 	case "fmt":
 		return runFmt(ctx, stdout, stderr, dir, fmtCheck, fmtRecursive)
 	}
@@ -399,6 +383,19 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 		fmt.Fprintf(&b, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
 	}
 	if _, err := b.WriteTo(stdout); err != nil {
+		fmt.Fprintln(stderr, "tfdry: error writing output:", err)
+		return 2
+	}
+	return 0
+}
+
+// runWrite executes fn to produce output on stdout and returns the exit
+// code: 0 if the write succeeded, 2 (with a stderr message) if it failed.
+// Encapsulates the exit-2-on-write-failure contract used by --version,
+// --help, and their subcommand forms so all four entry points map write
+// failures uniformly per run()'s documented exit-code contract.
+func runWrite(fn func(io.Writer) error, stdout, stderr io.Writer) int {
+	if err := fn(stdout); err != nil {
 		fmt.Fprintln(stderr, "tfdry: error writing output:", err)
 		return 2
 	}
