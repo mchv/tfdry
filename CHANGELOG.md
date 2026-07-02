@@ -16,6 +16,16 @@ Each release entry groups changes under the following headings (omitted if empty
 
 ## [Unreleased]
 
+### Fixed
+
+- `--version` / `-v` flags now print the version and exit 0, matching the
+  existing `tfdry version` subcommand behaviour.
+- `--help` / `-h` flags now print usage information and exit 0.
+- `tfdry help` is now a recognised subcommand (previously misinterpreted
+  as a directory path, producing an E000 tool error).
+- Subcommand-level `--help` (e.g. `tfdry fmt --help`) prints top-level
+  usage and exits 0 instead of failing with "unrecognized flag".
+
 ## [0.1.0] — 2026-07-01
 
 First public release. The sections below summarise the surface that

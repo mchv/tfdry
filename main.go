@@ -148,6 +148,10 @@ func handleFatalErr(err error, stderr io.Writer, prefix string) (int, bool) {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Pre-scan: collect all flags before dispatching subcommands so that
 	// flag order relative to subcommand name doesn't matter.
+	//
+	// --version / -v and --help / -h are handled first as early-exit
+	// flags — they print their output and return immediately, before
+	// any subcommand dispatch or directory resolution.
 	jsonFlag := false
 	fixFlag := false
 	fmtCheck := false
@@ -159,6 +163,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	for _, arg := range args {
 		switch {
+		case arg == "--version" || arg == "-v":
+			fmt.Fprintln(stdout, "tfdry", output.Version)
+			return 0
+		case arg == "--help" || arg == "-h":
+			printUsage(stdout)
+			return 0
 		case arg == "--json":
 			jsonFlag = true
 		case arg == "--fix":
@@ -195,7 +205,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			for _, c := range codes {
 				checksFilter[c] = struct{}{}
 			}
-		case arg == "describe" || arg == "version" || arg == "fmt":
+		case arg == "describe" || arg == "version" || arg == "fmt" || arg == "help":
 			if subcmd != "" {
 				fmt.Fprintf(stderr, "tfdry: unexpected subcommand %q after %q\n", arg, subcmd)
 				return 2
@@ -213,8 +223,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			dirSet = true
 		}
 	}
-	// describe / version do not take a positional argument.
-	if (subcmd == "describe" || subcmd == "version") && dirSet {
+	// describe / version / help do not take a positional argument.
+	if (subcmd == "describe" || subcmd == "version" || subcmd == "help") && dirSet {
 		fmt.Fprintf(stderr, "tfdry: %s does not accept a positional argument\n", subcmd)
 		return 2
 	}
@@ -259,6 +269,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runDescribe(stdout, stderr, jsonFlag)
 	case "version":
 		fmt.Fprintln(stdout, "tfdry", output.Version)
+		return 0
+	case "help":
+		printUsage(stdout)
 		return 0
 	case "fmt":
 		return runFmt(ctx, stdout, stderr, dir, fmtCheck, fmtRecursive)
@@ -378,6 +391,33 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 		return 2
 	}
 	return 0
+}
+
+// printUsage writes top-level help text to the given writer. Used by
+// --help, -h, and the 'help' subcommand.
+func printUsage(w io.Writer) {
+	var b bytes.Buffer
+	fmt.Fprintln(&b, "Usage: tfdry [flags] [directory]")
+	fmt.Fprintln(&b, "       tfdry fmt [-check] [-recursive] [path]")
+	fmt.Fprintln(&b, "       tfdry describe [--json]")
+	fmt.Fprintln(&b, "       tfdry version")
+	fmt.Fprintln(&b, "       tfdry help")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "Fast, focused Terraform linting — no init, no state, no network.")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "Flags:")
+	fmt.Fprintln(&b, "  --checks=CODES   Comma-separated allow-list of check codes (e.g. E003,E004).")
+	fmt.Fprintln(&b, "  --fix            Rewrite files in place to fix E008 (formatting).")
+	fmt.Fprintln(&b, "  --json           Machine-readable JSON output.")
+	fmt.Fprintln(&b, "  --help, -h       Show this help and exit.")
+	fmt.Fprintln(&b, "  --version, -v    Print version and exit.")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "Exit codes:")
+	fmt.Fprintln(&b, "  0   No violations (or all fixed by --fix).")
+	fmt.Fprintln(&b, "  1   Lint violations found.")
+	fmt.Fprintln(&b, "  2   Tool error (bad arguments, unreadable input, write failure).")
+	fmt.Fprintln(&b, "  3   tfdry fmt -check found unformatted files.")
+	_, _ = b.WriteTo(w)
 }
 
 // runFmt implements `tfdry fmt`, modelled on `terraform fmt`:
