@@ -164,10 +164,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		switch {
 		case arg == "--version" || arg == "-v":
-			fmt.Fprintln(stdout, "tfdry", output.Version)
+			if err := printVersion(stdout); err != nil {
+				fmt.Fprintln(stderr, "tfdry: error writing output:", err)
+				return 2
+			}
 			return 0
 		case arg == "--help" || arg == "-h":
-			printUsage(stdout)
+			if err := printUsage(stdout); err != nil {
+				fmt.Fprintln(stderr, "tfdry: error writing output:", err)
+				return 2
+			}
 			return 0
 		case arg == "--json":
 			jsonFlag = true
@@ -268,10 +274,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "describe":
 		return runDescribe(stdout, stderr, jsonFlag)
 	case "version":
-		fmt.Fprintln(stdout, "tfdry", output.Version)
+		if err := printVersion(stdout); err != nil {
+			fmt.Fprintln(stderr, "tfdry: error writing output:", err)
+			return 2
+		}
 		return 0
 	case "help":
-		printUsage(stdout)
+		if err := printUsage(stdout); err != nil {
+			fmt.Fprintln(stderr, "tfdry: error writing output:", err)
+			return 2
+		}
 		return 0
 	case "fmt":
 		return runFmt(ctx, stdout, stderr, dir, fmtCheck, fmtRecursive)
@@ -393,9 +405,24 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 	return 0
 }
 
+// printVersion writes the version line to the given writer. Used by
+// --version, -v, and the 'version' subcommand. Returns any write error
+// so callers can map stdout failures (broken pipe, short write, etc.)
+// to exit 2 per run()'s documented contract. Buffered write via
+// bytes.Buffer.WriteTo detects both real errors and spec-violating
+// short-writes-without-error uniformly.
+func printVersion(w io.Writer) error {
+	var b bytes.Buffer
+	fmt.Fprintln(&b, "tfdry", output.Version)
+	_, err := b.WriteTo(w)
+	return err
+}
+
 // printUsage writes top-level help text to the given writer. Used by
-// --help, -h, and the 'help' subcommand.
-func printUsage(w io.Writer) {
+// --help, -h, and the 'help' subcommand. Returns any write error so
+// callers can map stdout failures to exit 2 (same contract as
+// printVersion above).
+func printUsage(w io.Writer) error {
 	var b bytes.Buffer
 	fmt.Fprintln(&b, "Usage: tfdry [flags] [directory]")
 	fmt.Fprintln(&b, "       tfdry fmt [-check] [-recursive] [path]")
@@ -417,7 +444,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(&b, "  1   Lint violations found.")
 	fmt.Fprintln(&b, "  2   Tool error (bad arguments, unreadable input, write failure).")
 	fmt.Fprintln(&b, "  3   tfdry fmt -check found unformatted files.")
-	_, _ = b.WriteTo(w)
+	_, err := b.WriteTo(w)
+	return err
 }
 
 // runFmt implements `tfdry fmt`, modelled on `terraform fmt`:
