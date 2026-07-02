@@ -1824,3 +1824,76 @@ func TestGitHubTemplates_RelativeLinksResolve(t *testing.T) {
 		}
 	}
 }
+
+// ── version/help write-error propagation ────────────────────────────────
+
+// All version/help entry points (both flag and subcommand forms) must map
+// stdout write failures to exit 2 with an error message on stderr, matching
+// run()'s documented "stdout broken-pipe / short-write failures → exit 2"
+// contract and runDescribe's implementation. Prior to this fix, these paths
+// silently swallowed write errors and returned 0 even on broken pipes.
+func TestRun_VersionHelp_PropagatesWriteError(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"long-version-flag", []string{"--version"}},
+		{"short-version-flag", []string{"-v"}},
+		{"long-help-flag", []string{"--help"}},
+		{"short-help-flag", []string{"-h"}},
+		{"version-subcommand", []string{"version"}},
+		{"help-subcommand", []string{"help"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stdout := errWriter{err: io.ErrClosedPipe}
+			var stderr bytes.Buffer
+			code := run(context.Background(), tc.args, stdout, &stderr)
+			if code != 2 {
+				t.Errorf("%s with failing stdout should exit 2, got %d (stderr=%q)",
+					tc.name, code, stderr.String())
+			}
+			if stderr.Len() == 0 {
+				t.Errorf("%s: expected an error message on stderr explaining the write failure",
+					tc.name)
+			}
+		})
+	}
+}
+
+// Same six paths, short-write-without-error variant. bytes.Buffer.WriteTo
+// surfaces io.ErrShortWrite even for spec-violating writers that return
+// n < len(p) with a nil error, so all these paths must detect and
+// propagate that failure mode too.
+func TestRun_VersionHelp_DetectsShortWrite(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"long-version-flag", []string{"--version"}},
+		{"short-version-flag", []string{"-v"}},
+		{"long-help-flag", []string{"--help"}},
+		{"short-help-flag", []string{"-h"}},
+		{"version-subcommand", []string{"version"}},
+		{"help-subcommand", []string{"help"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stdout := shortWriter{accept: 1} // accept only the first byte
+			var stderr bytes.Buffer
+			code := run(context.Background(), tc.args, stdout, &stderr)
+			if code != 2 {
+				t.Errorf("%s with short-writing stdout should exit 2, got %d (stderr=%q)",
+					tc.name, code, stderr.String())
+			}
+			if stderr.Len() == 0 {
+				t.Errorf("%s: expected an error message on stderr explaining the short write",
+					tc.name)
+			}
+		})
+	}
+}
