@@ -168,7 +168,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	jsonFlag := false
 	fixFlag := false
 	fmtCheck := false
-	fmtRecursive := false
+	recursive := false
 	var checksFilter checker.CheckSet
 	dir := "."
 	dirSet := false
@@ -183,7 +183,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		case arg == "-check" || arg == "--check":
 			fmtCheck = true
 		case arg == "-recursive" || arg == "--recursive" || arg == "-r":
-			fmtRecursive = true
+			recursive = true
 		case strings.HasPrefix(arg, "--checks="):
 			rawCodes := strings.Split(strings.TrimPrefix(arg, "--checks="), ",")
 			var codes []string
@@ -235,19 +235,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "tfdry: %s does not accept a positional argument\n", subcmd)
 		return 2
 	}
-	// -check / -recursive only apply to the `fmt` subcommand. Reject early
-	// so a user who types `tfdry -check ./infra` (expecting a format check)
+	// -check only applies to the `fmt` subcommand. Reject early so a
+	// user who types `tfdry -check ./infra` (expecting a format check)
 	// gets a clear error instead of a silent lint pass with the flag
 	// ignored.
-	if subcmd != "fmt" {
-		if fmtCheck {
-			fmt.Fprintln(stderr, "tfdry: -check is only valid with the fmt subcommand")
-			return 2
-		}
-		if fmtRecursive {
-			fmt.Fprintln(stderr, "tfdry: -recursive is only valid with the fmt subcommand")
-			return 2
-		}
+	if fmtCheck && subcmd != "fmt" {
+		fmt.Fprintln(stderr, "tfdry: -check is only valid with the fmt subcommand")
+		return 2
+	}
+	// -recursive applies to the lint path (empty subcmd) and the `fmt`
+	// subcommand. On other subcommands (describe / version / help) it
+	// has no meaning, so reject to surface user mistakes rather than
+	// silently ignore the flag.
+	if recursive && subcmd != "" && subcmd != "fmt" {
+		fmt.Fprintln(stderr, "tfdry: -recursive is only valid with the lint and fmt commands")
+		return 2
 	}
 	// Symmetric to the -check/-recursive guards above — --json / --fix
 	// / --checks= are lint-path
@@ -279,16 +281,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "help":
 		return runWrite(printUsage, stdout, stderr)
 	case "fmt":
-		return runFmt(ctx, stdout, stderr, dir, fmtCheck, fmtRecursive)
+		return runFmt(ctx, stdout, stderr, dir, fmtCheck, recursive)
 	}
-
-	files, parseViolations, err := checker.ParseDir(ctx, dir)
-	if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
-		return code
-	}
-
-	// Parse violations (E000, E001) are always emitted — not subject to --checks filtering.
-	violations := append([]checker.Violation{}, parseViolations...)
 
 	// When --fix is enabled, skip E008 in the initial Run pass.
 	// `checker.Run` would otherwise format every file just to emit E008,
@@ -309,20 +303,64 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// user's filter. Detect that case (originally non-empty filter that
 	// emptied out via exclusion) and skip Run entirely.
 	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
-	if !skipRun {
-		runViolations, err := checker.Run(ctx, files, runFilter, dir)
+
+	// Directory list to lint. Non-recursive: exactly the CLI arg.
+	// Recursive: full walk, skipping hidden dirs and node_modules.
+	// Shares collectDirs with fmt -recursive for parity of skip logic.
+	dirs, err := collectDirs(dir, recursive)
+	if err != nil {
 		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 			return code
 		}
-		violations = append(violations, runViolations...)
+		fmt.Fprintln(stderr, "tfdry:", err)
+		return 2
 	}
 
-	if shouldFix {
-		_, fixViolations, err := checker.FixFormat(ctx, files, dir)
+	var violations []checker.Violation
+	for _, d := range dirs {
+		// Per-directory cancel checkpoint. On large monorepos the
+		// walker may cover hundreds of subdirs; a SIGINT mid-walk
+		// should bail before parsing the next directory. Mirrors the
+		// runFmt loop's checkpoint discipline.
+		if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry"); ok {
+			return code
+		}
+
+		files, parseViolations, err := checker.ParseDir(ctx, d)
 		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 			return code
 		}
-		violations = append(violations, fixViolations...)
+
+		// Parse violations (E000, E001) are always emitted — not
+		// subject to --checks filtering.
+		dirViolations := append([]checker.Violation{}, parseViolations...)
+
+		if !skipRun {
+			runViolations, err := checker.Run(ctx, files, runFilter, d)
+			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+				return code
+			}
+			dirViolations = append(dirViolations, runViolations...)
+		}
+
+		if shouldFix {
+			_, fixViolations, err := checker.FixFormat(ctx, files, d)
+			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+				return code
+			}
+			dirViolations = append(dirViolations, fixViolations...)
+		}
+
+		// Prefix v.File with the sub-path relative to the CLI arg.
+		// For the non-recursive case (dirs == [dir]), displayPath is
+		// a no-op and returns v.File verbatim — same as v0.1.1's
+		// bare-filename contract. For --recursive, this is what
+		// turns "main.tf" into "staging/main.tf" so consumers can
+		// attribute violations to a specific workspace directory.
+		for i := range dirViolations {
+			dirViolations[i].File = displayPath(dir, d, dirViolations[i].File)
+		}
+		violations = append(violations, dirViolations...)
 	}
 
 	report := output.NewReport(dir, violations)
@@ -430,7 +468,7 @@ func printVersion(w io.Writer) error {
 // printVersion above).
 func printUsage(w io.Writer) error {
 	var b bytes.Buffer
-	fmt.Fprintln(&b, "Usage: tfdry [flags] [directory]")
+	fmt.Fprintln(&b, "Usage: tfdry [flags] [-recursive] [directory]")
 	fmt.Fprintln(&b, "       tfdry fmt [-check] [-recursive] [path]")
 	fmt.Fprintln(&b, "       tfdry describe [--json]")
 	fmt.Fprintln(&b, "       tfdry version")
@@ -439,15 +477,15 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(&b, "Fast, focused Terraform linting — no init, no state, no network.")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "Flags:")
-	fmt.Fprintln(&b, "  --checks=CODES   Comma-separated allow-list of check codes (e.g. E003,E004).")
-	fmt.Fprintln(&b, "  --fix            Rewrite files in place to fix E008 (formatting).")
-	fmt.Fprintln(&b, "  --json           Machine-readable JSON output.")
-	fmt.Fprintln(&b, "  --help, -h       Show this help and exit.")
-	fmt.Fprintln(&b, "  --version, -v    Print version and exit.")
+	fmt.Fprintln(&b, "  --checks=CODES                 Comma-separated allow-list of check codes (e.g. E003,E004).")
+	fmt.Fprintln(&b, "  --fix                          Rewrite files in place to fix E008 (formatting).")
+	fmt.Fprintln(&b, "  --json                         Machine-readable JSON output.")
+	fmt.Fprintln(&b, "  -recursive, --recursive, -r    Recurse into subdirectories (lint and fmt).")
+	fmt.Fprintln(&b, "  --help, -h                     Show this help and exit.")
+	fmt.Fprintln(&b, "  --version, -v                  Print version and exit.")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "fmt subcommand flags:")
 	fmt.Fprintln(&b, "  -check, --check                Report files that would be reformatted; exit 3 if any (no changes made).")
-	fmt.Fprintln(&b, "  -recursive, --recursive, -r    Recurse into subdirectories.")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "Exit codes:")
 	fmt.Fprintln(&b, "  0   No violations (or all fixed by --fix).")
@@ -473,7 +511,7 @@ func printUsage(w io.Writer) error {
 func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, recursive bool) int {
 	// Entry-level cancel checkpoint. Without this, a pre-cancelled ctx
 	// still pays for os.Lstat on the supplied path plus a potentially
-	// deep collectFmtDirs walk in -recursive mode before the per-dir
+	// deep collectDirs walk in -recursive mode before the per-dir
 	// check (below) fires. Mirror the runFmtFile pattern (PR A2 round 1)
 	// so both fmt entry points behave identically on entry-cancel.
 	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
@@ -503,7 +541,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 		return runFmtFile(ctx, stdout, stderr, path, check)
 	}
 
-	dirs, err := collectFmtDirs(path, recursive)
+	dirs, err := collectDirs(path, recursive)
 	if err != nil {
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
 		return 2
@@ -537,7 +575,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			// attacker-controlled .tf content. Sanitize before printing
 			// to prevent terminal-injection / line-injection in fmt output.
 			fmt.Fprintf(stderr, "Error: %s: %s\n",
-				output.Sanitize(displayFmtPath(path, d, v.File)),
+				output.Sanitize(displayPath(path, d, v.File)),
 				output.Sanitize(v.Message))
 			anyError = true
 		}
@@ -564,7 +602,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			absFile := filepath.Join(d, f.Name)
 			// Same sanitisation for the dirty-file path printed to
 			// stdout (the user-facing list of formatted files).
-			relPath := output.Sanitize(displayFmtPath(path, d, f.Name))
+			relPath := output.Sanitize(displayPath(path, d, f.Name))
 			fmt.Fprintln(stdout, relPath)
 			if !check {
 				if err := checker.WriteFormatted(ctx, absFile, formatted); err != nil {
@@ -690,9 +728,12 @@ func checksFilterWithout(filter checker.CheckSet, code string) checker.CheckSet 
 	return out
 }
 
-// displayFmtPath formats the path embedded in an fmt-subcommand violation
-// for human-friendly stderr output, relative to the user-supplied root
-// when possible.
+// displayPath formats the path embedded in a violation for output,
+// relative to the user-supplied root when possible. Used by both the
+// fmt subcommand's stderr/stdout output and the lint --recursive path
+// (where it prefixes bare filenames with the sub-path relative to
+// the CLI arg, so consumers can attribute violations to a specific
+// workspace directory).
 //
 // vFile is normally a basename (file-level violations like E001 carry just
 // the .tf filename), in which case we join it under dir and relativize.
@@ -705,16 +746,13 @@ func checksFilterWithout(filter checker.CheckSet, code string) checker.CheckSet 
 // can't compute one (e.g. different drives on Windows).
 //
 // The returned path always uses forward slashes regardless of host OS, so
-// the fmt subcommand's stderr/stdout output and our integration tests
-// don't have to pivot on the runtime separator. (JSON output isn't
-// involved here — `Violation.File` is set to bare filenames like
-// "main.tf" elsewhere, so the separator question doesn't arise on
-// that path; `displayFmtPath` is fmt-subcommand-only, see main.go:447
-// and main.go:474.) Windows handles `/` everywhere in modern shells
-// and standard library APIs, so normalising to `/` is a UX win
+// output (stderr for fmt, stdout for both, plus JSON `Violation.File`)
+// stays stable across platforms and integration tests don't have to pivot
+// on the runtime separator. Windows handles `/` everywhere in modern
+// shells and standard library APIs, so normalising to `/` is a UX win
 // (consistent across platforms) and a testing win (no `filepath.Join`
 // dance in every assertion).
-func displayFmtPath(rootArg, dir, vFile string) string {
+func displayPath(rootArg, dir, vFile string) string {
 	var abs string
 	switch {
 	case vFile == "" || vFile == dir:
@@ -730,11 +768,18 @@ func displayFmtPath(rootArg, dir, vFile string) string {
 	return filepath.ToSlash(abs)
 }
 
-// collectFmtDirs returns directories to scan. With recursive=false this is
-// just [dir]. With recursive=true it walks dir and includes every subdir
-// except those whose name starts with '.' (matches `terraform fmt -recursive`,
-// which skips .terraform, .git, .hidden, etc.).
-func collectFmtDirs(root string, recursive bool) ([]string, error) {
+// collectDirs walks the tree from root and returns the directories to
+// operate on. Non-recursive mode returns exactly the root. Recursive
+// mode returns every directory under root, skipping directories that
+// never contain Terraform in practice:
+//
+//   - Dot-prefixed hidden directories (.terraform, .git, .hidden, etc.)
+//   - node_modules (polyglot-monorepo staple, no Terraform inside)
+//
+// Both skips are applied only to descendants of root — root itself is
+// always included regardless of its name. Shared by fmt -recursive
+// and lint --recursive.
+func collectDirs(root string, recursive bool) ([]string, error) {
 	if !recursive {
 		return []string{root}, nil
 	}
@@ -746,7 +791,7 @@ func collectFmtDirs(root string, recursive bool) ([]string, error) {
 		if !d.IsDir() {
 			return nil
 		}
-		if path != root && strings.HasPrefix(d.Name(), ".") {
+		if path != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "node_modules") {
 			return filepath.SkipDir
 		}
 		dirs = append(dirs, path)

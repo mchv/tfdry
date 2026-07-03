@@ -753,11 +753,15 @@ func TestRun_UnknownFlag_ExitTwo(t *testing.T) {
 	}
 }
 
-// -check / -recursive only make sense with the `fmt` subcommand. Using
-// them on the lint path silently ignored the flag and ran the normal pass,
-// hiding user mistakes (e.g. `tfdry -check ./infra` would NOT check
-// formatting — it would lint the dir and exit accordingly). Reject as a
-// usage error.
+// -check only makes sense with the `fmt` subcommand. Using it on the
+// lint path silently ignored the flag and ran the normal pass, hiding
+// user mistakes (e.g. `tfdry -check ./infra` would NOT check
+// formatting — it would lint the dir and exit accordingly). Reject as
+// a usage error.
+//
+// -recursive is separately valid on the lint path (issue #21) and no
+// longer appears in this table; its rejection on non-lint-non-fmt
+// subcommands is asserted in TestRun_LintRecursive_RejectedOnNonLintNonFmtSubcommands.
 func TestRun_FmtFlagsOutsideFmt_ExitTwo(t *testing.T) {
 	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"a.tf": `locals { a = "x" }`})
@@ -767,10 +771,7 @@ func TestRun_FmtFlagsOutsideFmt_ExitTwo(t *testing.T) {
 	}{
 		{"-check on lint", []string{"-check", dir}},
 		{"--check on lint", []string{"--check", dir}},
-		{"-recursive on lint", []string{"-recursive", dir}},
-		{"--recursive on lint", []string{"--recursive", dir}},
 		{"-check on describe", []string{"describe", "-check"}},
-		{"-recursive on version", []string{"version", "-recursive"}},
 		{"-check after dir on lint", []string{dir, "-check"}},
 	}
 	for _, tc := range cases {
@@ -1004,12 +1005,12 @@ func TestRun_FmtRecursive_SanitizesParseErrorPath(t *testing.T) {
 // failed on the directory itself, e.g. permission race), v.File is the
 // directory path — not a basename. Naively joining d+v.File then
 // duplicates the prefix (e.g. "infra/prod/infra/prod"). The
-// displayFmtPath helper detects that case and treats v.File as
+// displayPath helper detects that case and treats v.File as
 // already-a-path. Unit-tested directly because reliably triggering a
 // dir-level ParseDir error from a recursive walk requires a TOCTOU
 // race that's hard to script; the helper guarantees the correct path
 // regardless of trigger.
-func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
+func TestDisplayPath_DoesNotDuplicateDirPath(t *testing.T) {
 	t.Parallel()
 	// absRoot constructs a platform-appropriate absolute path from
 	// path segments. Windows considers `/root` to NOT be absolute (it
@@ -1037,7 +1038,7 @@ func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
 			rootArg: absRoot("root"),
 			dir:     absRoot("root", "infra", "prod"),
 			vFile:   "bad.tf",
-			// displayFmtPath always emits forward slashes regardless
+			// displayPath always emits forward slashes regardless
 			// of host OS (see its godoc — UX consistency + test
 			// stability), so the expected values do too.
 			want: "infra/prod/bad.tf",
@@ -1080,15 +1081,15 @@ func TestDisplayFmtPath_DoesNotDuplicateDirPath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := displayFmtPath(tc.rootArg, tc.dir, tc.vFile)
+			got := displayPath(tc.rootArg, tc.dir, tc.vFile)
 			if got != tc.want {
-				t.Errorf("displayFmtPath(%q, %q, %q) = %q, want %q",
+				t.Errorf("displayPath(%q, %q, %q) = %q, want %q",
 					tc.rootArg, tc.dir, tc.vFile, got, tc.want)
 			}
 			// Strong invariant: the result must NEVER contain the same
 			// non-empty subpath segment twice in a row (the bug
 			// signature). Test in forward-slash space since that's the
-			// canonical form displayFmtPath emits.
+			// canonical form displayPath emits.
 			if tc.dir != "" {
 				dirSlash := filepath.ToSlash(tc.dir)
 				if strings.Contains(got, dirSlash+"/"+dirSlash) {
@@ -1325,7 +1326,7 @@ func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
 }
 
 // Symlinked-DIR handling for `tfdry fmt`. The previous code path used
-// os.Stat (follows symlinks) to detect dir-vs-file, but collectFmtDirs uses
+// os.Stat (follows symlinks) to detect dir-vs-file, but collectDirs uses
 // filepath.WalkDir which is Lstat-based and does NOT recurse into a
 // symlinked root — so `tfdry fmt -recursive <symlink-to-dir>` silently did
 // nothing and exited 0. Reject symlinked dir roots up front, consistent
@@ -2152,5 +2153,256 @@ func TestRun_LineFieldPresent_AcrossViolationCodes(t *testing.T) {
 			t.Errorf("violation[%d] (code=%v) missing \"line\" key; every violation must emit line; violation=%+v",
 				i, v["code"], v)
 		}
+	}
+}
+
+// ── Lint --recursive (issue #21) ────────────────────────────────────────────
+//
+// Tests for the recursive lint walk. Each recursed directory is linted as
+// an independent workspace under the existing single-workspace contract
+// — no cross-directory scope merging (that's tracked separately in
+// issue #32). Directly analogous to `fmt -recursive`, sharing the walk
+// helper.
+
+// TestRun_LintRecursive_AllForms locks the three accepted spellings
+// (-recursive, --recursive, -r) into true aliases on the lint path,
+// mirroring the fmt precedent. If someone adds a new short/long form
+// or removes one, this catches divergence between them.
+func TestRun_LintRecursive_AllForms(t *testing.T) {
+	cases := []struct {
+		name string
+		flag string
+	}{
+		{"single-dash-long", "-recursive"},
+		{"double-dash-long", "--recursive"},
+		{"short-form", "-r"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			// Clean top-level.
+			if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
+output "x" { value = local.x }
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// Violation-bearing subdir (E003: undefined local).
+			if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "staging", "main.tf"), []byte(`output "x" {
+  value = local.does_not_exist
+}
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			code, stdout, _ := runCLI(tc.flag, dir)
+			if code != 1 {
+				t.Fatalf("%s: lint %s should exit 1 (violations in subdir), got %d; stdout=%q",
+					tc.name, tc.flag, code, stdout)
+			}
+			// Subdir violation must surface with prefixed path.
+			if !strings.Contains(stdout, "staging/main.tf") {
+				t.Errorf("%s: expected 'staging/main.tf' in output; got: %q", tc.name, stdout)
+			}
+		})
+	}
+}
+
+// TestRun_LintRecursive_NonRecursiveUnchanged is the regression guard:
+// without --recursive, lint continues to scan only the supplied
+// directory, exactly as v0.1.1 behaved. If the walk logic accidentally
+// activates by default, or if the parser leaks recursive-on into
+// non-recursive invocations, this test catches it.
+func TestRun_LintRecursive_NonRecursiveUnchanged(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Clean top-level.
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
+output "x" { value = local.x }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Violation subdir that MUST NOT be scanned without --recursive.
+	if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "staging", "main.tf"), []byte(`output "x" {
+  value = local.does_not_exist
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, _ := runCLI(dir)
+	if code != 0 {
+		t.Fatalf("non-recursive lint should exit 0 (top-level clean, subdir ignored), got %d; stdout=%q",
+			code, stdout)
+	}
+	if strings.Contains(stdout, "staging") {
+		t.Errorf("non-recursive lint must not surface subdir content; stdout=%q", stdout)
+	}
+}
+
+// TestRun_LintRecursive_JSONOutput_PathsPrefixed asserts the JSON schema
+// contract for the recursive case: violations[].file is prefixed with
+// the sub-path relative to the CLI arg, so consumers can attribute
+// violations to a specific workspace directory. The directory field
+// stays as the CLI arg.
+func TestRun_LintRecursive_JSONOutput_PathsPrefixed(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Two subdirs, each with a distinct violation code, so we can
+	// verify per-dir attribution in the aggregated JSON.
+	if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "staging", "main.tf"), []byte(`output "x" {
+  value = local.undefined_here
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "production"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "production", "main.tf"), []byte(`locals { dup = "a" }
+locals { dup = "b" }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, _ := runCLI("--json", "--recursive", dir)
+	if code != 1 {
+		t.Fatalf("expected exit 1, got %d; stdout=%q", code, stdout)
+	}
+	var got struct {
+		Directory  string           `json:"directory"`
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+	// Directory field is the CLI arg, unchanged from non-recursive semantics.
+	if got.Directory != dir {
+		t.Errorf("directory field = %q, want %q", got.Directory, dir)
+	}
+	// Every violation's file path must be prefixed with its subdir.
+	foundStaging := false
+	foundProduction := false
+	for _, v := range got.Violations {
+		file, _ := v["file"].(string)
+		if strings.HasPrefix(file, "staging/") {
+			foundStaging = true
+		}
+		if strings.HasPrefix(file, "production/") {
+			foundProduction = true
+		}
+		// Bare filenames without subdir prefix are the non-recursive
+		// contract; they must not appear here.
+		if file == "main.tf" {
+			t.Errorf("violation without subdir prefix: file=%q", file)
+		}
+	}
+	if !foundStaging {
+		t.Errorf("no violation with 'staging/' prefix; violations=%+v", got.Violations)
+	}
+	if !foundProduction {
+		t.Errorf("no violation with 'production/' prefix; violations=%+v", got.Violations)
+	}
+}
+
+// TestRun_LintRecursive_SkipsHiddenDirs mirrors the fmt-recursive
+// hidden-dir skip test: .terraform, .git, and any dot-prefixed
+// directory must not be walked. Violations planted inside them must
+// not surface.
+func TestRun_LintRecursive_SkipsHiddenDirs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Clean top-level so exit 0 is expected if hidden dirs are truly skipped.
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Plant violation-bearing files in three hidden dirs.
+	for _, sub := range []string{".terraform", ".git", ".hidden"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, sub, "x.tf"), []byte(`output "x" {
+  value = local.undefined
+}
+`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, stdout, _ := runCLI("--recursive", dir)
+	if code != 0 {
+		t.Fatalf("hidden dirs must be skipped; expected exit 0, got %d; stdout=%q", code, stdout)
+	}
+	for _, sub := range []string{".terraform", ".git", ".hidden"} {
+		if strings.Contains(stdout, sub) {
+			t.Errorf("hidden dir %s appeared in output; stdout=%q", sub, stdout)
+		}
+	}
+}
+
+// TestRun_LintRecursive_SkipsNodeModules covers the polyglot-monorepo
+// case: node_modules is a common non-dot-prefixed directory that never
+// contains Terraform. Skipping avoids the perf cost of walking it, and
+// avoids surfacing spurious content if a vendored package happens to
+// ship .tf files as test fixtures.
+func TestRun_LintRecursive_SkipsNodeModules(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Vendored package with a .tf fixture that would generate a
+	// violation if scanned.
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "some-pkg", "fixtures"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "some-pkg", "fixtures", "test.tf"),
+		[]byte(`output "x" { value = local.missing }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, _ := runCLI("--recursive", dir)
+	if code != 0 {
+		t.Fatalf("node_modules must be skipped; expected exit 0, got %d; stdout=%q", code, stdout)
+	}
+	if strings.Contains(stdout, "node_modules") {
+		t.Errorf("node_modules appeared in output; stdout=%q", stdout)
+	}
+}
+
+// TestRun_LintRecursive_RejectedOnNonLintNonFmtSubcommands guards the
+// parser rejection surface: --recursive is a lint/fmt flag and MUST
+// still be rejected on subcommands where it has no meaning (describe,
+// version, help). This locks in that the #21 change only OPENS the
+// flag on the lint path; it doesn't blanket-accept it everywhere.
+func TestRun_LintRecursive_RejectedOnNonLintNonFmtSubcommands(t *testing.T) {
+	t.Parallel()
+	cases := [][]string{
+		{"describe", "--recursive"},
+		{"describe", "-r"},
+		{"version", "--recursive"},
+		{"version", "-recursive"},
+		{"help", "--recursive"},
+	}
+	for _, args := range cases {
+		args := args
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Parallel()
+			code, _, stderr := runCLI(args...)
+			if code != 2 {
+				t.Errorf("%v: expected exit 2 (recursive rejected), got %d; stderr=%q",
+					args, code, stderr)
+			}
+			if stderr == "" {
+				t.Errorf("%v: expected explanatory stderr, got empty", args)
+			}
+		})
 	}
 }
