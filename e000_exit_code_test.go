@@ -178,13 +178,13 @@ func TestRun_E000_JSONOutput_IncludesLineFieldAsZero(t *testing.T) {
 			continue
 		}
 		// JSON numbers decode to float64 in map[string]any.
-		got, ok := lineVal.(float64)
+		lineNum, ok := lineVal.(float64)
 		if !ok {
 			t.Errorf("violation[%d] (E000) \"line\" not a number: got %T (%v)", i, lineVal, lineVal)
 			continue
 		}
-		if got != 0 {
-			t.Errorf("violation[%d] (E000) \"line\" = %v, want 0 (file-level sentinel)", i, got)
+		if lineNum != 0 {
+			t.Errorf("violation[%d] (E000) \"line\" = %v, want 0 (file-level sentinel)", i, lineNum)
 		}
 	}
 	if !sawE000 {
