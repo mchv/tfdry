@@ -161,22 +161,32 @@ Run `tfdry describe` for the canonical list at runtime; the table above mirrors 
 ### CLI flags
 
 ```text
-tfdry [flags] [directory]
+tfdry [flags] [-recursive] [directory]
 tfdry fmt [-check] [-recursive] [path]
 tfdry describe [--json]
 
 Flags:
-  --checks=CODES   Comma-separated allow-list of check codes (e.g. E003,E004).
-                   Repeatable; flags accumulate. Default: all checks.
-  --fix            Rewrite files in place to fix E008 (formatting). Every
-                   other check stays read-only.
-  --json           Machine-readable JSON output. Schema below.
+  --checks=CODES                 Comma-separated allow-list of check codes (e.g. E003,E004).
+                                 Repeatable; flags accumulate. Default: all checks.
+  --fix                          Rewrite files in place to fix E008 (formatting). Every
+                                 other check stays read-only.
+  --json                         Machine-readable JSON output. Schema below.
+  -recursive, --recursive, -r    Recurse into subdirectories, linting each as an
+                                 independent workspace. Skips hidden dirs and
+                                 `node_modules`. Also accepted by `fmt`.
 ```
 
 The `fmt` subcommand is a drop-in `terraform fmt` replacement:
 - Takes either a directory or a single file path.
 - `-check` reads only; exits 3 if any file would be rewritten.
-- `-recursive` walks subdirectories, skipping hidden dirs (`.terraform`, `.git`, …).
+- `-recursive` walks subdirectories, skipping hidden dirs (`.terraform`, `.git`, …) and `node_modules`.
+
+With `--recursive` on the lint path, each recursed directory is
+linted independently under the same single-workspace contract as the
+non-recursive case — no cross-directory scope merging. `local.foo` in
+`subdir/main.tf` still won't resolve to a `local.foo` defined in a
+parent directory's `locals.tf`. That's a separate design question
+tracked in [#32](https://github.com/mchv/tfdry/issues/32).
 
 The `describe` subcommand prints the check table to stdout (or JSON with `--json`) and exits 0 — useful for building IDE integrations or `--checks=` allow-lists.
 
@@ -235,14 +245,9 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 
 ### Pre-commit hook
 
-`tfdry` lints one Terraform workspace directory at a time — the same
-scoping model as `terraform validate`. Point `entry:` at the
-directory containing your `.tf` files, and scope `files:` to that
-directory so the hook only fires on relevant changes. For repos with
-multiple workspaces (e.g. `terraform/staging/` and
-`terraform/production/`), define one hook per workspace, or wait for
-`--recursive` on the lint command (planned for v0.2.0 —
-[#21](https://github.com/mchv/tfdry/issues/21)).
+For repos with a single Terraform workspace, point `entry:` at the
+directory containing your `.tf` files and scope `files:` to that
+directory so the hook only fires on relevant changes:
 
 ```yaml
 # .pre-commit-config.yaml
@@ -263,19 +268,47 @@ restricts the regex to direct-child `.tf` files — `.*` would
 over-match subdirectory files that `tfdry --json terraform/` doesn't
 actually lint.
 
+For repos with **multiple workspaces** (e.g. `terraform/staging/`
+and `terraform/production/`), use `--recursive` to walk the entire
+tree in a single invocation. Each subdirectory is linted as its own
+workspace under the single-workspace contract:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: local
+    hooks:
+      - id: tfdry
+        name: tfdry
+        entry: tfdry --json --recursive terraform/
+        language: system
+        files: ^terraform/.*\.tf$
+        pass_filenames: false
+```
+
+`--recursive` skips hidden directories (`.terraform`, `.git`, etc.)
+and `node_modules`. Violations from a subdirectory are reported with
+their path relative to the recursion root (e.g.
+`"file": "staging/main.tf"`).
+
 ### GitHub Actions
 
-Same single-workspace scoping model as the pre-commit example above:
-`tfdry` lints one directory at a time, so point the argument at your
-workspace path. For repos with multiple workspaces, add one step per
-workspace, or wait for `--recursive` on the lint command (planned for
-v0.2.0 — [#21](https://github.com/mchv/tfdry/issues/21)).
+`tfdry` lints one Terraform workspace directory at a time — point the
+argument at your workspace path. For repos with multiple workspaces,
+use `--recursive` to walk the whole tree in one step.
 
 The minimal recipe fails the build on lint violations:
 
 ```yaml
 - name: tfdry
   run: tfdry terraform/
+```
+
+Recursive variant for multi-workspace layouts:
+
+```yaml
+- name: tfdry
+  run: tfdry --recursive terraform/
 ```
 
 To keep a JSON report for downstream steps (artifact upload, `jq`

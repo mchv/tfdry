@@ -16,6 +16,25 @@ Each release entry groups changes under the following headings (omitted if empty
 
 ## [Unreleased]
 
+### Added
+
+- **`--recursive` on the lint command.** `tfdry --recursive <dir>`
+  walks the directory tree and lints each directory containing `.tf`
+  files as an independent workspace, aggregating violations into a
+  single report. Skips hidden directories (`.terraform`, `.git`,
+  etc.) and `node_modules`. Violations from subdirectories carry
+  their path relative to the recursion root (e.g.
+  `"file": "staging/main.tf"`), so consumers can attribute each
+  violation to a specific workspace. Available as `-recursive`,
+  `--recursive`, and `-r` — the same three spellings as `tfdry fmt`.
+  Simplifies pre-commit / CI integration for repos with multiple
+  Terraform workspaces. Each recursed directory is still linted
+  under the single-workspace contract; cross-directory scope merging
+  (parent-directory locals resolved from a child directory) is a
+  separate design conversation tracked in
+  [#32](https://github.com/mchv/tfdry/issues/32).
+  ([#21](https://github.com/mchv/tfdry/issues/21))
+
 ## [0.1.1] — 2026-07-03
 
 ### Changed
