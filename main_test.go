@@ -1948,3 +1948,81 @@ func TestRun_HelpVersion_EarlyExitPrecedence(t *testing.T) {
 		})
 	}
 }
+
+// ── fmt: -r short form + help-text documentation ────────────────────
+
+// TestRun_FmtRecursive_AllForms verifies -recursive, --recursive, and
+// the new -r short form all trigger recursive fmt behaviour
+// identically. Table-driven so the three spellings must be true
+// aliases, not near-synonyms that diverge on some code path.
+// -r is added per issue #18 review feedback for consistency with
+// the -h / -v short-form convention.
+func TestRun_FmtRecursive_AllForms(t *testing.T) {
+	cases := []struct {
+		name string
+		flag string
+	}{
+		{"single-dash-long", "-recursive"},
+		{"double-dash-long", "--recursive"},
+		{"short-form", "-r"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			// Top-level unformatted.
+			if err := os.WriteFile(filepath.Join(dir, "dirty.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// Nested unformatted.
+			if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "subdir", "nested.tf"), []byte(fmtDirtyTF), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// Combine -check with the recursive flag so we assert
+			// what would-be-formatted without mutating fixtures across
+			// subtests. Any spelling must reach into subdir/.
+			code, stdout, _ := runCLI("fmt", tc.flag, "-check", dir)
+			if code != 3 {
+				t.Fatalf("%s: fmt %s -check should exit 3 (unformatted files), got %d",
+					tc.name, tc.flag, code)
+			}
+			for _, want := range []string{"dirty.tf", "subdir/nested.tf"} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("%s: expected %q in stdout, got %q", tc.name, want, stdout)
+				}
+			}
+		})
+	}
+}
+
+// TestRun_HelpOutput_DocumentsFmtFlags asserts --help output surfaces
+// every parser-accepted spelling of the fmt-specific flags. The
+// parser accepts -check/--check and -recursive/--recursive/-r; help
+// must mention each so users reading --help see the accurate CLI
+// surface. Addresses reviewer feedback (PR #28) that -check/-recursive
+// were accepted but missing from the Flags section, and locks in the
+// -r short-form addition.
+func TestRun_HelpOutput_DocumentsFmtFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--help"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("--help exit=%d want=0; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	// Concrete phrase matches — avoid substring false-positives
+	// (e.g. --check as prefix of --checks=).
+	needles := []string{
+		"-check, --check",
+		"-recursive, --recursive, -r",
+	}
+	for _, want := range needles {
+		if !strings.Contains(out, want) {
+			t.Errorf("--help output missing %q; got:\n%s", want, out)
+		}
+	}
+}
