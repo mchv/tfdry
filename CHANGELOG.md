@@ -16,6 +16,8 @@ Each release entry groups changes under the following headings (omitted if empty
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-07-03
+
 ### Changed
 
 - **JSON schema uniformity for `violations[].line`.** Every violation

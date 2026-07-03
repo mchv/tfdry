@@ -103,7 +103,7 @@ Same input with `--json`:
 
 ```json
 {
-  "tfdry_version": "0.1.0",
+  "tfdry_version": "0.1.1",
   "directory": "./infra",
   "violations": [
     {
@@ -198,7 +198,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 
 ```json
 {
-  "tfdry_version": "0.1.0",
+  "tfdry_version": "0.1.1",
   "directory": "./infra",
   "violations": [
     {
