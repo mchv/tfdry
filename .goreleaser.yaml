@@ -118,7 +118,7 @@ changelog:
   #
   # `.Author.Username` is the modern GoReleaser v2.14+ nested field;
   # the older top-level `.AuthorUsername` was deprecated in v2.14.
-  format: '* {{ .SHA }}: {{ .Message }}{{ with .Author.Username }}{{ if ne . "mchv" }} (@{{ . }}){{ end }}{{ end }}'
+  format: '* {{ .SHA }}: {{ .Message }}{{ with (index . "Author") }}{{ with .Username }}{{ if ne . "mchv" }} (@{{ . }}){{ end }}{{ end }}{{ end }}'
   # Conventional-commit grouping. Patterns are RE2 (Go's stdlib regexp
   # engine) — no lazy quantifiers like .*? or ??. Each group matches
   # the prefix at the start of the subject with an optional scope and
