@@ -112,3 +112,41 @@ func TestRun_Fmt_WriteError_ExitTwo(t *testing.T) {
 		t.Errorf("stderr should contain 'Error formatting' prefix, got %q", stderr)
 	}
 }
+
+// TestRun_Fmt_SymlinkArgTrailingSlash_ExitTwo is the fmt-side
+// counterpart of TestRun_LintRecursive_SymlinkDirRootTrailingSlash_Rejected.
+// The same POSIX trailing-slash quirk that bypassed the recursive-
+// lint symlink check also affected `tfdry fmt --recursive link/`
+// (main.go:512-515). os.Lstat("link/") resolves the symlink to
+// the target directory (Mode & ModeSymlink == 0) so the guard
+// silently passes; filepath.WalkDir then sees the symlink on the
+// cleaned path and doesn't recurse, producing an empty walk and
+// exit 0. Fix mirrors the lint side: filepath.Clean before the
+// Lstat check.
+//
+// Unix-only: same rationale as sibling symlink tests.
+func TestRun_Fmt_SymlinkArgTrailingSlash_ExitTwo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "a.tf"),
+		[]byte("locals { x = 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	code, _, stderr := runCLI("fmt", "--recursive", link+"/")
+	if code != 2 {
+		t.Errorf("fmt --recursive on symlink-with-trailing-slash root should exit 2, got %d; stderr=%q",
+			code, stderr)
+	}
+	if !strings.Contains(stderr, "symlinked path") {
+		t.Errorf("stderr should mention symlinked-path rejection, got %q", stderr)
+	}
+}

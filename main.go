@@ -304,6 +304,31 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// emptied out via exclusion) and skip Run entirely.
 	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
 
+	// Clean the root once so path comparisons downstream are
+	// consistent. checker.ParseDir applies filepath.Clean internally,
+	// so v.File from a directory-level E000 (v.File == dir) comes back
+	// in cleaned form. Without matching that at the caller, a
+	// dot-prefixed CLI arg like `./infra` yields WalkDir results
+	// still bearing the `./` while ParseDir's E000 emissions carry the
+	// cleaned `infra` — displayPath's `vFile == dir` guard then fails
+	// string comparison and the fallback join produces duplicated
+	// path segments. `dir` itself is preserved unchanged for
+	// report.directory (user-visible field). rootClean drives the walk
+	// and displayPath so the whole per-directory pipeline sees a
+	// single consistent representation.
+	//
+	// Cleaning also has to happen BEFORE the symlink/file validation
+	// below because of a POSIX quirk: os.Lstat on a symlink path with
+	// a trailing slash (e.g. `link/`) resolves the symlink to the
+	// target directory rather than returning symlink info. Without
+	// cleaning first, `tfdry --recursive link/` would pass the
+	// symlink check, then filepath.WalkDir would (correctly) see the
+	// cleaned form as a symlink and refuse to recurse — producing an
+	// empty walk and a silent exit-0 no-op. Cleaning the input into
+	// rootClean means both os.Lstat here and WalkDir inside collectDirs
+	// see the same normalised form, and the symlink guard fires.
+	rootClean := filepath.Clean(dir)
+
 	// Root validation for --recursive. filepath.WalkDir is Lstat-based:
 	// given a file-path or symlink-to-dir root it invokes the walkFn
 	// once with (path, non-dir DirEntry, nil), collectDirs skips it
@@ -315,7 +340,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// lint's behaviour on file paths is unchanged (ParseDir surfaces
 	// the error naturally).
 	if recursive {
-		li, err := os.Lstat(dir)
+		li, err := os.Lstat(rootClean)
 		if err != nil {
 			fmt.Fprintln(stderr, "tfdry:", err)
 			return 2
@@ -329,20 +354,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-
-	// Clean the root once so path comparisons downstream are
-	// consistent. checker.ParseDir applies filepath.Clean internally,
-	// so v.File from a directory-level E000 (v.File == dir) comes back
-	// in cleaned form. Without matching that at the caller, a
-	// dot-prefixed CLI arg like `./infra` yields WalkDir results
-	// still bearing the `./` while ParseDir's E000 emissions carry the
-	// cleaned `infra` — displayPath's `vFile == dir` guard then fails
-	// string comparison and the fallback join produces duplicated
-	// path segments. `dir` itself is preserved unchanged for
-	// report.directory (user-visible field). rootClean drives the walk
-	// and displayPath so the whole per-directory pipeline sees a
-	// single consistent representation.
-	rootClean := filepath.Clean(dir)
 
 	// Directory list to lint. Non-recursive: exactly rootClean.
 	// Recursive: full walk, skipping hidden dirs and node_modules.
@@ -575,7 +586,19 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 	// nothing for `fmt -recursive`, exiting 0 with no output.
 	// Reject in both modes so the security/atomicity contract of the path
 	// argument is uniform regardless of -recursive.
-	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
+	//
+	// filepath.Clean before Lstat handles the POSIX trailing-slash
+	// quirk: os.Lstat on a symlink with `/` suffix (e.g. `link/`)
+	// resolves the symlink to the target directory rather than
+	// returning symlink info, so `Mode & ModeSymlink` is 0 and the
+	// guard silently passes. filepath.WalkDir then sees the cleaned
+	// form as a symlink and refuses to recurse, producing an empty
+	// walk and a silent exit-0 no-op. Cleaning first means the Lstat
+	// here and the Lstat inside WalkDir see the same normalised
+	// shape. Error messages still use the user-supplied `path` so
+	// the reported path matches what the caller typed.
+	pathClean := filepath.Clean(path)
+	if li, err := os.Lstat(pathClean); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		fmt.Fprintf(stderr, "tfdry fmt: refusing to operate on symlinked path: %s\n", path)
 		return 2
 	}
