@@ -25,19 +25,26 @@ func runCLI(args ...string) (code int, stdout, stderr string) {
 	return code, stdoutBuf.String(), stderrBuf.String()
 }
 
-// writeTFDir creates a temp dir with the given files and returns its path.
+// writeTFDir creates a temp dir with the given files and returns its
+// path. Keys are relative paths from the created root; intermediate
+// directories are created automatically, so nested layouts like
+// `map[string]string{"main.tf": "...", "sub/nested.tf": "..."}` work
+// without pre-computing MkdirAll calls.
 //
 // Note: this helper is intentionally duplicated in checker/checks_test.go
 // (same signature, same body). The two live in different test packages
 // (main vs checker_test), so true sharing would require an
-// internal/testutil package — overkill for two identical 5-line
-// helpers. If a third duplicate appears, promote to internal/testutil
+// internal/testutil package — overkill for two identical helpers.
+// If a third duplicate appears, promote to internal/testutil
 // rather than triplicating.
 func writeTFDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range files {
 		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -2181,23 +2188,15 @@ func TestRun_LintRecursive_AllForms(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
-			// Clean top-level.
-			if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
+			dir := writeTFDir(t, map[string]string{
+				"main.tf": `locals { x = "ok" }
 output "x" { value = local.x }
-`), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			// Violation-bearing subdir (E003: undefined local).
-			if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, "staging", "main.tf"), []byte(`output "x" {
+`,
+				"staging/main.tf": `output "x" {
   value = local.does_not_exist
 }
-`), 0o644); err != nil {
-				t.Fatal(err)
-			}
+`,
+			})
 			code, stdout, _ := runCLI(tc.flag, dir)
 			if code != 1 {
 				t.Fatalf("%s: lint %s should exit 1 (violations in subdir), got %d; stdout=%q",
@@ -2218,23 +2217,16 @@ output "x" { value = local.x }
 // non-recursive invocations, this test catches it.
 func TestRun_LintRecursive_NonRecursiveUnchanged(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	// Clean top-level.
-	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `locals { x = "ok" }
 output "x" { value = local.x }
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Violation subdir that MUST NOT be scanned without --recursive.
-	if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "staging", "main.tf"), []byte(`output "x" {
+`,
+		// Violation subdir that MUST NOT be scanned without --recursive.
+		"staging/main.tf": `output "x" {
   value = local.does_not_exist
 }
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+`,
+	})
 	code, stdout, _ := runCLI(dir)
 	if code != 0 {
 		t.Fatalf("non-recursive lint should exit 0 (top-level clean, subdir ignored), got %d; stdout=%q",
@@ -2252,26 +2244,17 @@ output "x" { value = local.x }
 // stays as the CLI arg.
 func TestRun_LintRecursive_JSONOutput_PathsPrefixed(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
 	// Two subdirs, each with a distinct violation code, so we can
 	// verify per-dir attribution in the aggregated JSON.
-	if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "staging", "main.tf"), []byte(`output "x" {
+	dir := writeTFDir(t, map[string]string{
+		"staging/main.tf": `output "x" {
   value = local.undefined_here
 }
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "production"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "production", "main.tf"), []byte(`locals { dup = "a" }
+`,
+		"production/main.tf": `locals { dup = "a" }
 locals { dup = "b" }
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+`,
+	})
 	code, stdout, _ := runCLI("--json", "--recursive", dir)
 	if code != 1 {
 		t.Fatalf("expected exit 1, got %d; stdout=%q", code, stdout)
@@ -2318,24 +2301,18 @@ locals { dup = "b" }
 // not surface.
 func TestRun_LintRecursive_SkipsHiddenDirs(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	// Clean top-level so exit 0 is expected if hidden dirs are truly skipped.
-	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Plant violation-bearing files in three hidden dirs.
-	for _, sub := range []string{".terraform", ".git", ".hidden"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, sub, "x.tf"), []byte(`output "x" {
+	// Plant violation-bearing files in three hidden dirs. Clean top-level
+	// so exit 0 is expected only if hidden dirs are truly skipped.
+	violation := `output "x" {
   value = local.undefined
 }
-`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+`
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":         `locals { x = "ok" }` + "\n",
+		".terraform/x.tf": violation,
+		".git/x.tf":       violation,
+		".hidden/x.tf":    violation,
+	})
 	code, stdout, _ := runCLI("--recursive", dir)
 	if code != 0 {
 		t.Fatalf("hidden dirs must be skipped; expected exit 0, got %d; stdout=%q", code, stdout)
@@ -2354,20 +2331,12 @@ func TestRun_LintRecursive_SkipsHiddenDirs(t *testing.T) {
 // ship .tf files as test fixtures.
 func TestRun_LintRecursive_SkipsNodeModules(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { x = "ok" }
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	// Vendored package with a .tf fixture that would generate a
 	// violation if scanned.
-	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "some-pkg", "fixtures"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "node_modules", "some-pkg", "fixtures", "test.tf"),
-		[]byte(`output "x" { value = local.missing }`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":                                `locals { x = "ok" }` + "\n",
+		"node_modules/some-pkg/fixtures/test.tf": `output "x" { value = local.missing }` + "\n",
+	})
 	code, stdout, _ := runCLI("--recursive", dir)
 	if code != 0 {
 		t.Fatalf("node_modules must be skipped; expected exit 0, got %d; stdout=%q", code, stdout)
@@ -2417,11 +2386,10 @@ func TestRun_LintRecursive_RejectedOnNonLintNonFmtSubcommands(t *testing.T) {
 // file-with-recursive rejection.
 func TestRun_LintRecursive_FileRoot_ExitTwo(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `locals { x = "ok" }` + "\n",
+	})
 	tfPath := filepath.Join(dir, "main.tf")
-	if err := os.WriteFile(tfPath, []byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	code, _, stderr := runCLI("--recursive", tfPath)
 	if code != 2 {
 		t.Errorf("--recursive on file path should exit 2, got %d; stderr=%q", code, stderr)
@@ -2445,20 +2413,10 @@ func TestRun_LintRecursive_FileRoot_ExitTwo(t *testing.T) {
 func TestRun_LintRecursive_DotPrefixedRoot_NoPathDuplication(t *testing.T) {
 	// No t.Parallel: this test needs t.Chdir which is a
 	// process-wide side effect.
-	root := t.TempDir()
-	// A subdir named 'fixture' so the relative form can be './fixture'.
-	fixture := filepath.Join(root, "fixture")
-	if err := os.MkdirAll(filepath.Join(fixture, "nested"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(fixture, "main.tf"),
-		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(fixture, "nested", "main.tf"),
-		[]byte(`output "x" { value = local.undefined }`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	root := writeTFDir(t, map[string]string{
+		"fixture/main.tf":        `locals { x = "ok" }` + "\n",
+		"fixture/nested/main.tf": `output "x" { value = local.undefined }` + "\n",
+	})
 	t.Chdir(root)
 	// Use the dot-prefixed relative form — that's what pre-commit
 	// invocations look like in practice.
@@ -2532,22 +2490,14 @@ func TestRun_LintRecursive_NonExistentRoot_ExitTwo(t *testing.T) {
 // recursive output with its sub-path prefix.
 func TestRun_LintRecursive_ParseErrorSubdir_EmitsE001WithPrefix(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	// Clean top-level to make the exit code come purely from the subdir.
-	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
-		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Subdir with only invalid .tf — deliberately unparseable HCL so
-	// hclsyntax.ParseConfig produces diagnostics that map to E001,
-	// leaving `files == nil` for this directory.
-	if err := os.MkdirAll(filepath.Join(dir, "broken"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "broken", "bad.tf"),
-		[]byte(`this is not valid hcl {{{`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := writeTFDir(t, map[string]string{
+		// Clean top-level to make the exit code come purely from the subdir.
+		"main.tf": `locals { x = "ok" }` + "\n",
+		// Subdir with only invalid .tf — deliberately unparseable HCL so
+		// hclsyntax.ParseConfig produces diagnostics that map to E001,
+		// leaving `files == nil` for this directory.
+		"broken/bad.tf": `this is not valid hcl {{{`,
+	})
 	code, stdout, _ := runCLI("--json", "--recursive", dir)
 	if code != 1 {
 		t.Fatalf("expected exit 1 (E001 in subdir), got %d; stdout=%q", code, stdout)
@@ -2580,21 +2530,13 @@ func TestRun_LintRecursive_ParseErrorSubdir_EmitsE001WithPrefix(t *testing.T) {
 // not accidentally emitted in the recursive report.
 func TestRun_LintRecursive_EmptyOfTfSubdir_NoCrash(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
-		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	// Subdir with a plain-text file (not .tf) — ParseDir returns
 	// (empty, empty, nil), the Run + FixFormat calls are guarded
 	// by len(files) > 0 and skipped, iteration continues.
-	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "docs", "README.md"),
-		[]byte("# not terraform\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":        `locals { x = "ok" }` + "\n",
+		"docs/README.md": "# not terraform\n",
+	})
 	code, stdout, _ := runCLI("--recursive", dir)
 	if code != 0 {
 		t.Fatalf("empty-of-tf subdir should not affect exit code; got %d; stdout=%q",
@@ -2617,11 +2559,9 @@ func TestRun_LintRecursive_EmptyOfTfSubdir_NoCrash(t *testing.T) {
 // dispatch could drift out of alignment on cancellation semantics.
 func TestRun_LintRecursive_PreCancelledCtx(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
-		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `locals { x = "ok" }` + "\n",
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel BEFORE the call
 

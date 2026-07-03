@@ -101,3 +101,47 @@ func TestRun_LintRecursive_UnreadableSubdir_ExitTwo(t *testing.T) {
 		t.Errorf("expected explanatory stderr, got empty")
 	}
 }
+
+// TestRun_LintRecursive_SymlinkDirRootTrailingSlash_Rejected covers the
+// POSIX trailing-slash quirk that bypasses the symlink check when the
+// user supplies the symlink with a `/` suffix. On POSIX, os.Lstat
+// on a path with a trailing slash resolves the symlink (returns info
+// about the target directory), so `Mode() & ModeSymlink` is 0 and
+// the symlink-rejection guard would silently pass. The subsequent
+// filepath.WalkDir then calls Lstat internally on the *cleaned* path
+// (no trailing slash), sees the symlink, and does not recurse into
+// it — resulting in an empty walk and a silent exit-0 no-op. The fix
+// is to filepath.Clean the CLI arg BEFORE the Lstat check so both
+// call sites see the same shape.
+//
+// Companion to TestRun_LintRecursive_SymlinkDirRoot_Rejected (no
+// trailing slash); this one specifically pins the trailing-slash
+// variant so the bypass can't regress.
+//
+// Unix-only: same rationale as the sibling test — Windows symlink
+// creation needs elevated privileges by default.
+func TestRun_LintRecursive_SymlinkDirRootTrailingSlash_Rejected(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "main.tf"),
+		[]byte(`output "x" { value = local.missing }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	code, _, stderr := runCLI("--recursive", link+"/")
+	if code != 2 {
+		t.Errorf("--recursive on symlink-with-trailing-slash root should exit 2, got %d; stderr=%q",
+			code, stderr)
+	}
+	if !strings.Contains(stderr, "symlink") {
+		t.Errorf("stderr should mention symlink rejection, got %q", stderr)
+	}
+}
