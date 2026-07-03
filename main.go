@@ -304,16 +304,52 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// emptied out via exclusion) and skip Run entirely.
 	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
 
-	// Directory list to lint. Non-recursive: exactly the CLI arg.
+	// Root validation for --recursive. filepath.WalkDir is Lstat-based:
+	// given a file-path or symlink-to-dir root it invokes the walkFn
+	// once with (path, non-dir DirEntry, nil), collectDirs skips it
+	// (!IsDir or the symlink-hidden-name check), and the walk returns
+	// (empty, nil) — producing an empty report and exit 0, a silent
+	// no-op. Reject both cases up-front so misuse surfaces with a
+	// clear error, mirroring runFmt's symlink/file-with-recursive
+	// discipline. Only applied when recursive is set; non-recursive
+	// lint's behaviour on file paths is unchanged (ParseDir surfaces
+	// the error naturally).
+	if recursive {
+		li, err := os.Lstat(dir)
+		if err != nil {
+			fmt.Fprintln(stderr, "tfdry:", err)
+			return 2
+		}
+		if li.Mode()&os.ModeSymlink != 0 {
+			fmt.Fprintf(stderr, "tfdry: refusing to operate on symlinked path: %s\n", dir)
+			return 2
+		}
+		if !li.IsDir() {
+			fmt.Fprintf(stderr, "tfdry: --recursive cannot be used with a file path: %s\n", dir)
+			return 2
+		}
+	}
+
+	// Clean the root once so path comparisons downstream are
+	// consistent. checker.ParseDir applies filepath.Clean internally,
+	// so v.File from a directory-level E000 (v.File == dir) comes back
+	// in cleaned form. Without matching that at the caller, a
+	// dot-prefixed CLI arg like `./infra` yields WalkDir results
+	// still bearing the `./` while ParseDir's E000 emissions carry the
+	// cleaned `infra` — displayPath's `vFile == dir` guard then fails
+	// string comparison and the fallback join produces duplicated
+	// path segments. `dir` itself is preserved unchanged for
+	// report.directory (user-visible field). rootClean drives the walk
+	// and displayPath so the whole per-directory pipeline sees a
+	// single consistent representation.
+	rootClean := filepath.Clean(dir)
+
+	// Directory list to lint. Non-recursive: exactly rootClean.
 	// Recursive: full walk, skipping hidden dirs and node_modules.
 	// Shares collectDirs with fmt -recursive for parity of skip logic.
-	dirs, err := collectDirs(dir, recursive)
-	if err != nil {
-		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
-			return code
-		}
-		fmt.Fprintln(stderr, "tfdry:", err)
-		return 2
+	dirs, err := collectDirs(rootClean, recursive)
+	if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+		return code
 	}
 
 	var violations []checker.Violation
@@ -352,13 +388,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 
 		// Prefix v.File with the sub-path relative to the CLI arg.
-		// For the non-recursive case (dirs == [dir]), displayPath is
-		// a no-op and returns v.File verbatim — same as v0.1.1's
+		// For the non-recursive case (dirs == [rootClean]), displayPath
+		// is a no-op and returns v.File verbatim — same as v0.1.1's
 		// bare-filename contract. For --recursive, this is what
 		// turns "main.tf" into "staging/main.tf" so consumers can
 		// attribute violations to a specific workspace directory.
+		// Uses rootClean (not the raw CLI arg) so ParseDir's
+		// internal filepath.Clean matches what displayPath compares
+		// against — see the rootClean comment above.
 		for i := range dirViolations {
-			dirViolations[i].File = displayPath(dir, d, dirViolations[i].File)
+			dirViolations[i].File = displayPath(rootClean, d, dirViolations[i].File)
 		}
 		violations = append(violations, dirViolations...)
 	}

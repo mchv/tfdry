@@ -2406,3 +2406,118 @@ func TestRun_LintRecursive_RejectedOnNonLintNonFmtSubcommands(t *testing.T) {
 		})
 	}
 }
+
+// TestRun_LintRecursive_FileRoot_ExitTwo asserts that --recursive with a
+// file-path root is rejected up-front rather than producing a silent
+// no-op. filepath.WalkDir is Lstat-based: given a file root it invokes
+// the walkFn once with (path, non-dir DirEntry, nil), collectDirs
+// skips it (!IsDir), and the walk returns (empty, nil) — the lint
+// loop then produces an empty report and exit 0. Reject explicitly so
+// the misuse surfaces with a clear error, mirroring runFmt's
+// file-with-recursive rejection.
+func TestRun_LintRecursive_FileRoot_ExitTwo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tfPath := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(tfPath, []byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runCLI("--recursive", tfPath)
+	if code != 2 {
+		t.Errorf("--recursive on file path should exit 2, got %d; stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stderr, "file path") && !strings.Contains(stderr, "not a directory") {
+		t.Errorf("stderr should explain the file-path misuse, got %q", stderr)
+	}
+}
+
+// TestRun_LintRecursive_DotPrefixedRoot_NoPathDuplication guards
+// against a subtle bug in the path-attribution logic: checker.ParseDir
+// calls filepath.Clean(dir) internally, so any v.File that ParseDir
+// emits equal to the dir (directory-level E000 case) comes back
+// *cleaned*. If the outer walk still holds an *uncleaned* form of the
+// same directory (e.g. "./sub" from a user-supplied dot-prefixed CLI
+// arg), displayPath's `vFile == dir` guard fails string-comparison
+// and the fallback filepath.Join produces duplicated segments like
+// "sub/sub". Locks in that the fix (cleaning root before use)
+// prevents this class of bug in the general case, and specifically
+// ensures no path in the output contains adjacent duplicated segments.
+func TestRun_LintRecursive_DotPrefixedRoot_NoPathDuplication(t *testing.T) {
+	// No t.Parallel: this test needs t.Chdir which is a
+	// process-wide side effect.
+	root := t.TempDir()
+	// A subdir named 'fixture' so the relative form can be './fixture'.
+	fixture := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(filepath.Join(fixture, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture, "main.tf"),
+		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture, "nested", "main.tf"),
+		[]byte(`output "x" { value = local.undefined }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	// Use the dot-prefixed relative form — that's what pre-commit
+	// invocations look like in practice.
+	code, stdout, _ := runCLI("--json", "--recursive", "./fixture")
+	if code != 1 {
+		t.Fatalf("expected exit 1, got %d; stdout=%q", code, stdout)
+	}
+	var got struct {
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+	for _, v := range got.Violations {
+		file, _ := v["file"].(string)
+		// No dot-prefix leak.
+		if strings.HasPrefix(file, "./") {
+			t.Errorf("file path leaks './' prefix: %q", file)
+		}
+		// No adjacent duplicated segments (the "sub/sub" pattern).
+		segs := strings.Split(file, "/")
+		for i := 1; i < len(segs); i++ {
+			if segs[i] == segs[i-1] && segs[i] != "" {
+				t.Errorf("file path has adjacent duplicated segment %q: %q", segs[i], file)
+			}
+		}
+	}
+	// Also verify the specific expected path shape: nested/main.tf,
+	// no leading "fixture/" (that's the recursion root, stripped by
+	// displayPath) and no leading "./".
+	foundNested := false
+	for _, v := range got.Violations {
+		file, _ := v["file"].(string)
+		if file == "nested/main.tf" {
+			foundNested = true
+		}
+	}
+	if !foundNested {
+		t.Errorf("expected violation with file=%q, got: %+v", "nested/main.tf", got.Violations)
+	}
+}
+
+// TestRun_LintRecursive_NonExistentRoot_ExitTwo covers the os.Lstat
+// error branch of the recursive-root validation. --recursive against
+// a non-existent path must return a clear tool error (exit 2), not
+// silently emit an empty report. Complements FileRoot_ExitTwo (IsDir
+// branch) and SymlinkDirRoot_Rejected (symlink branch).
+func TestRun_LintRecursive_NonExistentRoot_ExitTwo(t *testing.T) {
+	t.Parallel()
+	// Path is guaranteed non-existent: constructed under a fresh
+	// TempDir and never created.
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "does-not-exist")
+	code, _, stderr := runCLI("--recursive", missing)
+	if code != 2 {
+		t.Errorf("--recursive on missing path should exit 2, got %d; stderr=%q",
+			code, stderr)
+	}
+	if stderr == "" {
+		t.Errorf("expected explanatory stderr, got empty")
+	}
+}
