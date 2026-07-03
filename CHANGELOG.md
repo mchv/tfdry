@@ -16,6 +16,20 @@ Each release entry groups changes under the following headings (omitted if empty
 
 ## [Unreleased]
 
+### Changed
+
+- **JSON schema uniformity for `violations[].line`.** Every violation
+  entry in `--json` output now emits `line`, using `0` as a sentinel
+  for file-level violations (`E000` tool errors, `E008` formatting)
+  where no specific source line applies. Previously the field was
+  omitted for file-level codes via `json:"line,omitempty"`, which
+  broke consumer schema expectations — every other code emitted
+  `line` reliably, forcing consumers to nil-check on E008
+  specifically. Compatible schema addition: consumers that already
+  handle absent `line` continue to work; consumers that now assume
+  presence will see `0` where they previously saw nothing.
+  ([#19](https://github.com/mchv/tfdry/issues/19))
+
 ### Fixed
 
 - `--version` / `-v` flags now print the version and exit 0, matching the

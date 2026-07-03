@@ -225,7 +225,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 | `violations[].code` | string | E000–E008 or W001. |
 | `violations[].severity` | string | `"error"` or `"warning"`. |
 | `violations[].file` | string | Filename relative to `directory` (sanitised). |
-| `violations[].line` | integer | 1-based line number. **Omitted entirely** (not emitted as `0`) when the violation is file-level — e.g. E000 tool errors, which are raised before HCL parsing resolves any line. JSON consumers should treat absent and `0` as equivalent. |
+| `violations[].line` | integer | 1-based line number. **Always present**; emitted as `0` for file-level violations (e.g. E000, E008) where no specific source line applies. Non-zero for violations tied to a specific source line. |
 | `violations[].message` | string | Human-readable detail (sanitised). |
 | `summary.errors` | integer | Count of `severity == "error"` violations (includes E000 for back-compat). |
 | `summary.warnings` | integer | Count of `severity == "warning"` violations. |

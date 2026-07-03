@@ -2026,3 +2026,98 @@ func TestRun_HelpOutput_DocumentsFmtFlags(t *testing.T) {
 		}
 	}
 }
+
+// ── E008 JSON schema uniformity (issue #19) ──────────────────────────────
+
+// TestRun_E008_JSONOutput_IncludesLineFieldAsZero asserts that E008
+// (file not formatted) violations emit "line": 0 in JSON output, matching
+// the schema shape of every other violation code. E008 is a whole-file
+// property with no meaningful source line — 0 is the sentinel meaning
+// "not tied to a specific line". Prior behaviour (omitted key via
+// json:"line,omitempty" plus zero-value default) forced JSON consumers
+// to nil-check .violations[].line for E008 specifically while other
+// codes reliably emitted it. This test locks in the uniform-schema
+// contract issue #19 established.
+func TestRun_E008_JSONOutput_IncludesLineFieldAsZero(t *testing.T) {
+	// Unformatted .tf triggers E008. Deliberately misaligned assignment
+	// (space vs alignment expected by hclwrite.Format).
+	dir := writeTFDir(t, map[string]string{
+		"dirty.tf": "locals {\n a=\"unformatted\"\n}\n",
+	})
+
+	code, stdout, stderr := runCLI("--json", dir)
+	if code != 1 {
+		t.Fatalf("expected exit 1 for E008, got %d; stderr=%q", code, stderr)
+	}
+
+	// Decode as generic maps to detect key *presence* — a struct with
+	// int line field would silently accept missing keys via zero value.
+	var got struct {
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+
+	sawE008 := false
+	for i, v := range got.Violations {
+		if v["code"] != "E008" {
+			continue
+		}
+		sawE008 = true
+		lineVal, hasLine := v["line"]
+		if !hasLine {
+			t.Errorf("violation[%d] (E008) missing \"line\" key; every violation must emit line (0 sentinel for file-level); violation=%+v", i, v)
+			continue
+		}
+		got, ok := lineVal.(float64)
+		if !ok {
+			t.Errorf("violation[%d] (E008) \"line\" not a number: got %T (%v)", i, lineVal, lineVal)
+			continue
+		}
+		if got != 0 {
+			t.Errorf("violation[%d] (E008) \"line\" = %v, want 0 (file-level sentinel)", i, got)
+		}
+	}
+	if !sawE008 {
+		t.Fatalf("no E008 violation found in output; expected one for unformatted dirty.tf; output: %s", stdout)
+	}
+}
+
+// TestRun_LineFieldPresent_AcrossViolationCodes is a broader regression
+// guard: every violation entry in a JSON payload must include a "line"
+// key regardless of code. This proves the uniform-schema contract
+// holds across a mix of file-level (E008) and line-attributed (W001,
+// E003) violations, and would catch any future regression that
+// re-introduces omitempty or per-code special-casing of the line
+// field's presence.
+func TestRun_LineFieldPresent_AcrossViolationCodes(t *testing.T) {
+	// Mixed violations: E008 (unformatted, file-level), W001 (unused local,
+	// line-attributed), E003 (undefined local reference, line-attributed).
+	dir := writeTFDir(t, map[string]string{
+		"dirty.tf": "locals {\n unused =\"x\"\n}\n" + // E008 (misaligned) + W001 (unused)
+			"output \"bad\" {\n  value = local.does_not_exist\n}\n", // E003 (undefined local)
+	})
+
+	code, stdout, stderr := runCLI("--json", dir)
+	// exit code is 1 (violations found); mix of error + warning.
+	if code != 1 {
+		t.Fatalf("expected exit 1 for mixed violations, got %d; stderr=%q", code, stderr)
+	}
+
+	var got struct {
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+	if len(got.Violations) == 0 {
+		t.Fatalf("expected at least one violation, got none; output: %s", stdout)
+	}
+	for i, v := range got.Violations {
+		if _, hasLine := v["line"]; !hasLine {
+			t.Errorf("violation[%d] (code=%v) missing \"line\" key; every violation must emit line; violation=%+v",
+				i, v["code"], v)
+		}
+	}
+}
