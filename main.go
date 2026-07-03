@@ -146,12 +146,25 @@ func handleFatalErr(err error, stderr io.Writer, prefix string) (int, bool) {
 // ctx is the cancellation token created by [main] via signal.NotifyContext.
 // Pure of os.Args / os.Exit / os.Stdout for testability.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	// Pre-scan: collect all flags before dispatching subcommands so that
-	// flag order relative to subcommand name doesn't matter.
-	//
-	// --version / -v and --help / -h are handled first as early-exit
-	// flags — they print their output and return immediately, before
-	// any subcommand dispatch or directory resolution.
+	// True early-exit pre-scan for --help/-h and --version/-v. These
+	// flags must succeed regardless of any other arguments in argv —
+	// the universal CLI convention is that help and version output
+	// take precedence over validation errors. Handled here, before
+	// the main parsing loop, so that later validation (extra
+	// positional args, subcommand conflicts, unknown flags) can't
+	// short-circuit them.
+	for _, arg := range args {
+		switch arg {
+		case "--version", "-v":
+			return runWrite(printVersion, stdout, stderr)
+		case "--help", "-h":
+			return runWrite(printUsage, stdout, stderr)
+		}
+	}
+
+	// Main parse: collect flags, subcommand, and directory. Order of
+	// flags relative to subcommand name doesn't matter — everything
+	// is accumulated in one pass, then dispatched below.
 	jsonFlag := false
 	fixFlag := false
 	fmtCheck := false
@@ -163,10 +176,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	for _, arg := range args {
 		switch {
-		case arg == "--version" || arg == "-v":
-			return runWrite(printVersion, stdout, stderr)
-		case arg == "--help" || arg == "-h":
-			return runWrite(printUsage, stdout, stderr)
 		case arg == "--json":
 			jsonFlag = true
 		case arg == "--fix":
