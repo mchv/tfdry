@@ -371,20 +371,32 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		// subject to --checks filtering.
 		dirViolations := append([]checker.Violation{}, parseViolations...)
 
-		if !skipRun {
-			runViolations, err := checker.Run(ctx, files, runFilter, d)
-			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
-				return code
+		// Guard the Run and FixFormat calls behind len(files) > 0.
+		// Both are safe no-ops on empty input, but for large
+		// monorepos with many empty-of-.tf directories the
+		// function-call overhead adds up. The guard is around
+		// these two calls specifically (not the whole iteration)
+		// because parseViolations still needs to surface: a
+		// subdirectory where every .tf file failed to parse gives
+		// (files empty, parseViolations non-empty), and a directory-
+		// level E000 (unreadable dir) does the same. Dropping the
+		// iteration wholesale would swallow those signals.
+		if len(files) > 0 {
+			if !skipRun {
+				runViolations, err := checker.Run(ctx, files, runFilter, d)
+				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+					return code
+				}
+				dirViolations = append(dirViolations, runViolations...)
 			}
-			dirViolations = append(dirViolations, runViolations...)
-		}
 
-		if shouldFix {
-			_, fixViolations, err := checker.FixFormat(ctx, files, d)
-			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
-				return code
+			if shouldFix {
+				_, fixViolations, err := checker.FixFormat(ctx, files, d)
+				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+					return code
+				}
+				dirViolations = append(dirViolations, fixViolations...)
 			}
-			dirViolations = append(dirViolations, fixViolations...)
 		}
 
 		// Prefix v.File with the sub-path relative to the CLI arg.

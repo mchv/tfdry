@@ -2521,3 +2521,118 @@ func TestRun_LintRecursive_NonExistentRoot_ExitTwo(t *testing.T) {
 		t.Errorf("expected explanatory stderr, got empty")
 	}
 }
+
+// TestRun_LintRecursive_ParseErrorSubdir_EmitsE001WithPrefix is the
+// critical regression guard for the "skip when files is empty"
+// optimisation: when every .tf file in a subdirectory has syntax
+// errors, ParseDir returns `len(files) == 0` but `parseViolations`
+// carries the E001 entries. A naive "skip iteration when files is
+// empty" optim would drop those E001s on the floor. This test locks
+// in that E001 from a syntax-error-only subdir still surfaces in
+// recursive output with its sub-path prefix.
+func TestRun_LintRecursive_ParseErrorSubdir_EmitsE001WithPrefix(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// Clean top-level to make the exit code come purely from the subdir.
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
+		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Subdir with only invalid .tf — deliberately unparseable HCL so
+	// hclsyntax.ParseConfig produces diagnostics that map to E001,
+	// leaving `files == nil` for this directory.
+	if err := os.MkdirAll(filepath.Join(dir, "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken", "bad.tf"),
+		[]byte(`this is not valid hcl {{{`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, _ := runCLI("--json", "--recursive", dir)
+	if code != 1 {
+		t.Fatalf("expected exit 1 (E001 in subdir), got %d; stdout=%q", code, stdout)
+	}
+	var got struct {
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+	foundE001WithPrefix := false
+	for _, v := range got.Violations {
+		code, _ := v["code"].(string)
+		file, _ := v["file"].(string)
+		if code == "E001" && strings.HasPrefix(file, "broken/") {
+			foundE001WithPrefix = true
+		}
+	}
+	if !foundE001WithPrefix {
+		t.Errorf("expected E001 with 'broken/' path prefix; violations=%+v", got.Violations)
+	}
+}
+
+// TestRun_LintRecursive_EmptyOfTfSubdir_NoCrash exercises the
+// fast-path branch where a walked subdirectory contains no .tf files
+// (only unrelated files like .md, .txt, or nothing at all).
+// ParseDir returns both files and parseViolations empty — the run
+// loop must skip the Run/FixFormat calls cleanly and move on to the
+// next dir. Also covers the assertion that non-Terraform content is
+// not accidentally emitted in the recursive report.
+func TestRun_LintRecursive_EmptyOfTfSubdir_NoCrash(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
+		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Subdir with a plain-text file (not .tf) — ParseDir returns
+	// (empty, empty, nil), the Run + FixFormat calls are guarded
+	// by len(files) > 0 and skipped, iteration continues.
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "README.md"),
+		[]byte("# not terraform\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, _ := runCLI("--recursive", dir)
+	if code != 0 {
+		t.Fatalf("empty-of-tf subdir should not affect exit code; got %d; stdout=%q",
+			code, stdout)
+	}
+	if strings.Contains(stdout, "docs") {
+		t.Errorf("empty-of-tf subdir must not surface in output; stdout=%q", stdout)
+	}
+	if strings.Contains(stdout, "README.md") {
+		t.Errorf("non-.tf file must not surface in output; stdout=%q", stdout)
+	}
+}
+
+// TestRun_LintRecursive_PreCancelledCtx covers the per-directory
+// cancel checkpoint at the top of the recursive-lint loop. A
+// pre-cancelled context should short-circuit the walk with the
+// standard interrupted exit code (130) rather than proceeding to
+// I/O. Mirrors TestRunFmt_PreCancel_BailsBeforeIO / _runFmtFile_
+// counterparts on the fmt path; without this, the recursive lint
+// dispatch could drift out of alignment on cancellation semantics.
+func TestRun_LintRecursive_PreCancelledCtx(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
+		[]byte(`locals { x = "ok" }`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel BEFORE the call
+
+	var stdout, stderr bytes.Buffer
+	code := run(ctx, []string{"--recursive", dir}, &stdout, &stderr)
+
+	if code != 130 {
+		t.Errorf("pre-cancelled ctx should exit 130 (interrupted), got %d; stderr=%q",
+			code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "tfdry: interrupted") {
+		t.Errorf("stderr should mention 'tfdry: interrupted', got %q", stderr.String())
+	}
+}
