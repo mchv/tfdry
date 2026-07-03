@@ -182,7 +182,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			fixFlag = true
 		case arg == "-check" || arg == "--check":
 			fmtCheck = true
-		case arg == "-recursive" || arg == "--recursive":
+		case arg == "-recursive" || arg == "--recursive" || arg == "-r":
 			fmtRecursive = true
 		case strings.HasPrefix(arg, "--checks="):
 			rawCodes := strings.Split(strings.TrimPrefix(arg, "--checks="), ",")
@@ -444,6 +444,10 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(&b, "  --json           Machine-readable JSON output.")
 	fmt.Fprintln(&b, "  --help, -h       Show this help and exit.")
 	fmt.Fprintln(&b, "  --version, -v    Print version and exit.")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "fmt subcommand flags:")
+	fmt.Fprintln(&b, "  -check, --check                Report files that would be reformatted; exit 3 if any (no changes made).")
+	fmt.Fprintln(&b, "  -recursive, --recursive, -r    Recurse into subdirectories.")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "Exit codes:")
 	fmt.Fprintln(&b, "  0   No violations (or all fixed by --fix).")
