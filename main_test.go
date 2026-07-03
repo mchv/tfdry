@@ -395,6 +395,35 @@ func TestRun_Version_PrintsVersion(t *testing.T) {
 	}
 }
 
+// TestRun_Version_OutputFormat guards the exact shape of the version
+// line: `tfdry <version>` with a space separator and no `v` prefix on
+// the version token. Docs, issue templates, and any downstream
+// consumer that shows an example of tfdry version output should
+// mirror this format. If someone changes printVersion to emit
+// `tfdry v<version>` (or `<version>` bare, etc.), this guard catches
+// the drift so the paired doc/template updates aren't silently
+// forgotten.
+func TestRun_Version_OutputFormat(t *testing.T) {
+	t.Parallel()
+	code, stdout, _ := runCLI("version")
+	if code != 0 {
+		t.Fatalf("version should exit 0, got %d", code)
+	}
+	// Trim the trailing newline that fmt.Fprintln emits.
+	got := strings.TrimSpace(stdout)
+	if !strings.HasPrefix(got, "tfdry ") {
+		t.Errorf("version output must start with 'tfdry '; got: %q", got)
+	}
+	// After the leading 'tfdry ' the version token must not itself
+	// begin with 'v'. tfdry emits semver without the git-tag 'v'
+	// prefix; the bug_report.yml placeholder and README example
+	// both rely on this.
+	versionToken := strings.TrimPrefix(got, "tfdry ")
+	if strings.HasPrefix(versionToken, "v") {
+		t.Errorf("version token must not have 'v' prefix; got: %q", versionToken)
+	}
+}
+
 // ── --version / -v flags ─────────────────────────────────────────────────────
 
 func TestRun_VersionFlag_PrintsVersionAndExitsZero(t *testing.T) {

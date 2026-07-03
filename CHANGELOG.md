@@ -201,5 +201,6 @@ shipped; for the per-PR breakdown see the merged PRs in the
   degrades to "post-open IsRegular check" because Windows doesn't
   honour POSIX `O_NOFOLLOW`. See `checker/nofollow_windows.go`.
 
-[Unreleased]: https://github.com/mchv/tfdry/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mchv/tfdry/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/mchv/tfdry/releases/tag/v0.1.1
 [0.1.0]: https://github.com/mchv/tfdry/releases/tag/v0.1.0
