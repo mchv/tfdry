@@ -1897,3 +1897,54 @@ func TestRun_VersionHelp_DetectsShortWrite(t *testing.T) {
 		})
 	}
 }
+
+// ── --help / --version early-exit precedence (review response) ─────────
+
+// TestRun_HelpVersion_EarlyExitPrecedence guards the true early-exit
+// contract for --help/-h and --version/-v: these flags must succeed
+// regardless of whether other arguments would trigger validation
+// errors. Prior to the pre-scan fix, arguments causing errors that
+// appeared BEFORE the early-exit flag in argv (extra positional args,
+// subcommand conflicts) would trip the main parsing loop's validation
+// and return exit 2 before --help/--version was ever evaluated.
+// This test surfaces those cases and locks in the fix.
+func TestRun_HelpVersion_EarlyExitPrecedence(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantPrefix string // stdout must start with this
+	}{
+		// Cases that FAIL under a single-pass parse: extra positional
+		// arg or subcommand conflict fires before the flag is reached.
+		{"help-after-two-positional", []string{"dir1", "dir2", "--help"}, "Usage:"},
+		{"h-after-two-positional", []string{"dir1", "dir2", "-h"}, "Usage:"},
+		{"help-after-three-positional", []string{"a", "b", "c", "--help"}, "Usage:"},
+		{"help-after-subcommand-conflict", []string{"version", "describe", "--help"}, "Usage:"},
+		{"version-after-three-positional", []string{"dir1", "dir2", "dir3", "--version"}, "tfdry "},
+		{"v-after-three-positional", []string{"dir1", "dir2", "dir3", "-v"}, "tfdry "},
+		{"version-after-subcommand-conflict", []string{"describe", "version", "--version"}, "tfdry "},
+
+		// Regression: baseline cases where early-exit was already
+		// working (flag appears before any conflicting arg).
+		{"help-first", []string{"--help", "dir1", "dir2"}, "Usage:"},
+		{"version-first", []string{"--version", "dir1", "dir2"}, "tfdry "},
+		{"help-only", []string{"--help"}, "Usage:"},
+		{"version-only", []string{"--version"}, "tfdry "},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), tc.args, &stdout, &stderr)
+			if code != 0 {
+				t.Errorf("%s: exit=%d want=0; stderr=%q; stdout=%q",
+					tc.name, code, stderr.String(), stdout.String())
+			}
+			if !strings.HasPrefix(stdout.String(), tc.wantPrefix) {
+				t.Errorf("%s: stdout should start with %q; got %q",
+					tc.name, tc.wantPrefix, stdout.String())
+			}
+		})
+	}
+}
