@@ -2070,13 +2070,13 @@ func TestRun_E008_JSONOutput_IncludesLineFieldAsZero(t *testing.T) {
 			t.Errorf("violation[%d] (E008) missing \"line\" key; every violation must emit line (0 sentinel for file-level); violation=%+v", i, v)
 			continue
 		}
-		got, ok := lineVal.(float64)
+		lineNum, ok := lineVal.(float64)
 		if !ok {
 			t.Errorf("violation[%d] (E008) \"line\" not a number: got %T (%v)", i, lineVal, lineVal)
 			continue
 		}
-		if got != 0 {
-			t.Errorf("violation[%d] (E008) \"line\" = %v, want 0 (file-level sentinel)", i, got)
+		if lineNum != 0 {
+			t.Errorf("violation[%d] (E008) \"line\" = %v, want 0 (file-level sentinel)", i, lineNum)
 		}
 	}
 	if !sawE008 {
