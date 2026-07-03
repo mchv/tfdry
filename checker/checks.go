@@ -23,8 +23,13 @@ type Violation struct {
 	Code     string `json:"code"`
 	Severity string `json:"severity"`
 	File     string `json:"file"`
-	Line     int    `json:"line,omitempty"`
-	Message  string `json:"message"`
+	// Line is emitted uniformly for every violation — 0 is the sentinel
+	// for file-level violations (E000, E008) where no specific source
+	// line applies. Previously used json:"line,omitempty" which stripped
+	// the field for file-level codes and broke consumer schema
+	// expectations; see issue #19.
+	Line    int    `json:"line"`
+	Message string `json:"message"`
 }
 
 // CheckSet is the set of check codes to run. Empty means all.

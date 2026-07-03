@@ -133,18 +133,18 @@ func TestRun_E000_JSONOutput_IncludesToolErrors(t *testing.T) {
 	}
 }
 
-// TestRun_E000_JSONOutput_OmitsLineField asserts that file-level
-// violations (E000, emitted from the I/O layer before HCL parsing
-// resolves any line number) produce JSON entries with NO "line" key
-// at all, per the `json:"line,omitempty"` tag on
-// checker.Violation.Line. The README's JSON schema row documents
-// this as "1-based line number; omitted when the violation is
-// file-level (e.g. E000)"; without this test, a future struct
-// refactor that drops omitempty would silently emit "line": 0 and
-// diverge from the documented contract — and the existing
-// TestRun_E000_JSONOutput_IncludesToolErrors only inspects summary
-// fields, not the violation entries themselves.
-func TestRun_E000_JSONOutput_OmitsLineField(t *testing.T) {
+// TestRun_E000_JSONOutput_IncludesLineFieldAsZero asserts that
+// file-level violations (E000, emitted from the I/O layer before
+// HCL parsing resolves any line number) emit "line": 0 in JSON —
+// the schema-uniformity fix from issue #19. Every violation now
+// includes a "line" key regardless of code; whole-file violations
+// use 0 as the sentinel meaning "not tied to a specific source
+// line". Prior behaviour (omitting the key via
+// json:"line,omitempty") broke consumer code that read
+// .violations[].line without a presence check, since every non-file-
+// level code did emit line. This test guards the new uniform-schema
+// contract against a future regression that would re-add omitempty.
+func TestRun_E000_JSONOutput_IncludesLineFieldAsZero(t *testing.T) {
 	dir := t.TempDir()
 	createOversizedFile(t, dir, "huge.tf")
 
@@ -155,7 +155,8 @@ func TestRun_E000_JSONOutput_OmitsLineField(t *testing.T) {
 
 	// Decode into a generic map so we can detect the *presence* of
 	// keys, not just their values — a partial-fields struct would
-	// happily accept "line": 0 and miss the omitempty regression.
+	// happily accept a missing "line" and pass without noticing the
+	// bug.
 	var got struct {
 		Violations []map[string]any `json:"violations"`
 	}
@@ -165,12 +166,28 @@ func TestRun_E000_JSONOutput_OmitsLineField(t *testing.T) {
 	if len(got.Violations) == 0 {
 		t.Fatalf("expected at least one violation, got none; output: %s", stdout)
 	}
+	sawE000 := false
 	for i, v := range got.Violations {
 		if v["code"] != "E000" {
 			continue
 		}
-		if _, hasLine := v["line"]; hasLine {
-			t.Errorf("violation[%d] (E000) has unexpected \"line\" key (omitempty should have stripped it); violation=%+v", i, v)
+		sawE000 = true
+		lineVal, hasLine := v["line"]
+		if !hasLine {
+			t.Errorf("violation[%d] (E000) missing \"line\" key; every violation must emit line (0 sentinel for file-level); violation=%+v", i, v)
+			continue
 		}
+		// JSON numbers decode to float64 in map[string]any.
+		got, ok := lineVal.(float64)
+		if !ok {
+			t.Errorf("violation[%d] (E000) \"line\" not a number: got %T (%v)", i, lineVal, lineVal)
+			continue
+		}
+		if got != 0 {
+			t.Errorf("violation[%d] (E000) \"line\" = %v, want 0 (file-level sentinel)", i, got)
+		}
+	}
+	if !sawE000 {
+		t.Fatalf("no E000 violation found; output: %s", stdout)
 	}
 }
