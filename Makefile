@@ -53,17 +53,18 @@ fmt: ## Apply gofumpt formatting in place. Use this to fix `make fmt-check` fail
 		echo "gofumpt not found in PATH. Run 'make tools' first."; \
 		exit 1; \
 	}
-	@# git ls-files (not `.`) so gitignored fetched Go sources under
-	@# bench/attr-corpus/files/ are excluded — those live in nested modules
-	@# and are not ours to reformat.
-	@git ls-files '*.go' -z | xargs -0 gofumpt -w
+	@# git ls-files -co --exclude-standard: tracked (-c) + untracked (-o)
+	@# not gitignored (--exclude-standard). Catches new .go files a developer
+	@# has just created without `git add`ing, while still excluding fetched
+	@# third-party Go sources under bench/attr-corpus/files/.
+	@git ls-files -co --exclude-standard -z -- '*.go' | xargs -0 gofumpt -w
 
 fmt-check: ## Verify gofumpt formatting is clean. Fails with a diff if not.
 	@command -v gofumpt >/dev/null 2>&1 || { \
 		echo "gofumpt not found in PATH. Run 'make tools' first."; \
 		exit 1; \
 	}
-	@out=$$(git ls-files '*.go' -z | xargs -0 gofumpt -l 2>&1); \
+	@out=$$(git ls-files -co --exclude-standard -z -- '*.go' | xargs -0 gofumpt -l 2>&1); \
 	if [ -n "$$out" ]; then \
 		echo "Files need gofumpt formatting:"; \
 		echo "$$out"; \

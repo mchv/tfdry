@@ -52,29 +52,32 @@ var categories = []category{
 // grammar-family value.
 const maxValueLen = 1024
 
-// extractString returns the literal string value of an expression, or "" if
-// the expression is interpolated, non-string, or fails to evaluate as a
-// constant. HCL strings are always template expressions; a template with a
-// single literal part is a plain string.
-func extractString(e hclsyntax.Expression) string {
+// extractString returns the literal string value of an expression together
+// with a boolean indicating whether the expression is a valid literal string.
+// The bool avoids conflating "not a literal" with "literal empty string": a
+// list `[..., ""]` should keep its non-empty elements rather than being
+// dropped entirely on the empty one. HCL strings are always template
+// expressions; a template with a single literal part is a plain string.
+func extractString(e hclsyntax.Expression) (string, bool) {
 	tpl, ok := e.(*hclsyntax.TemplateExpr)
 	if !ok || len(tpl.Parts) != 1 {
-		return ""
+		return "", false
 	}
 	lit, ok := tpl.Parts[0].(*hclsyntax.LiteralValueExpr)
 	if !ok {
-		return ""
+		return "", false
 	}
 	val, diags := lit.Value(nil)
-	if diags.HasErrors() || !val.Type().Equals(cty.String) {
-		return ""
+	if diags.HasErrors() || val.IsNull() || !val.Type().Equals(cty.String) {
+		return "", false
 	}
-	return val.AsString()
+	return val.AsString(), true
 }
 
 // extractStringList returns literal strings from a tuple/list expression. If
-// any element is interpolated or non-string the whole list is dropped — we
-// prefer an empty return to a partial capture.
+// any element is not a valid literal string the whole list is dropped — we
+// prefer an empty return to a partial capture that would silently omit
+// interpolated or non-string neighbours.
 func extractStringList(e hclsyntax.Expression) []string {
 	tuple, ok := e.(*hclsyntax.TupleConsExpr)
 	if !ok {
@@ -82,8 +85,8 @@ func extractStringList(e hclsyntax.Expression) []string {
 	}
 	out := make([]string, 0, len(tuple.Exprs))
 	for _, sub := range tuple.Exprs {
-		v := extractString(sub)
-		if v == "" {
+		v, ok := extractString(sub)
+		if !ok {
 			return nil
 		}
 		out = append(out, v)
@@ -104,7 +107,7 @@ func walk(body *hclsyntax.Body, buckets map[string]map[string]struct{}) {
 			if !cat.pattern.MatchString(attr.Name) {
 				continue
 			}
-			if v := extractString(attr.Expr); v != "" {
+			if v, ok := extractString(attr.Expr); ok {
 				buckets[cat.name][v] = struct{}{}
 				continue
 			}
