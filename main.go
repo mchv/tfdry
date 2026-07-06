@@ -864,6 +864,21 @@ func displayPath(rootArg, dir, vFile string) string {
 // Both skips are applied only to descendants of root — root itself is
 // always included regardless of its name. Shared by fmt -recursive
 // and lint --recursive.
+//
+// Per-directory readdir errors during the walk are non-fatal: the
+// affected directory has already been added to `dirs` on the first
+// walkFn invocation (with walkErr=nil), so downstream ParseDir/format
+// calls will re-hit the same failure and surface it through the
+// normal violation path (E000 for lint, stderr diagnostic for fmt).
+// Aborting the whole walk on a single dir's permission error would
+// otherwise skip peer directories that were perfectly readable, and
+// break the "aggregated Report even on tool errors" contract that
+// non-recursive lint honours for `--json` consumers.
+//
+// The only walkErr case treated as fatal is the initial Lstat on
+// `root` failing (d == nil). That's a race window with any caller-side
+// pre-validation, and there are no dirs yet to surface the error
+// through the aggregation path, so we let WalkDir return it.
 func collectDirs(root string, recursive bool) ([]string, error) {
 	if !recursive {
 		return []string{root}, nil
@@ -871,7 +886,18 @@ func collectDirs(root string, recursive bool) ([]string, error) {
 	var dirs []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			if d == nil {
+				// Initial Lstat on root failed. No dir has been
+				// added yet; nothing downstream can surface this.
+				return walkErr
+			}
+			// Per-directory readdir failure. `path` was already
+			// added to dirs on the first walkFn call (before
+			// readdir was attempted). Return nil so WalkDir
+			// continues walking siblings; the downstream call
+			// site will hit the same error via os.ReadDir and
+			// emit a proper violation.
+			return nil
 		}
 		if !d.IsDir() {
 			return nil

@@ -53,20 +53,31 @@ func TestRun_LintRecursive_SymlinkDirRoot_Rejected(t *testing.T) {
 	}
 }
 
-// TestRun_LintRecursive_UnreadableSubdir_ExitTwo covers the
-// collectDirs walk-error branch. When filepath.WalkDir enters a
-// subdirectory that cannot be readdir'd (e.g. chmod 0), it invokes
-// the walkFn a second time with walkErr set; collectDirs returns
-// that error and the lint dispatch routes it via handleFatalErr to
-// exit 2 with a clear tool-error message. Without covering this
-// branch, a filesystem-permission edge case could silently swallow
-// diagnostics if the propagation chain were ever broken.
+// TestRun_LintRecursive_UnreadableSubdir_EmitsE000InReport locks in
+// the contract that a walk hitting an unreadable subdirectory
+// surfaces the failure as an E000 violation in the aggregated
+// Report — matching what non-recursive lint does for
+// `tfdry --json <chmod-0-dir>`. Previously, `collectDirs` returned
+// WalkDir errors verbatim, which the lint dispatch treated as fatal
+// and exited 2 with a stderr message and no JSON output. That
+// broke the "single Report even on tool errors" contract for
+// `--json --recursive` consumers.
+//
+// The fix (in `collectDirs`) treats per-directory readdir failures
+// as non-fatal: the directory has already been added to the walk's
+// dirs slice on the first walkFn call, so the lint loop's ParseDir
+// re-hits the readdir failure and emits E000 with the directory
+// path in v.File. That E000 aggregates into the Report alongside
+// any other violations. Exit code stays 2 (via ToolErrors > 0).
 //
 // Unix-only: chmod 0 on a subdirectory doesn't produce equivalent
 // EACCES behaviour under Windows' ACL model; the run() surface is
 // exercised on other platforms via the FileRoot / SymlinkDirRoot
 // tests.
-func TestRun_LintRecursive_UnreadableSubdir_ExitTwo(t *testing.T) {
+func TestRun_LintRecursive_UnreadableSubdir_EmitsE000InReport(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; chmod 0 doesn't restrict the superuser")
+	}
 	// No t.Parallel — chmod races with other tests are unlikely, but
 	// serialising is cheap insurance.
 	root := t.TempDir()
@@ -81,8 +92,8 @@ func TestRun_LintRecursive_UnreadableSubdir_ExitTwo(t *testing.T) {
 	if err := os.Mkdir(unreadable, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Add a .tf inside so if the walk didn't hit the perm error, we'd
-	// visit the subdir and process it.
+	// Add a .tf inside so if the walk somehow bypassed the perm
+	// error, we'd visit the subdir and process it.
 	if err := os.WriteFile(filepath.Join(unreadable, "hidden.tf"),
 		[]byte(`locals { y = "would-be-seen" }`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -93,13 +104,34 @@ func TestRun_LintRecursive_UnreadableSubdir_ExitTwo(t *testing.T) {
 	// Restore perms so t.TempDir()'s cleanup can remove the tree.
 	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
 
-	code, _, stderr := runCLI("--recursive", root)
+	code, stdout, stderr := runCLI("--json", "--recursive", root)
 	if code != 2 {
-		t.Errorf("--recursive over unreadable subdir should exit 2, got %d; stderr=%q",
-			code, stderr)
+		t.Fatalf("--recursive over unreadable subdir should exit 2, got %d; "+
+			"stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	if stderr == "" {
-		t.Errorf("expected explanatory stderr, got empty")
+	// The Report should be emitted on stdout, containing an E000 for
+	// the unreadable subdir. Stderr should be empty — errors flow
+	// through the Report, matching the non-recursive contract.
+	if stderr != "" {
+		t.Errorf("stderr should be empty (errors flow via Report), got %q", stderr)
+	}
+	var got struct {
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("stdout must be valid JSON Report: %v\noutput: %s", err, stdout)
+	}
+	foundE000 := false
+	for _, v := range got.Violations {
+		code, _ := v["code"].(string)
+		file, _ := v["file"].(string)
+		if code == "E000" && strings.Contains(file, "unreadable") {
+			foundE000 = true
+		}
+	}
+	if !foundE000 {
+		t.Errorf("expected E000 violation for the 'unreadable' subdir in the JSON "+
+			"Report; got violations: %+v", got.Violations)
 	}
 }
 
