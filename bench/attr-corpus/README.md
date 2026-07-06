@@ -73,12 +73,10 @@ look sensible.
 attributes (including those inside nested blocks) and matches attribute
 names against per-family regex patterns:
 
-| Family     | Pattern                                              |
-|------------|------------------------------------------------------|
-| cidr       | `(^\|_)cidr(_blocks?)?s?$`                           |
-| arn        | `(^\|_)arns?$`                                       |
-| region     | `^(aws_)?region$`                                    |
-| account_id | `^(allowed_\|aws_\|master_\|caller_)?account_ids?$`  |
+- **cidr** — `(^|_)cidr(_blocks?)?s?$`
+- **arn** — `(^|_)arns?$`
+- **region** — `^(aws_)?region$`
+- **account_id** — `^(allowed_|aws_|master_|caller_)?account_ids?$`
 
 For each match the extractor pulls the literal string value (or list of
 strings), skipping any expression that contains interpolation (`${…}` or
