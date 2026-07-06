@@ -92,8 +92,13 @@ func extractStringList(e hclsyntax.Expression) []string {
 }
 
 // walk visits every attribute in body (and every nested block) and buckets
-// literal values by category.
+// literal values by category. body is expected non-nil (hclsyntax guarantees
+// this for a well-formed parse); the guard is defensive against future
+// contract changes.
 func walk(body *hclsyntax.Body, buckets map[string]map[string]struct{}) {
+	if body == nil {
+		return
+	}
 	for _, attr := range body.Attributes {
 		for _, cat := range categories {
 			if !cat.pattern.MatchString(attr.Name) {
@@ -151,6 +156,11 @@ func main() {
 		file, diags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
 			parseErrs++
+			return nil
+		}
+		// hclsyntax normally returns a non-nil file+body when diags is clean,
+		// but guard against a contract regression that would panic mid-walk.
+		if file == nil || file.Body == nil {
 			return nil
 		}
 		body, ok := file.Body.(*hclsyntax.Body)

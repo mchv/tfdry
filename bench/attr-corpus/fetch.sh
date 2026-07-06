@@ -29,7 +29,10 @@ failed=0
 # Read repos.txt with an explicit fd so counter updates survive the loop
 # (a while-read pipeline would put the body in a subshell).
 while IFS= read -r line <&3 || [ -n "$line" ]; do
-    entry=$(echo "$line" | sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    # Strip trailing CR (Windows CRLF checkouts), comments, and surrounding
+    # whitespace. Without the tr, a stray \r ends up in the tag and produces
+    # an invalid tarball URL that fails with a 404.
+    entry=$(echo "$line" | tr -d '\r' | sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     [ -z "$entry" ] && continue
 
     repo=$(echo "$entry" | awk '{print $1}')
@@ -53,9 +56,11 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     url="https://github.com/${repo}/archive/refs/tags/${tag}.tar.gz"
 
     # Download to a temp file first so curl's exit code is checked before tar
-    # runs. `curl -f` returns non-zero on HTTP 4xx/5xx; a `curl | tar` pipeline
-    # would let tar succeed on empty stdin and hide the 404.
-    tmp=$(mktemp -t tfdry-attr-corpus-XXXXXX.tar.gz)
+    # runs. `curl | tar` would let tar succeed on empty stdin and hide the 404.
+    # Plain `mktemp` (no template) for cross-platform portability: BSD mktemp
+    # treats the argument to `-t` as a prefix, not a template, and does not
+    # accept suffixes after the XXXXXX placeholders.
+    tmp=$(mktemp)
     if ! curl -fsSL "$url" -o "$tmp"; then
         printf '  ✗ %-55s %s (HTTP error)\n' "$repo" "$tag" >&2
         rm -f "$tmp"
