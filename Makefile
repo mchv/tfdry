@@ -14,7 +14,7 @@ GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := v1.4.0
 MISSPELL_VERSION      := v0.7.0
 
-.PHONY: help build test test-race verify tools tools-fmt tools-lint tools-vuln tools-misspell fmt fmt-check tidy-check lint lint-prose vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 clean
+.PHONY: help build test test-race verify tools tools-fmt tools-lint tools-vuln tools-misspell fmt fmt-check tidy-check lint lint-prose vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 bench-corpus-fetch bench-corpus-extract bench-corpus-refresh bench-corpus-clean clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -53,14 +53,17 @@ fmt: ## Apply gofumpt formatting in place. Use this to fix `make fmt-check` fail
 		echo "gofumpt not found in PATH. Run 'make tools' first."; \
 		exit 1; \
 	}
-	gofumpt -w .
+	@# git ls-files (not `.`) so gitignored fetched Go sources under
+	@# bench/attr-corpus/files/ are excluded — those live in nested modules
+	@# and are not ours to reformat.
+	@git ls-files '*.go' -z | xargs -0 gofumpt -w
 
 fmt-check: ## Verify gofumpt formatting is clean. Fails with a diff if not.
 	@command -v gofumpt >/dev/null 2>&1 || { \
 		echo "gofumpt not found in PATH. Run 'make tools' first."; \
 		exit 1; \
 	}
-	@out=$$(gofumpt -l . 2>&1); \
+	@out=$$(git ls-files '*.go' -z | xargs -0 gofumpt -l 2>&1); \
 	if [ -n "$$out" ]; then \
 		echo "Files need gofumpt formatting:"; \
 		echo "$$out"; \
@@ -170,6 +173,8 @@ PROSE_FILES := \
 	SECURITY.md \
 	SKILL.md \
 	Makefile \
+	bench/README.md \
+	bench/attr-corpus/README.md \
 	.github/workflows/ci.yml \
 	.github/workflows/govulncheck.yml \
 	.github/workflows/release.yml \
@@ -264,6 +269,17 @@ bench-baseline: ## A/B compare HEAD against a baseline ref via hyperfine (BASELI
 bench-jsonv2: ## A/B compare default build vs GOEXPERIMENT=jsonv2 build (human + --json paths).
 	EXPERIMENT=jsonv2 LABEL=jsonv2-human bench/baseline.sh
 	EXPERIMENT=jsonv2 LABEL=jsonv2-json ARGS=--json bench/baseline.sh
+
+bench-corpus-fetch: ## Download pinned Terraform tarballs into bench/attr-corpus/files/.
+	bench/attr-corpus/fetch.sh
+
+bench-corpus-extract: ## Walk bench/attr-corpus/files/ with hclsyntax, refresh values/.
+	bench/attr-corpus/extract.sh
+
+bench-corpus-refresh: bench-corpus-fetch bench-corpus-extract ## Fetch + extract in one step.
+
+bench-corpus-clean: ## Remove bench/attr-corpus/files/ (keeps committed values/).
+	rm -rf bench/attr-corpus/files
 
 clean: ## Remove the binary and bench/results.
 	rm -f $(BINARY)
