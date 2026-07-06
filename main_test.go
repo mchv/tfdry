@@ -2576,3 +2576,55 @@ func TestRun_LintRecursive_PreCancelledCtx(t *testing.T) {
 		t.Errorf("stderr should mention 'tfdry: interrupted', got %q", stderr.String())
 	}
 }
+
+// TestRun_FmtRecursive_DotPrefixedRoot_PathsClean is the fmt-side
+// counterpart to TestRun_LintRecursive_DotPrefixedRoot_NoPathDuplication.
+// After the last review-response commit `runFmt` cleaned the CLI arg
+// into `pathClean` for the Lstat symlink check but still passed the
+// raw `path` into `collectDirs` and both `displayPath` call sites.
+// That's the same class of path-duplication risk that was fixed on
+// the lint path: WalkDir starts with the raw form (leaks `./`),
+// ParseDir cleans internally, and displayPath's `vFile == dir` guard
+// then compares an uncleaned dir against a cleaned vFile — falling
+// through to the default join and producing duplicated segments for
+// directory-level E000 emissions.
+//
+// This test locks in the general property that `tfdry fmt --recursive
+// ./fixture` output paths (stdout list of formatted files plus any
+// stderr parse-error paths) have no dot-prefix leaks and no adjacent
+// duplicated segments. It doesn't specifically trigger the E000 case
+// (which requires a TOCTOU race) but locks in the observable
+// consequence of using cleaned paths consistently in the walker.
+func TestRun_FmtRecursive_DotPrefixedRoot_PathsClean(t *testing.T) {
+	// No t.Parallel — uses t.Chdir which is a process-wide side effect.
+	root := writeTFDir(t, map[string]string{
+		"fixture/dirty.tf":        "locals { a=\"unformatted\" }\n",
+		"fixture/nested/dirty.tf": "locals { b=\"unformatted\" }\n",
+	})
+	t.Chdir(root)
+
+	code, stdout, _ := runCLI("fmt", "-check", "--recursive", "./fixture")
+	if code != 3 {
+		t.Fatalf("expected exit 3 (dirty files under -check), got %d; stdout=%q", code, stdout)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		if strings.HasPrefix(line, "./") {
+			t.Errorf("stdout path leaks './' prefix: %q", line)
+		}
+		segs := strings.Split(line, "/")
+		for i := 1; i < len(segs); i++ {
+			if segs[i] == segs[i-1] && segs[i] != "" {
+				t.Errorf("stdout path has adjacent duplicated segment %q: %q",
+					segs[i], line)
+			}
+		}
+	}
+	// Both nested-level paths must surface with sub-path prefixes
+	// (relative to the CLI arg's cleaned form).
+	if !strings.Contains(stdout, "dirty.tf") {
+		t.Errorf("expected 'dirty.tf' in output, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "nested/dirty.tf") {
+		t.Errorf("expected 'nested/dirty.tf' in output, got: %q", stdout)
+	}
+}

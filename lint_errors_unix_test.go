@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,5 +144,73 @@ func TestRun_LintRecursive_SymlinkDirRootTrailingSlash_Rejected(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "symlink") {
 		t.Errorf("stderr should mention symlink rejection, got %q", stderr)
+	}
+}
+
+// TestRun_LintNonRecursive_DirLevelE000_PreservesDirectoryPath guards
+// the non-recursive contract for directory-level E000 violations:
+// when ParseDir can't read the target directory itself, the emitted
+// violation's `file` field must be the directory path (as it was in
+// v0.1.1), not the "." sentinel that `displayPath` returns for the
+// `vFile == dir` case.
+//
+// Regression window: after the recursive-lint dispatch refactor
+// (issue #21), the per-directory `displayPath` transformation was
+// applied unconditionally. In non-recursive mode with dirs =
+// [rootClean] and a dir-level E000 where v.File == rootClean, the
+// transformation compressed the path to "." — silently changing the
+// JSON schema and human-output for the exact tool-error case that
+// downstream consumers (CI, dashboards) rely on for correct
+// attribution. The fix is to gate the displayPath loop on the
+// `recursive` flag so non-recursive lint preserves its v0.1.1
+// output byte-for-byte.
+//
+// Unix-only: chmod 0 is the deterministic way to trigger the
+// dir-level E000 branch inside ParseDir (os.ReadDir fails).
+func TestRun_LintNonRecursive_DirLevelE000_PreservesDirectoryPath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; chmod 0 doesn't restrict the superuser")
+	}
+	// No t.Parallel — chmod modifies a real directory.
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Skip("cannot chmod:", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	code, stdout, _ := runCLI("--json", dir)
+	if code != 2 {
+		t.Fatalf("expected exit 2 (E000), got %d; stdout=%q", code, stdout)
+	}
+	var got struct {
+		Violations []map[string]any `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, stdout)
+	}
+	if len(got.Violations) == 0 {
+		t.Fatalf("expected at least one E000 violation, got none; output: %s", stdout)
+	}
+	foundE000 := false
+	for _, v := range got.Violations {
+		code, _ := v["code"].(string)
+		file, _ := v["file"].(string)
+		if code != "E000" {
+			continue
+		}
+		foundE000 = true
+		if file == "." {
+			t.Errorf("dir-level E000 file field was compressed to %q by displayPath; "+
+				"expected the directory path %q (v0.1.1 contract)", file, dir)
+		}
+		// The path should be either the raw dir arg or its cleaned
+		// form — both are acceptable per v0.1.1 which passed the arg
+		// directly to ParseDir which cleans internally.
+		if file != dir && file != filepath.Clean(dir) {
+			t.Errorf("dir-level E000 file = %q; expected %q or its Clean form", file, dir)
+		}
+	}
+	if !foundE000 {
+		t.Errorf("no E000 violation in output; got: %+v", got.Violations)
 	}
 }

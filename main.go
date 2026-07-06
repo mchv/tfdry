@@ -410,17 +410,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			}
 		}
 
-		// Prefix v.File with the sub-path relative to the CLI arg.
-		// For the non-recursive case (dirs == [rootClean]), displayPath
-		// is a no-op and returns v.File verbatim — same as v0.1.1's
-		// bare-filename contract. For --recursive, this is what
-		// turns "main.tf" into "staging/main.tf" so consumers can
-		// attribute violations to a specific workspace directory.
-		// Uses rootClean (not the raw CLI arg) so ParseDir's
-		// internal filepath.Clean matches what displayPath compares
-		// against — see the rootClean comment above.
-		for i := range dirViolations {
-			dirViolations[i].File = displayPath(rootClean, d, dirViolations[i].File)
+		// Prefix v.File with the sub-path relative to the CLI arg,
+		// but ONLY for the recursive case. In non-recursive mode
+		// (dirs == [rootClean], one iteration), rewriting v.File is
+		// not a no-op for directory-level E000 violations: when
+		// ParseDir emits v.File == d, displayPath returns "." (the
+		// self-relative sub-path), which is a schema regression from
+		// v0.1.1 where those violations carried the directory path.
+		// Bare-filename violations (E001, E006, etc.) are unaffected
+		// either way (displayPath("dir", "dir", "main.tf") returns
+		// "main.tf" identically to v0.1.1). Gating on `recursive`
+		// keeps the non-recursive path byte-for-byte compatible.
+		//
+		// For --recursive, this is what turns "main.tf" into
+		// "staging/main.tf" so consumers can attribute violations to
+		// a specific workspace directory. Uses rootClean (not the
+		// raw CLI arg) so ParseDir's internal filepath.Clean matches
+		// what displayPath compares against — see the rootClean
+		// comment above.
+		if recursive {
+			for i := range dirViolations {
+				dirViolations[i].File = displayPath(rootClean, d, dirViolations[i].File)
+			}
 		}
 		violations = append(violations, dirViolations...)
 	}
@@ -615,7 +626,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 		return runFmtFile(ctx, stdout, stderr, path, check)
 	}
 
-	dirs, err := collectDirs(path, recursive)
+	dirs, err := collectDirs(pathClean, recursive)
 	if err != nil {
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
 		return 2
@@ -649,7 +660,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			// attacker-controlled .tf content. Sanitize before printing
 			// to prevent terminal-injection / line-injection in fmt output.
 			fmt.Fprintf(stderr, "Error: %s: %s\n",
-				output.Sanitize(displayPath(path, d, v.File)),
+				output.Sanitize(displayPath(pathClean, d, v.File)),
 				output.Sanitize(v.Message))
 			anyError = true
 		}
@@ -676,7 +687,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 			absFile := filepath.Join(d, f.Name)
 			// Same sanitisation for the dirty-file path printed to
 			// stdout (the user-facing list of formatted files).
-			relPath := output.Sanitize(displayPath(path, d, f.Name))
+			relPath := output.Sanitize(displayPath(pathClean, d, f.Name))
 			fmt.Fprintln(stdout, relPath)
 			if !check {
 				if err := checker.WriteFormatted(ctx, absFile, formatted); err != nil {
