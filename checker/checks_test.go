@@ -20,8 +20,8 @@ import (
 // Note: this helper is intentionally duplicated from main_test.go's
 // writeTFDir. The two live in different test packages
 // (checker_test vs main_test), so true sharing would require an
-// internal/testutil package — overkill for two identical 5-line
-// helpers. If a third duplicate appears, promote to internal/testutil
+// internal/testutil package — overkill for two identical helpers.
+// If a third duplicate appears, promote to internal/testutil
 // rather than triplicating.
 func writeTFDir(t *testing.T, files map[string]string) string {
 	t.Helper()
