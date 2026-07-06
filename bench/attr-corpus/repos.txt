@@ -1,0 +1,31 @@
+# repos.txt — pinned open-source Terraform repos for the attribute-value corpus.
+#
+# Format: <owner>/<repo> <tag>
+# Comments (# ...) and blank lines are ignored.
+#
+# When bumping a pin, run `make bench-corpus-refresh` and commit the diff to
+# `values/`. See README.md for the full workflow.
+
+# terraform-aws-modules — production-quality AWS modules with rich example dirs
+terraform-aws-modules/terraform-aws-vpc v5.13.0
+terraform-aws-modules/terraform-aws-eks v20.24.0
+terraform-aws-modules/terraform-aws-rds v6.7.0
+terraform-aws-modules/terraform-aws-alb v9.9.0
+terraform-aws-modules/terraform-aws-lambda v7.7.0
+terraform-aws-modules/terraform-aws-iam v5.44.0
+terraform-aws-modules/terraform-aws-s3-bucket v4.1.2
+terraform-aws-modules/terraform-aws-security-group v5.2.0
+terraform-aws-modules/terraform-aws-ec2-instance v5.7.1
+terraform-aws-modules/terraform-aws-autoscaling v7.7.0
+terraform-aws-modules/terraform-aws-ecs v5.11.4
+terraform-aws-modules/terraform-aws-rds-aurora v9.10.0
+terraform-aws-modules/terraform-aws-cloudfront v3.4.1
+terraform-aws-modules/terraform-aws-transit-gateway v2.13.0
+terraform-aws-modules/terraform-aws-route53 v2.11.1
+
+# cloudposse — different style, complementary attribute-name coverage
+cloudposse/terraform-aws-vpc v2.2.0
+cloudposse/terraform-aws-eks-cluster v4.10.0
+cloudposse/terraform-aws-s3-bucket v4.14.0
+cloudposse/terraform-aws-iam-role 0.19.0
+cloudposse/terraform-aws-security-group 2.2.0

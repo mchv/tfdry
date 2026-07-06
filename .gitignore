@@ -7,6 +7,11 @@
 # Benchmark output
 /bench/results/
 
+# Attribute-value corpus source files (fetched by bench/attr-corpus/fetch.sh).
+# The extracted values under bench/attr-corpus/values/ are committed; only
+# the raw fetched sources are ignored.
+/bench/attr-corpus/files/
+
 # Go test artifacts
 *.test
 *.out

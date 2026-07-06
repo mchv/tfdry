@@ -24,10 +24,18 @@ bench/
 ├── baseline.sh         # A/B compare current vs baseline ref (host-side)
 ├── testdata/
 │   └── small/          # committed: realistic 5-file project
+├── attr-corpus/        # attribute-value corpus for microbenchmarks
+│   ├── repos.txt       # pinned Terraform repos
+│   ├── fetch.sh        # downloads pinned tarballs
+│   ├── extract.sh      # runs the Go extractor
+│   ├── cmd/extract/    # hclsyntax-based extractor
+│   └── values/         # extracted values (committed)
 └── README.md
 ```
 
 `testdata/medium/` (20 files) and `testdata/large/` (100 files) are generated at image build time by `gen-testdata.sh`. All test data uses only the `null` provider so no network access is needed at benchmark time.
+
+`attr-corpus/values/` seeds microbenchmarks for the format-validation check family (CIDR, ARN, region, account-ID). Its `files/` sub-directory (gitignored) is populated by `make bench-corpus-fetch`. See `attr-corpus/README.md` for details.
 
 ## Running
 
