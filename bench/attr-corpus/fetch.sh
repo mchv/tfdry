@@ -22,6 +22,18 @@ command -v tar  >/dev/null 2>&1 || { echo "fetch.sh: tar not installed"  >&2; ex
 
 mkdir -p "$FILES_DIR"
 
+# Trap-based cleanup for the per-repo temporary tarball. We reassign $tmp
+# inside the loop and reset it to empty after successful extraction, so on
+# EXIT / INT / TERM the trap removes at most one stale file — whichever
+# repo was in flight when the script was interrupted.
+tmp=""
+cleanup() {
+    if [ -n "$tmp" ] && [ -f "$tmp" ]; then
+        rm -f "$tmp"
+    fi
+}
+trap cleanup EXIT INT TERM
+
 fetched=0
 cached=0
 failed=0
@@ -64,6 +76,7 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     if ! curl -fsSL "$url" -o "$tmp"; then
         printf '  ✗ %-55s %s (HTTP error)\n' "$repo" "$tag" >&2
         rm -f "$tmp"
+        tmp=""
         failed=$((failed + 1))
         continue
     fi
@@ -72,11 +85,13 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     if ! tar -xzf "$tmp" -C "$dest" --strip-components=1; then
         printf '  ✗ %-55s %s (tar extract failed)\n' "$repo" "$tag" >&2
         rm -f "$tmp"
+        tmp=""
         rm -rf "$dest"
         failed=$((failed + 1))
         continue
     fi
     rm -f "$tmp"
+    tmp=""
 
     # Post-check: an empty dest means the tag pointed at an empty tree (highly
     # unusual for a Terraform module) or the strip-components landed wrong.
