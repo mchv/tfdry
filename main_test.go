@@ -360,6 +360,12 @@ func TestRun_Describe_ListsChecks(t *testing.T) {
 			t.Errorf("describe output missing %s; got: %s", code, stdout)
 		}
 	}
+	// Family headers must appear so users can see the taxonomy at a glance.
+	for _, family := range []string{"E000"} {
+		if !strings.Contains(stdout, family) {
+			t.Errorf("describe output missing family %s; got: %s", family, stdout)
+		}
+	}
 }
 
 func TestRun_DescribeJSON_ParsesAndContainsAllCodes(t *testing.T) {
@@ -369,10 +375,15 @@ func TestRun_DescribeJSON_ParsesAndContainsAllCodes(t *testing.T) {
 		t.Fatalf("describe --json should exit 0, got %d", code)
 	}
 	var got struct {
+		Families []struct {
+			Code string `json:"code"`
+			Name string `json:"name"`
+		} `json:"families"`
 		Checks []struct {
 			Code     string `json:"code"`
 			Severity string `json:"severity"`
 			Summary  string `json:"summary"`
+			Family   string `json:"family"`
 		} `json:"checks"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
@@ -385,6 +396,30 @@ func TestRun_DescribeJSON_ParsesAndContainsAllCodes(t *testing.T) {
 	for _, want := range []string{"E001", "E002", "E003", "E004", "E005", "E006", "E007", "E008", "W001"} {
 		if !codes[want] {
 			t.Errorf("describe --json missing %s", want)
+		}
+	}
+	// The families array must exist and cover the check families we ship —
+	// consumers rely on it to filter by domain without reconstructing the
+	// mapping from check codes.
+	familyCodes := map[string]bool{}
+	for _, f := range got.Families {
+		familyCodes[f.Code] = true
+	}
+	for _, want := range []string{"E000"} {
+		if !familyCodes[want] {
+			t.Errorf("describe --json missing family %s", want)
+		}
+	}
+	// Every check must reference a family that is registered. A dangling
+	// Family pointer would mean the check is orphaned from the taxonomy
+	// and would render under the ungrouped fallback in the human output.
+	for _, c := range got.Checks {
+		if c.Family == "" {
+			t.Errorf("check %s has empty family — must reference a family header", c.Code)
+			continue
+		}
+		if !familyCodes[c.Family] {
+			t.Errorf("check %s references unknown family %s", c.Code, c.Family)
 		}
 	}
 }
