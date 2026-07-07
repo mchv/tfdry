@@ -92,6 +92,12 @@ func walkCIDRBlocks(body *hclsyntax.Body, file string, violations *[]Violation) 
 			checkCIDRScalar(file, attr, violations)
 		case cidrShapeList:
 			checkCIDRList(file, attr, violations)
+		case cidrShapeNone:
+			// Zero value: attribute is not on the trigger list. Explicit
+			// case (rather than an implicit fall-through) documents the
+			// intent and keeps the exhaustive linter honest — if a new
+			// cidrShape value is added later, the linter will surface
+			// this switch as needing an update.
 		}
 	}
 	for _, block := range body.Blocks {
