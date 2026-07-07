@@ -143,6 +143,13 @@ func main() {
 			return err
 		}
 		if d.IsDir() {
+			// Skip dot-prefixed and node_modules subdirectories, but never
+			// skip the root of the walk itself — otherwise invoking with a
+			// hidden corpus path (e.g. `.my-corpus`) or `.` would silently
+			// return no files and produce an empty corpus.
+			if path == corpusDir {
+				return nil
+			}
 			name := d.Name()
 			if strings.HasPrefix(name, ".") || name == "node_modules" {
 				return filepath.SkipDir
@@ -178,6 +185,12 @@ func main() {
 		log.Fatal(walkErr)
 	}
 
+	// Filter every bucket to what will actually be written: skip empty
+	// strings (interpolated / null sentinels), values above the length cap,
+	// and any value carrying embedded newlines. Storing the filtered slices
+	// keeps the summary consistent with the values/*.txt files — reporting
+	// raw bucket sizes would over-count anything the filter drops.
+	filtered := make(map[string][]string, len(categories))
 	for _, c := range categories {
 		values := make([]string, 0, len(buckets[c.name]))
 		for v := range buckets[c.name] {
@@ -187,13 +200,16 @@ func main() {
 			values = append(values, v)
 		}
 		sort.Strings(values)
+		filtered[c.name] = values
+	}
 
+	for _, c := range categories {
 		outPath := filepath.Join(outDir, c.name+".txt")
 		f, err := os.Create(outPath)
 		if err != nil {
 			log.Fatal(err)
 		}
-		for _, v := range values {
+		for _, v := range filtered[c.name] {
 			fmt.Fprintln(f, v)
 		}
 		if err := f.Close(); err != nil {
@@ -203,7 +219,7 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "scanned %d .tf files (%d parse errors)\n", scanned, len(parseErrPaths))
 	for _, c := range categories {
-		fmt.Fprintf(os.Stderr, "  %-12s %d unique values\n", c.name, len(buckets[c.name]))
+		fmt.Fprintf(os.Stderr, "  %-12s %d unique values\n", c.name, len(filtered[c.name]))
 	}
 
 	// Parse errors indicate the corpus is not being fully harvested, so the

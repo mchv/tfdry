@@ -70,10 +70,19 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
 
     # Download to a temp file first so curl's exit code is checked before tar
     # runs. `curl | tar` would let tar succeed on empty stdin and hide the 404.
-    # Plain `mktemp` (no template) for cross-platform portability: BSD mktemp
-    # treats the argument to `-t` as a prefix, not a template, and does not
-    # accept suffixes after the XXXXXX placeholders.
-    tmp=$(mktemp)
+    #
+    # Portability notes on `mktemp`:
+    # - The positional-argument form `mktemp path/prefix.XXXXXXXX` is accepted
+    #   by both BSD (macOS) and GNU (Linux) `mktemp`. This is the portable
+    #   contract for supplying a template.
+    # - `-t prefix` is NOT portable across the two: on BSD `-t` takes a bare
+    #   prefix and appends the placeholders itself; on GNU `-t` expects a
+    #   template that already contains `XXXXXX`. Using the positional form
+    #   sidesteps the divergence entirely.
+    # - `${TMPDIR:-/tmp}` respects macOS's per-user `$TMPDIR`
+    #   (`/var/folders/.../T/`) while still falling back on `/tmp` on Linux
+    #   where `$TMPDIR` is often unset.
+    tmp=$(mktemp "${TMPDIR:-/tmp}/tfdry-attr-corpus.XXXXXXXX")
     if ! curl -fsSL "$url" -o "$tmp"; then
         printf '  ✗ %-55s %s (HTTP error)\n' "$repo" "$tag" >&2
         rm -f "$tmp"
