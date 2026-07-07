@@ -42,13 +42,14 @@ failed=0
 # (a while-read pipeline would put the body in a subshell).
 while IFS= read -r line <&3 || [ -n "$line" ]; do
     # Strip trailing CR (Windows CRLF checkouts), comments, and surrounding
-    # whitespace. Without the tr, a stray \r ends up in the tag and produces
-    # an invalid tarball URL that fails with a 404.
-    entry=$(echo "$line" | tr -d '\r' | sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    # whitespace. `printf '%s\n'` over `echo` for the initial pipe so a value
+    # that starts with a dash isn't misinterpreted as an echo flag on shells
+    # where echo honours -n / -e / -E.
+    entry=$(printf '%s\n' "$line" | tr -d '\r' | sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     [ -z "$entry" ] && continue
 
-    repo=$(echo "$entry" | awk '{print $1}')
-    tag=$(echo  "$entry" | awk '{print $2}')
+    repo=$(printf '%s\n' "$entry" | awk '{print $1}')
+    tag=$(printf  '%s\n' "$entry" | awk '{print $2}')
 
     if [ -z "$repo" ] || [ -z "$tag" ]; then
         echo "fetch.sh: malformed entry: $line" >&2
@@ -56,7 +57,7 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
         continue
     fi
 
-    dest_name=$(echo "$repo" | tr '/' '-')
+    dest_name=$(printf '%s\n' "$repo" | tr '/' '-')
     dest="$FILES_DIR/$dest_name"
 
     if [ -d "$dest" ] && [ "$(ls -A "$dest" 2>/dev/null)" ]; then
