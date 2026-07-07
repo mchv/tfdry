@@ -499,8 +499,47 @@ func runDescribe(stdout, stderr io.Writer, asJSON bool) int {
 	var b bytes.Buffer
 	fmt.Fprintln(&b, "tfdry checks:")
 	fmt.Fprintln(&b)
+	// Group by family so a growing check list stays scannable. The
+	// families slice is small and iterated in canonical order, so an
+	// O(families × checks) two-pass grouping is fine — no map ordering
+	// concerns. Fallback path handles the theoretical case of a check
+	// whose Family points at an unregistered family header (shouldn't
+	// happen given the single-source-of-truth allChecksList, but keeps
+	// the CLI from silently dropping the check if it did).
+	families := checker.AllFamilies()
+	printed := make(map[string]struct{}, len(checks))
+	for _, fam := range families {
+		var group []checker.CheckInfo
+		for _, c := range checks {
+			if c.Family == fam.Code {
+				group = append(group, c)
+			}
+		}
+		if len(group) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%s — %s (%s)\n", fam.Code, fam.Name, fam.Description)
+		for _, c := range group {
+			fmt.Fprintf(&b, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
+			printed[c.Code] = struct{}{}
+		}
+		fmt.Fprintln(&b)
+	}
+	// Emit any check whose family is missing from the families registry
+	// under a synthetic "ungrouped" header. Insurance against future
+	// drift; empty in normal operation.
+	var orphans []checker.CheckInfo
 	for _, c := range checks {
-		fmt.Fprintf(&b, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
+		if _, ok := printed[c.Code]; !ok {
+			orphans = append(orphans, c)
+		}
+	}
+	if len(orphans) > 0 {
+		fmt.Fprintln(&b, "Ungrouped:")
+		for _, c := range orphans {
+			fmt.Fprintf(&b, "  %-6s  %-8s  %s\n", c.Code, c.Severity, c.Summary)
+		}
+		fmt.Fprintln(&b)
 	}
 	if _, err := b.WriteTo(stdout); err != nil {
 		fmt.Fprintln(stderr, "tfdry: error writing output:", err)

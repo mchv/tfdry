@@ -49,20 +49,25 @@ type CheckInfo struct {
 	Code     string
 	Severity string
 	Summary  string
+	// Family is the family header code this check belongs to (see families.go).
+	// The hundreds digit of Code implies the family (E101 → E100, E205 → E200),
+	// but Family is stored explicitly so consumers don't need to reconstruct
+	// the mapping. Backfilled for E001-E008 and W001 to E000.
+	Family string
 }
 
 // allChecksList is the canonical ordered list of all checks.
 // Single source of truth — used by AllChecks, knownCodes, and ValidateCheckCodes.
 var allChecksList = []CheckInfo{
-	{"E001", "error", "Invalid HCL syntax"},
-	{"E002", "error", "Duplicate local definition"},
-	{"E003", "error", "Reference to undefined local"},
-	{"E004", "error", "Non-scalar local used in string interpolation"},
-	{"E005", "error", "count and for_each used together on same resource/data/module block"},
-	{"E006", "error", "Local module input type mismatch"},
-	{"E007", "error", "Unknown local module input key"},
-	{"E008", "error", "File not formatted (run tfdry --fix or terraform fmt)"},
-	{"W001", "warning", "Local defined but never used"},
+	{Code: "E001", Severity: "error", Summary: "Invalid HCL syntax", Family: "E000"},
+	{Code: "E002", Severity: "error", Summary: "Duplicate local definition", Family: "E000"},
+	{Code: "E003", Severity: "error", Summary: "Reference to undefined local", Family: "E000"},
+	{Code: "E004", Severity: "error", Summary: "Non-scalar local used in string interpolation", Family: "E000"},
+	{Code: "E005", Severity: "error", Summary: "count and for_each used together on same resource/data/module block", Family: "E000"},
+	{Code: "E006", Severity: "error", Summary: "Local module input type mismatch", Family: "E000"},
+	{Code: "E007", Severity: "error", Summary: "Unknown local module input key", Family: "E000"},
+	{Code: "E008", Severity: "error", Summary: "File not formatted (run tfdry --fix or terraform fmt)", Family: "E000"},
+	{Code: "W001", Severity: "warning", Summary: "Local defined but never used", Family: "E000"},
 }
 
 // AllChecks returns the canonical ordered list of all checks.
@@ -83,6 +88,13 @@ func ValidateCheckCodes(codes []string) error {
 			return fmt.Errorf("check code must not be empty")
 		}
 		if _, ok := knownCodes[c]; !ok {
+			// Reserved family headers (E000, E100, ...) are documented
+			// range identifiers, not check codes. Surface that distinction
+			// so a user typing --checks=E100 gets a pointed message
+			// instead of the generic "unknown code".
+			if _, isFamily := familyHeaderCodes[c]; isFamily {
+				return fmt.Errorf("%q is a family header, not a check code — pick a specific check in that range (e.g. E101 for network)", c)
+			}
 			return fmt.Errorf("unknown check code %q — run 'tfdry describe' for valid codes", c)
 		}
 	}

@@ -149,22 +149,40 @@ func WriteHuman(w io.Writer, r Report) error {
 
 // WriteChecksJSON writes the list of available checks as 2-space-indented JSON
 // with a top-level "checks" key. Used by `tfdry describe --json`.
+//
+// The output also carries a "families" array so consumers can render or filter
+// by family without having to reconstruct the family metadata from the check
+// codes. Each check entry references its family via the "family" field
+// (matching the family's "code").
 func WriteChecksJSON(w io.Writer, checks []checker.CheckInfo) error {
-	type entry struct {
+	type checkEntry struct {
 		Code     string `json:"code"`
 		Severity string `json:"severity"`
 		Summary  string `json:"summary"`
+		Family   string `json:"family"`
+	}
+	type familyEntry struct {
+		Code        string `json:"code"`
+		Severity    string `json:"severity"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 	}
 	type wrap struct {
-		Checks []entry `json:"checks"`
+		Families []familyEntry `json:"families"`
+		Checks   []checkEntry  `json:"checks"`
 	}
-	entries := make([]entry, len(checks))
+	checkEntries := make([]checkEntry, len(checks))
 	for i, c := range checks {
-		entries[i] = entry{c.Code, c.Severity, c.Summary}
+		checkEntries[i] = checkEntry{c.Code, c.Severity, c.Summary, c.Family}
+	}
+	familyList := checker.AllFamilies()
+	familyEntries := make([]familyEntry, len(familyList))
+	for i, f := range familyList {
+		familyEntries[i] = familyEntry{f.Code, f.Severity, f.Name, f.Description}
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(wrap{entries})
+	return enc.Encode(wrap{Families: familyEntries, Checks: checkEntries})
 }
 
 func severityIcon(s string) string {
