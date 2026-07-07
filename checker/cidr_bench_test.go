@@ -189,7 +189,8 @@ func synthSparseCIDRDir(tb testing.TB, totalAttrs, cidrCount int, values []strin
 	}
 	for i := range totalAttrs {
 		if i%stride == 0 && i/stride < cidrCount {
-			buf = fmt.Appendf(buf, "  %s = %q\n",
+			buf = fmt.Appendf(
+				buf, "  %s = %q\n",
 				scalarTriggerRotation[i/stride],
 				values[i%len(values)],
 			)
