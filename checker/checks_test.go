@@ -1938,6 +1938,72 @@ func TestValidateCheckCodes_AllKnownCodesAccepted(t *testing.T) {
 	}
 }
 
+// A user typing --checks=E100 (a materialised family header) must get a
+// pointed error naming the family and citing a real check as an example.
+// Regressions here would drop back to the pre-fix hardcoded example that
+// could drift as the check set grows.
+func TestValidateCheckCodes_MaterialisedFamilyHeader(t *testing.T) {
+	t.Parallel()
+	err := checker.ValidateCheckCodes([]string{"E100"})
+	if err == nil {
+		t.Fatal("expected error for family header E100")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "family header") {
+		t.Errorf("expected 'family header' in error, got: %s", msg)
+	}
+	// The example must be derived from allChecksList — E101 is the only
+	// registered check in the E100 family, so it must appear.
+	if !strings.Contains(msg, "E101") {
+		t.Errorf("expected example check E101 in error, got: %s", msg)
+	}
+	// Family name must be present when the family is materialised —
+	// gives the user context for what E1xx is about.
+	if !strings.Contains(msg, "Network") {
+		t.Errorf("expected 'Network' family name in error, got: %s", msg)
+	}
+}
+
+// A user typing --checks=E200 (reserved header, no checks yet) must get a
+// message reflecting the "reserved but empty" state — no fake example
+// invented, no misleading family name attached.
+func TestValidateCheckCodes_ReservedFamilyHeader(t *testing.T) {
+	t.Parallel()
+	err := checker.ValidateCheckCodes([]string{"E200"})
+	if err == nil {
+		t.Fatal("expected error for reserved family header E200")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "reserved family header") {
+		t.Errorf("expected 'reserved family header' in error, got: %s", msg)
+	}
+	// The reserved case must not fabricate an example — there is no
+	// registered check in the E200 range yet.
+	if strings.Contains(msg, "e.g.") {
+		t.Errorf("reserved header should not include 'e.g.' example, got: %s", msg)
+	}
+}
+
+// E1000 is documented in the range scheme as "overflow" but has no family
+// header claimed for it. Must fall through to the generic unknown-code
+// message, not misclassify as reserved.
+func TestValidateCheckCodes_UnknownCodeInOverflowRange(t *testing.T) {
+	t.Parallel()
+	err := checker.ValidateCheckCodes([]string{"E1000"})
+	if err == nil {
+		t.Fatal("expected error for unknown code E1000")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "unknown check code") {
+		t.Errorf("expected 'unknown check code' in error, got: %s", msg)
+	}
+	// Must not misclassify as a family header (E1000 is not in
+	// familyHeaderCodes — overflow range is not a family).
+	if strings.Contains(msg, "family header") {
+		t.Errorf("E1000 must not be classified as a family header, got: %s", msg)
+	}
+}
+
 // Missing: FixFormat returns correct fixed map.
 func TestFixFormat_FixedMapContainsRewrittenFiles(t *testing.T) {
 	t.Parallel()

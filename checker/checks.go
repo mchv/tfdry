@@ -90,16 +90,46 @@ func ValidateCheckCodes(codes []string) error {
 		}
 		if _, ok := knownCodes[c]; !ok {
 			// Reserved family headers (E000, E100, ...) are documented
-			// range identifiers, not check codes. Surface that distinction
-			// so a user typing --checks=E100 gets a pointed message
-			// instead of the generic "unknown code".
+			// range identifiers, not check codes. Surface that
+			// distinction so a user typing --checks=E100 gets a pointed
+			// message instead of the generic "unknown code".
 			if _, isFamily := familyHeaderCodes[c]; isFamily {
-				return fmt.Errorf("%q is a family header, not a check code — pick a specific check in that range (e.g. E101 for network)", c)
+				return familyHeaderError(c)
 			}
 			return fmt.Errorf("unknown check code %q — run 'tfdry describe' for valid codes", c)
 		}
 	}
 	return nil
+}
+
+// familyHeaderError formats the error returned when a user supplies a family
+// header (e.g. --checks=E100) where a check code was expected.
+//
+// If the header has materialised checks, the message names the family and
+// cites the first concrete check as an example (both derived at call time
+// from allFamiliesList and allChecksList so the example stays accurate as
+// families grow). If the header is reserved-but-empty — the range scheme
+// documents it but no check has landed yet — a different message reflects
+// that state without inventing a fake example.
+func familyHeaderError(header string) error {
+	var familyName string
+	for _, f := range allFamiliesList {
+		if f.Code == header {
+			familyName = f.Name
+			break
+		}
+	}
+	for _, c := range allChecksList {
+		if c.Family == header {
+			if familyName != "" {
+				return fmt.Errorf("%q is the %s family header — pick a specific check in that range (e.g. %s)", header, familyName, c.Code)
+			}
+			return fmt.Errorf("%q is a family header — pick a specific check in that range (e.g. %s)", header, c.Code)
+		}
+	}
+	// Header is recognised (in familyHeaderCodes) but has no concrete
+	// checks — i.e. a reserved family from reservedFamilyHeaders.
+	return fmt.Errorf("%q is a reserved family header — no checks are registered in this family yet", header)
 }
 
 // Run executes all checks on the parsed files and returns all violations

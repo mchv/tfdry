@@ -8,7 +8,7 @@ package checker
 // check. Concrete checks belong to a family via their Family field (see
 // CheckInfo) which stores the corresponding header code.
 //
-// Range scheme (see docs/families.md for the long-form rationale):
+// Range scheme:
 //
 //	E000-E099 / W001-W099  Language mechanics (existing)
 //	E100-E199 / W100-W199  Network
@@ -35,7 +35,8 @@ type Family struct {
 	// Name is the short human-readable family name ("Network", "AWS", ...).
 	Name string
 	// Description explains what the family covers and what belongs in it.
-	// Kept short — full family docs live in docs/families.md.
+	// Kept short — the range-scheme comment at the top of this file has
+	// the long-form taxonomy rationale.
 	Description string
 }
 
@@ -65,12 +66,41 @@ var allFamiliesList = []Family{
 	// Add them when their first concrete check lands.
 }
 
-// familyHeaderCodes indexes family headers so ValidateCheckCodes can reject
-// attempts to use a family header as a check code.
+// reservedFamilyHeaders lists family header codes that are documented in the
+// range-scheme comment at the top of this file but do not yet have Family
+// entries in allFamiliesList (because no check is registered under them yet).
+//
+// ValidateCheckCodes treats these the same as materialised headers so a user
+// typing --checks=E200 before AWS lands gets the "family header" message
+// instead of the generic "unknown code".
+//
+// When materialising a family: remove its code from this list and add a
+// Family entry to allFamiliesList — the two sources are kept separate
+// because they serve different consumers (allFamiliesList drives
+// `tfdry describe` which omits empty families; this list drives
+// ValidateCheckCodes which needs to recognise reserved headers too).
+//
+// E900 (documented "Reserved for future") and E1000+ (overflow) are NOT
+// listed here — no specific family header is claimed in those ranges yet,
+// so a user typing --checks=E900 correctly gets the generic "unknown
+// code" message until a family stakes that range.
+var reservedFamilyHeaders = []string{
+	"E200", // AWS
+	"E400", // GCP
+	"E600", // Azure
+	"E800", // Kubernetes / container
+}
+
+// familyHeaderCodes indexes every recognised family header — both materialised
+// (from allFamiliesList) and reserved (from reservedFamilyHeaders) — for O(1)
+// lookup by ValidateCheckCodes.
 var familyHeaderCodes = func() map[string]struct{} {
-	m := make(map[string]struct{}, len(allFamiliesList))
+	m := make(map[string]struct{}, len(allFamiliesList)+len(reservedFamilyHeaders))
 	for _, f := range allFamiliesList {
 		m[f.Code] = struct{}{}
+	}
+	for _, code := range reservedFamilyHeaders {
+		m[code] = struct{}{}
 	}
 	return m
 }()
