@@ -17,43 +17,56 @@ import (
 // misplaced entry produces user-visible false positives that erode trust in
 // the whole check.
 //
-// The lists are split by expression shape because scalar vs list attributes
-// need different extraction paths — hclsyntax parses `"10.0.0.0/16"` as a
-// TemplateExpr, `["10.0.0.0/16"]` as a TupleConsExpr of TemplateExprs.
+// Triggers live in a single map with a shape enum, not two shape-specific
+// maps. Every attribute name that hclsyntax hands us gets one map lookup;
+// the zero value of cidrShape is `cidrShapeNone`, so a non-trigger name
+// falls through the switch below without extra work. Halving the lookup
+// cost matters because the hot path is "attribute is not a trigger" —
+// a realistic Terraform block has 10-50 attributes of which typically
+// 0-2 are CIDR-related.
 
-// cidrScalarTriggers is the set of attribute names whose value is a single
-// CIDR block. Tier 1 (standard AWS provider) + Tier 2 (common module
-// conventions), agreed during PR β design (2026-07-07).
-var cidrScalarTriggers = map[string]struct{}{
-	// Tier 1 — standard AWS provider
-	"cidr_block":                  {},
-	"destination_cidr_block":      {},
-	"destination_ipv6_cidr_block": {},
-	"source_cidr_block":           {},
-	"ipv6_cidr_block":             {},
-	"source_ipv6_cidr_block":      {},
-	// Tier 2 — module conventions
-	"cluster_service_cidr": {},
-	"primary_vpc_cidr":     {},
-	"secondary_vpc_cidr":   {},
-	"tgw_destination_cidr": {},
-	"vpc_cidr":             {},
-}
+// cidrShape encodes whether an attribute holds a single CIDR string or a
+// list of CIDR strings. The zero value cidrShapeNone corresponds to a
+// map miss and lets the switch below be a plain lookup with no separate
+// ok-check.
+type cidrShape uint8
 
-// cidrListTriggers is the set of attribute names whose value is a list of
-// CIDR blocks.
-var cidrListTriggers = map[string]struct{}{
-	// Tier 1 — standard AWS provider
-	"cidr_blocks":             {},
-	"ipv6_cidr_blocks":        {},
-	"source_ipv6_cidr_blocks": {},
-	// Tier 2 — module conventions
-	"admin_cidr_blocks":           {},
-	"allowed_cidr_blocks":         {},
-	"egress_cidr_blocks":          {},
-	"ingress_cidr_blocks":         {},
-	"secondary_cidr_blocks":       {},
-	"transit_gateway_cidr_blocks": {},
+const (
+	cidrShapeNone cidrShape = iota
+	cidrShapeScalar
+	cidrShapeList
+)
+
+// cidrTriggers is the enumerated attribute-name → shape table. Tier 1
+// (standard AWS provider) and Tier 2 (common module conventions) locked
+// during PR β design (2026-07-07); Tier 3 candidates (`cidr`, `*_subnets`,
+// `default`) are deliberately excluded — see the PR description on #23
+// for the ambiguity rationale on each.
+var cidrTriggers = map[string]cidrShape{
+	// Tier 1 — standard AWS provider (scalar)
+	"cidr_block":                  cidrShapeScalar,
+	"destination_cidr_block":      cidrShapeScalar,
+	"destination_ipv6_cidr_block": cidrShapeScalar,
+	"source_cidr_block":           cidrShapeScalar,
+	"ipv6_cidr_block":             cidrShapeScalar,
+	"source_ipv6_cidr_block":      cidrShapeScalar,
+	// Tier 1 — standard AWS provider (list)
+	"cidr_blocks":             cidrShapeList,
+	"ipv6_cidr_blocks":        cidrShapeList,
+	"source_ipv6_cidr_blocks": cidrShapeList,
+	// Tier 2 — module conventions (scalar)
+	"cluster_service_cidr": cidrShapeScalar,
+	"primary_vpc_cidr":     cidrShapeScalar,
+	"secondary_vpc_cidr":   cidrShapeScalar,
+	"tgw_destination_cidr": cidrShapeScalar,
+	"vpc_cidr":             cidrShapeScalar,
+	// Tier 2 — module conventions (list)
+	"admin_cidr_blocks":           cidrShapeList,
+	"allowed_cidr_blocks":         cidrShapeList,
+	"egress_cidr_blocks":          cidrShapeList,
+	"ingress_cidr_blocks":         cidrShapeList,
+	"secondary_cidr_blocks":       cidrShapeList,
+	"transit_gateway_cidr_blocks": cidrShapeList,
 }
 
 // checkCIDR runs E101 over a single parsed file, returning one Violation per
@@ -74,11 +87,10 @@ func walkCIDRBlocks(body *hclsyntax.Body, file string, violations *[]Violation) 
 		return
 	}
 	for _, attr := range body.Attributes {
-		if _, isScalar := cidrScalarTriggers[attr.Name]; isScalar {
+		switch cidrTriggers[attr.Name] {
+		case cidrShapeScalar:
 			checkCIDRScalar(file, attr, violations)
-			continue
-		}
-		if _, isList := cidrListTriggers[attr.Name]; isList {
+		case cidrShapeList:
 			checkCIDRList(file, attr, violations)
 		}
 	}
