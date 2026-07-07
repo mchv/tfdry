@@ -54,10 +54,15 @@ var allFamiliesList = []Family{
 		Name:        "Language mechanics",
 		Description: "HCL syntax, locals, module inputs, formatting. Provider-agnostic checks that catch structural issues in Terraform sources.",
 	},
-	// E100 (Network), E200 (AWS), E400 (GCP), E600 (Azure), E800 (Kubernetes)
-	// are reserved by the range scheme but not yet materialised as Family
-	// entries — a family is added here only when its first concrete check
-	// lands, so empty groups do not clutter `tfdry describe` output.
+	{
+		Code:        "E100",
+		Severity:    "error",
+		Name:        "Network",
+		Description: "Protocol-level literals — CIDR blocks (IPv4/IPv6), IP addresses, port ranges, protocol names. Applies across all cloud providers.",
+	},
+	// E200 (AWS), E400 (GCP), E600 (Azure), E800 (Kubernetes) are reserved
+	// by the range scheme but not yet materialised as Family entries.
+	// Add them when their first concrete check lands.
 }
 
 // familyHeaderCodes indexes family headers so ValidateCheckCodes can reject

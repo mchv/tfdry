@@ -68,6 +68,7 @@ var allChecksList = []CheckInfo{
 	{Code: "E007", Severity: "error", Summary: "Unknown local module input key", Family: "E000"},
 	{Code: "E008", Severity: "error", Summary: "File not formatted (run tfdry --fix or terraform fmt)", Family: "E000"},
 	{Code: "W001", Severity: "warning", Summary: "Local defined but never used", Family: "E000"},
+	{Code: "E101", Severity: "error", Summary: "Invalid CIDR block literal", Family: "E100"},
 }
 
 // AllChecks returns the canonical ordered list of all checks.
@@ -180,6 +181,9 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		}
 		if checks.Enabled("E006") || checks.Enabled("E007") {
 			violations = append(violations, checkModuleInputs(f, dir, locals, checks, moduleCache)...)
+		}
+		if checks.Enabled("E101") {
+			violations = append(violations, checkCIDR(f)...)
 		}
 	}
 
