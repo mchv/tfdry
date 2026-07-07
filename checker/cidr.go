@@ -4,6 +4,7 @@
 package checker
 
 import (
+	"fmt"
 	"net/netip"
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -87,7 +88,7 @@ func walkCIDRBlocks(body *hclsyntax.Body, file string, violations *[]Violation) 
 		return
 	}
 	for _, attr := range body.Attributes {
-		switch cidrTriggers[attr.Name] {
+		switch s := cidrTriggers[attr.Name]; s {
 		case cidrShapeScalar:
 			checkCIDRScalar(file, attr, violations)
 		case cidrShapeList:
@@ -98,6 +99,15 @@ func walkCIDRBlocks(body *hclsyntax.Body, file string, violations *[]Violation) 
 			// intent and keeps the exhaustive linter honest — if a new
 			// cidrShape value is added later, the linter will surface
 			// this switch as needing an update.
+		default:
+			// Defence-in-depth for unexported enum-like types, matching
+			// the pattern used for schemaKind switches in modules.go and
+			// the guidance documented in .golangci.yml. Reachable only if
+			// someone constructs an out-of-range cidrShape value directly
+			// (bypassing the enumerated constants) — panic makes the
+			// mistake loud at test time rather than silently swallowing
+			// a new shape as "unrecognised, skip attribute".
+			panic(fmt.Sprintf("unrecognised cidrShape: %d", s))
 		}
 	}
 	for _, block := range body.Blocks {
