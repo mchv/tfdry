@@ -136,7 +136,8 @@ func main() {
 		buckets[c.name] = make(map[string]struct{})
 	}
 
-	var scanned, parseErrs int
+	var scanned int
+	var parseErrPaths []string
 	walkErr := filepath.WalkDir(corpusDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -158,7 +159,7 @@ func main() {
 		}
 		file, diags := hclsyntax.ParseConfig(src, path, hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
-			parseErrs++
+			parseErrPaths = append(parseErrPaths, path)
 			return nil
 		}
 		// hclsyntax normally returns a non-nil file+body when diags is clean,
@@ -200,8 +201,21 @@ func main() {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "scanned %d .tf files (%d parse errors)\n", scanned, parseErrs)
+	fmt.Fprintf(os.Stderr, "scanned %d .tf files (%d parse errors)\n", scanned, len(parseErrPaths))
 	for _, c := range categories {
 		fmt.Fprintf(os.Stderr, "  %-12s %d unique values\n", c.name, len(buckets[c.name]))
+	}
+
+	// Parse errors indicate the corpus is not being fully harvested, so the
+	// resulting values/ may be missing content and shouldn't be trusted for
+	// a benchmark refresh. Log the offending paths and exit non-zero so
+	// `make bench-corpus-refresh` surfaces the problem rather than silently
+	// producing an incomplete corpus.
+	if len(parseErrPaths) > 0 {
+		fmt.Fprintln(os.Stderr, "\nfiles that failed to parse:")
+		for _, p := range parseErrPaths {
+			fmt.Fprintf(os.Stderr, "  %s\n", p)
+		}
+		os.Exit(1)
 	}
 }

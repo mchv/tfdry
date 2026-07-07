@@ -13,6 +13,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="$SCRIPT_DIR/files"
 VALUES_DIR="$SCRIPT_DIR/values"
 EXTRACTOR="$SCRIPT_DIR/cmd/extract/main.go"
+# Repo root is fixed relative to the script location — bench/attr-corpus/ is
+# always two levels below it. Avoiding `git rev-parse` here means the script
+# doesn't need git installed and doesn't depend on being run inside a git
+# worktree (e.g. inside a tarball export or a fresh CI checkout).
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 command -v go >/dev/null 2>&1 || { echo "extract.sh: go not installed" >&2; exit 2; }
 
@@ -23,7 +28,7 @@ fi
 
 mkdir -p "$VALUES_DIR"
 
-# Run from the repo root so `go run` resolves the tfdry go.mod (needed for the
-# hclsyntax import).
-cd "$(git rev-parse --show-toplevel)"
+# Run from the repo root so `go run` resolves the tfdry go.mod (needed for
+# the hclsyntax import).
+cd "$REPO_ROOT"
 go run "$EXTRACTOR" "$FILES_DIR" "$VALUES_DIR"
