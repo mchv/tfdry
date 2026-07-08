@@ -79,9 +79,12 @@ look sensible.
   Preferred when the repo publishes releases.
 - **Commit SHA** (exactly 40 lowercase hex): fetched via
   `/archive/<sha>.tar.gz`. Used for repos that don't cut releases
-  (e.g. `aws-cloudformation/iac-model-evaluation`). Short prefix SHAs
-  are rejected — full-SHA-only avoids collisions with tag names that
-  happen to be short hex strings.
+  (e.g. `aws-cloudformation/iac-model-evaluation`). The detection
+  requires the full 40-character hex form. Anything shorter — even a
+  valid 7-char or 12-char commit prefix — falls through to the tag
+  URL, which will 404 in the common case but could silently succeed
+  with wrong contents if a tag of that exact name happens to exist in
+  the repo. Always use the full 40-char SHA to force SHA-mode routing.
 
 SHA pinning is *more* reproducible than tag pinning (tags can be
 moved; SHAs cannot). Prefer tags when available for readability, fall

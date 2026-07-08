@@ -5,8 +5,10 @@
 # The <ref> is either a release tag (preferred) or a full 40-character
 # commit SHA. Tags win when a repo publishes them; commit SHAs are used
 # for repos that don't cut releases (e.g. aws-cloudformation/iac-model-
-# evaluation). SHAs must be full 40-char hex — short prefixes are
-# ambiguous and rejected by fetch.sh.
+# evaluation). SHAs must be full 40-char hex; a short prefix falls
+# through to the tag URL and will 404 unless a tag of that exact name
+# happens to exist, in which case it would silently fetch tag contents
+# instead of the intended commit. Always use the full 40-char SHA.
 #
 # Comments (# ...) and blank lines are ignored.
 #
