@@ -143,22 +143,55 @@ func extractStringList(e hclsyntax.Expression) []string {
 	return out
 }
 
+// isTemplateWithInterp reports whether expr is a template string expression
+// that contains at least one interpolation part (${...}). Used by the
+// extractor to distinguish "pure literal" templates (handled by
+// extractString) from "interpolated" templates whose raw source is
+// captured into the *_templates.txt corpus files.
+//
+// Structurally: hclsyntax models `"${expr}"` as TemplateWrapExpr (compact
+// form) and everything else with interpolation as TemplateExpr with a
+// non-LiteralValueExpr part. Pure literals are TemplateExpr with exactly
+// one LiteralValueExpr part.
+func isTemplateWithInterp(e hclsyntax.Expression) bool {
+	switch v := e.(type) {
+	case *hclsyntax.TemplateWrapExpr:
+		return true
+	case *hclsyntax.TemplateExpr:
+		for _, p := range v.Parts {
+			if _, isLit := p.(*hclsyntax.LiteralValueExpr); !isLit {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // walk visits every attribute in body (and every nested block) and buckets
 // literal values by category. body is expected non-nil (hclsyntax guarantees
 // this for a well-formed parse); the guard is defensive against future
 // contract changes.
 //
-// Two harvests run per attribute:
+// Three harvests run per attribute:
 //  1. Name-pattern harvest — the attribute name is matched against each
-//     category's regex; on a hit the whole value (scalar or list element)
-//     goes into that category's bucket.
-//  2. ARN-shape substring harvest — every literal string value (whether or
+//     category's regex; on a hit the whole literal value (scalar or list
+//     element) goes into that category's bucket.
+//  2. Template-source harvest — attributes whose name matches a category
+//     AND whose value is a template with interpolation have their raw
+//     source (with ${...} intact) captured into the category's
+//     *_templates bucket. Skipped for list values (per-element source
+//     ranges would need extra plumbing and interpolated list elements
+//     are rare in practice).
+//  3. ARN-shape substring harvest — every literal string value (whether or
 //     not the attribute name matched anything) is scanned for ARN-shape
 //     substrings via arnRegexp; matches go into the "arn" bucket. This
 //     complements the name-pattern pass by capturing ARN literals embedded
 //     inside inline IAM policy heredocs, description strings, values under
 //     non-`arn` attribute names, and any other literal-string context.
-func walk(body *hclsyntax.Body, buckets map[string]map[string]struct{}) {
+//
+// src is the original file bytes, used only by harvest 2 to slice out the
+// attribute expression's source range. Nil src disables harvest 2.
+func walk(body *hclsyntax.Body, buckets map[string]map[string]struct{}, src []byte) {
 	if body == nil {
 		return
 	}
@@ -184,6 +217,21 @@ func walk(body *hclsyntax.Body, buckets map[string]map[string]struct{}) {
 			}
 		}
 
+		// Template-source harvest. Runs only when src is available and
+		// the attribute name matches a category — mirrors the
+		// name-pattern gate so a description-string interpolation
+		// doesn't pollute the templates corpus.
+		if src != nil && isTemplateWithInterp(attr.Expr) {
+			for _, cat := range categories {
+				if !cat.pattern.MatchString(attr.Name) {
+					continue
+				}
+				r := attr.Expr.Range()
+				raw := string(src[r.Start.Byte:r.End.Byte])
+				buckets[cat.name+"_templates"][raw] = struct{}{}
+			}
+		}
+
 		// ARN-shape substring harvest, name-independent.
 		if strOK {
 			for _, arn := range arnRegexp.FindAllString(strVal, -1) {
@@ -197,7 +245,7 @@ func walk(body *hclsyntax.Body, buckets map[string]map[string]struct{}) {
 		}
 	}
 	for _, block := range body.Blocks {
-		walk(block.Body, buckets)
+		walk(block.Body, buckets, src)
 	}
 }
 
@@ -211,9 +259,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	buckets := make(map[string]map[string]struct{}, len(categories))
+	buckets := make(map[string]map[string]struct{}, 2*len(categories))
 	for _, c := range categories {
 		buckets[c.name] = make(map[string]struct{})
+		buckets[c.name+"_templates"] = make(map[string]struct{})
 	}
 
 	var scanned int
@@ -258,7 +307,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		walk(body, buckets)
+		walk(body, buckets, src)
 		return nil
 	})
 	if walkErr != nil {
@@ -317,36 +366,50 @@ func main() {
 	// and any value carrying embedded newlines. Storing the filtered slices
 	// keeps the summary consistent with the values/*.txt files — reporting
 	// raw bucket sizes would over-count anything the filter drops.
-	filtered := make(map[string][]string, len(categories))
+	//
+	// Both the literal bucket and its `_templates` sibling are filtered
+	// the same way. Templates that span multiple lines (heredocs) are
+	// dropped by the newline filter — expected, since the corpus files
+	// are one-value-per-line.
+	filtered := make(map[string][]string, 2*len(categories))
 	for _, c := range categories {
-		values := make([]string, 0, len(buckets[c.name]))
-		for v := range buckets[c.name] {
-			if v == "" || len(v) > maxValueLen || strings.ContainsAny(v, "\n\r") {
-				continue
+		for _, suffix := range []string{"", "_templates"} {
+			bucketName := c.name + suffix
+			values := make([]string, 0, len(buckets[bucketName]))
+			for v := range buckets[bucketName] {
+				if v == "" || len(v) > maxValueLen || strings.ContainsAny(v, "\n\r") {
+					continue
+				}
+				values = append(values, v)
 			}
-			values = append(values, v)
+			sort.Strings(values)
+			filtered[bucketName] = values
 		}
-		sort.Strings(values)
-		filtered[c.name] = values
 	}
 
 	for _, c := range categories {
-		outPath := filepath.Join(outDir, c.name+".txt")
-		f, err := os.Create(outPath)
-		if err != nil {
-			log.Fatal(err)
-		}
-		for _, v := range filtered[c.name] {
-			fmt.Fprintln(f, v)
-		}
-		if err := f.Close(); err != nil {
-			log.Fatal(err)
+		for _, suffix := range []string{"", "_templates"} {
+			bucketName := c.name + suffix
+			outPath := filepath.Join(outDir, bucketName+".txt")
+			f, err := os.Create(outPath)
+			if err != nil {
+				log.Fatal(err)
+			}
+			for _, v := range filtered[bucketName] {
+				fmt.Fprintln(f, v)
+			}
+			if err := f.Close(); err != nil {
+				log.Fatal(err)
+			}
 		}
 	}
 
 	fmt.Fprintf(os.Stderr, "scanned %d .tf files (%d parse errors)\n", scanned, len(parseErrPaths))
 	for _, c := range categories {
-		fmt.Fprintf(os.Stderr, "  %-12s %d unique values\n", c.name, len(filtered[c.name]))
+		fmt.Fprintf(os.Stderr, "  %-20s %d unique values\n", c.name, len(filtered[c.name]))
+		if n := len(filtered[c.name+"_templates"]); n > 0 {
+			fmt.Fprintf(os.Stderr, "  %-20s %d unique values\n", c.name+"_templates", n)
+		}
 	}
 
 	// Parse errors indicate the corpus is not being fully harvested, so the
