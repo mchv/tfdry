@@ -6,9 +6,9 @@ package checker
 import (
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
-	"github.com/zclconf/go-cty/cty"
 )
 
 // ── E101: CIDR block literal validation ──────────────────────────────────────
@@ -25,6 +25,14 @@ import (
 // cost matters because the hot path is "attribute is not a trigger" —
 // a realistic Terraform block has 10-50 attributes of which typically
 // 0-2 are CIDR-related.
+//
+// Interpolation-aware validation (2026-07-08): pure-literal CIDRs go
+// through net/netip.ParsePrefix as before. Templated values are handled
+// via the checker/template.go subsystem — the composed form (with each
+// ${...} replaced by a "0" placeholder) is validated as a CIDR when the
+// literal parts carry enough shape information to be meaningful, and
+// each interpolation is separately checked for a valid Terraform scope
+// root via ValidateScopeRoot (E009). See #23 for the model discussion.
 
 // cidrShape encodes whether an attribute holds a single CIDR string or a
 // list of CIDR strings. The zero value cidrShapeNone corresponds to a
@@ -70,11 +78,28 @@ var cidrTriggers = map[string]cidrShape{
 	"transit_gateway_cidr_blocks": cidrShapeList,
 }
 
-// checkCIDR runs E101 over a single parsed file, returning one Violation per
-// bad CIDR literal. See walkCIDRBlocks for the walk contract.
-func checkCIDR(f ParsedFile) []Violation {
+// cidrPlaceholderNumeric is the substitution used for validation:
+// interpolations become "0", which is a valid IPv4 octet, a valid IPv6
+// group, and a valid /-prefix. This lets net/netip.ParsePrefix run over
+// the composed form and catch any literal shape errors (missing slash,
+// wrong number of octets, bad literal octet like 256, etc.).
+const cidrPlaceholderNumeric = "0"
+
+// cidrPlaceholderDisplay is the substitution used in error messages —
+// human-readable, unambiguously not-a-literal, and short. Prefer this
+// over the numeric form when reporting so the user sees where the
+// interpolations landed in the value they wrote.
+const cidrPlaceholderDisplay = "<P>"
+
+// checkCIDR runs E101 (and, for interpolation contexts, E009) over a single
+// parsed file, returning one Violation per finding. E009 diagnostics are
+// only emitted when the user has E009 enabled — E101 gates the outer
+// dispatch, so a user with only --checks=E101 sees CIDR format errors
+// (including composed-form errors for templated values) but no scope-root
+// diagnostics.
+func checkCIDR(f ParsedFile, checks CheckSet) []Violation {
 	var violations []Violation
-	walkCIDRBlocks(f.Body, f.Name, &violations)
+	walkCIDRBlocks(f.Body, f.Name, checks, &violations)
 	return violations
 }
 
@@ -83,16 +108,16 @@ func checkCIDR(f ParsedFile) []Violation {
 // Tier 3 exclusion (the variable's declared type is not knowable to an
 // offline checker, so a bad `default` cannot be distinguished from a
 // deliberately-loose default that callers always override).
-func walkCIDRBlocks(body *hclsyntax.Body, file string, violations *[]Violation) {
+func walkCIDRBlocks(body *hclsyntax.Body, file string, checks CheckSet, violations *[]Violation) {
 	if body == nil {
 		return
 	}
 	for _, attr := range body.Attributes {
 		switch s := cidrTriggers[attr.Name]; s {
 		case cidrShapeScalar:
-			checkCIDRScalar(file, attr, violations)
+			checkCIDRScalar(file, attr, checks, violations)
 		case cidrShapeList:
-			checkCIDRList(file, attr, violations)
+			checkCIDRList(file, attr, checks, violations)
 		case cidrShapeNone:
 			// Zero value: attribute is not on the trigger list. Explicit
 			// case (rather than an implicit fall-through) documents the
@@ -114,29 +139,47 @@ func walkCIDRBlocks(body *hclsyntax.Body, file string, violations *[]Violation) 
 		if block.Type == "variable" {
 			continue
 		}
-		walkCIDRBlocks(block.Body, file, violations)
+		walkCIDRBlocks(block.Body, file, checks, violations)
 	}
 }
 
-// checkCIDRScalar validates a single-string CIDR attribute. Interpolation,
-// empty literals, and non-string values are silently skipped — the check is
-// deliberately conservative to keep the false-positive rate at zero on real
-// modules.
-func checkCIDRScalar(file string, attr *hclsyntax.Attribute, violations *[]Violation) {
-	v, ok := cidrLiteralString(attr.Expr)
-	if !ok || v == "" {
+// checkCIDRScalar validates a single-string CIDR attribute using the
+// template subsystem. Non-template expressions (e.g. `cidr_block = var.foo`
+// as a bare traversal, or `cidr_block = 42` as a number) are silently
+// skipped — statically-unresolvable references can't be validated as
+// CIDRs, and a bare `var.foo` traversal is Terraform's own type-check
+// concern, not ours.
+//
+// Fast path: pure-literal values (the overwhelming majority on real
+// modules — every hardcoded CIDR literal falls here) go through
+// TryLiteralString and validateCIDR directly, without allocating a
+// []TemplatePart slice. The interpolation path only runs on templated
+// values, which are the minority.
+func checkCIDRScalar(file string, attr *hclsyntax.Attribute, checks CheckSet, violations *[]Violation) {
+	if s, ok := TryLiteralString(attr.Expr); ok {
+		if s == "" {
+			return
+		}
+		if err := validateCIDR(s); err != nil {
+			*violations = append(*violations, cidrViolation(file, attr.Expr.Range().Start.Line, attr.Name, s, err))
+		}
 		return
 	}
-	if err := validateCIDR(v); err != nil {
-		*violations = append(*violations, cidrViolation(file, attr.Expr.Range().Start.Line, attr.Name, v, err))
+	parts := SplitTemplate(attr.Expr)
+	if parts == nil {
+		return
 	}
+	validateCIDRTemplate(file, attr.Expr.Range().Start.Line, attr.Name, parts, checks, violations)
 }
 
 // checkCIDRList validates each element of a list-typed CIDR attribute
 // independently. A single bad element produces one violation without
 // affecting the sibling elements — one bad CIDR in a security-group
 // ingress list should not silence findings on the other entries.
-func checkCIDRList(file string, attr *hclsyntax.Attribute, violations *[]Violation) {
+//
+// Same fast-path optimisation as checkCIDRScalar: pure-literal elements
+// avoid the []TemplatePart allocation.
+func checkCIDRList(file string, attr *hclsyntax.Attribute, checks CheckSet, violations *[]Violation) {
 	tuple, ok := attr.Expr.(*hclsyntax.TupleConsExpr)
 	if !ok {
 		// Interpolated single-value or traversal (e.g. cidr_blocks = var.foo).
@@ -144,14 +187,103 @@ func checkCIDRList(file string, attr *hclsyntax.Attribute, violations *[]Violati
 		return
 	}
 	for _, elem := range tuple.Exprs {
-		v, ok := cidrLiteralString(elem)
-		if !ok || v == "" {
+		if s, ok := TryLiteralString(elem); ok {
+			if s == "" {
+				continue
+			}
+			if err := validateCIDR(s); err != nil {
+				*violations = append(*violations, cidrViolation(file, elem.Range().Start.Line, attr.Name, s, err))
+			}
 			continue
 		}
-		if err := validateCIDR(v); err != nil {
-			*violations = append(*violations, cidrViolation(file, elem.Range().Start.Line, attr.Name, v, err))
+		parts := SplitTemplate(elem)
+		if parts == nil {
+			continue
+		}
+		validateCIDRTemplate(file, elem.Range().Start.Line, attr.Name, parts, checks, violations)
+	}
+}
+
+// validateCIDRTemplate runs the two-part validation for one CIDR-shaped
+// template value:
+//
+//  1. Format check — validates the composed (placeholder-substituted) form
+//     as a CIDR via net/netip.ParsePrefix. Pure literals always run the
+//     check; interpolated forms run it only when the literal parts carry
+//     enough shape information to make the check meaningful (see
+//     cidrHasEnoughShape). Emits E101 on format failure.
+//  2. Scope-root check — for each interpolation part, validates that its
+//     root identifier is a known Terraform scope root or a resource-type
+//     identifier. Emits E009 on scope-root failure (only when the user
+//     has E009 enabled).
+//
+// Both checks run independently: a value can produce zero, one, or both
+// kinds of diagnostics. The two checks answer different questions and
+// their findings are complementary rather than redundant.
+func validateCIDRTemplate(file string, line int, attrName string, parts []TemplatePart, checks CheckSet, violations *[]Violation) {
+	// Format check (E101).
+	if IsAllLiteral(parts) {
+		v := LiteralString(parts)
+		if v != "" {
+			if err := validateCIDR(v); err != nil {
+				*violations = append(*violations, cidrViolation(file, line, attrName, v, err))
+			}
+		}
+	} else if cidrHasEnoughShape(parts) {
+		composed := Compose(parts, cidrPlaceholderNumeric)
+		if err := validateCIDR(composed); err != nil {
+			display := Compose(parts, cidrPlaceholderDisplay)
+			*violations = append(*violations, cidrViolation(file, line, attrName, display, err))
 		}
 	}
+
+	// Scope-root check (E009). Gated separately from E101 — a user who
+	// runs with --checks=E101,-E009 gets format errors but no scope-root
+	// diagnostics.
+	if !checks.Enabled("E009") {
+		return
+	}
+	for _, p := range parts {
+		if !p.IsInterp() {
+			continue
+		}
+		if diag := ValidateScopeRoot(p.Interp); diag != nil {
+			*violations = append(*violations, scopeRootViolation(file, diag))
+		}
+	}
+}
+
+// cidrHasEnoughShape reports whether the literal parts of a templated CIDR
+// value carry enough structure for the composed-form check to produce
+// reliable results.
+//
+// Rationale: an interpolation can substitute a single octet ("10"), or
+// multiple octets ("10.0"), or the whole IP address, or the whole CIDR
+// including prefix. Only when the literal parts commit to the canonical
+// IPv4 octet count is a placeholder substitution meaningful — otherwise
+// the composed form is guessing at the number of segments.
+//
+// The check requires all of:
+//
+//   - A `/` (CIDR prefix separator) — signals the user has committed to
+//     the CIDR shape with an explicit prefix boundary.
+//   - Exactly 3 dots (`.`) in the literal parts before the `/` — pins the
+//     IPv4 octet count at 4, leaving each interpolation as a single-octet
+//     placeholder. `10.0.${var}.0/24` (3 literal dots) is checked;
+//     `${var}.0.0/16` (2 literal dots — interp could be "10.0") is not.
+//
+// IPv6 support is deliberately deferred: the `::` compression rule makes
+// literal-colon-counting ambiguous without a full parse. Templated IPv6
+// CIDRs fall through to "not checked". A follow-up can add IPv6-aware
+// shape detection when the ambiguity is worth the parser complexity.
+func cidrHasEnoughShape(parts []TemplatePart) bool {
+	litSum := LiteralString(parts)
+	slashIdx := strings.Index(litSum, "/")
+	if slashIdx < 0 {
+		return false
+	}
+	ipPart := litSum[:slashIdx]
+	return strings.Count(ipPart, ".") == 3
 }
 
 // cidrViolation packages a Violation for E101. Extracted so the scalar and
@@ -167,6 +299,23 @@ func cidrViolation(file string, line int, attrName, value string, err error) Vio
 	}
 }
 
+// scopeRootViolation packages an E009 diagnostic for a scope-root failure
+// in a CIDR-attribute interpolation. The message includes the offending
+// root and, when known, a suggested correction.
+func scopeRootViolation(file string, diag *ScopeRootDiag) Violation {
+	msg := "invalid Terraform scope root \"" + diag.Root + "\""
+	if diag.Hint != "" {
+		msg += " (did you mean \"" + diag.Hint + "\"?)"
+	}
+	return Violation{
+		Code:     "E009",
+		Severity: "error",
+		File:     file,
+		Line:     diag.Range.Start.Line,
+		Message:  msg,
+	}
+}
+
 // validateCIDR is a thin wrapper over net/netip.ParsePrefix. Kept as a named
 // helper both for the microbenchmark (BenchmarkE101_Corpus) and to make the
 // intent obvious at the call site — the underlying parser handles IPv4 and
@@ -174,32 +323,4 @@ func cidrViolation(file string, line int, attrName, value string, err error) Vio
 func validateCIDR(v string) error {
 	_, err := netip.ParsePrefix(v)
 	return err
-}
-
-// cidrLiteralString extracts a string literal from an hclsyntax expression.
-// Returns ("", false) for anything that isn't a fully-static literal — that
-// includes interpolation (`${var.x}`), non-string values (`42`, `true`),
-// and typed-null (`null`). The bool distinguishes "not a literal" from "an
-// empty-string literal"; callers handle the empty-string case explicitly
-// so an interpolation and an intentional empty placeholder produce the
-// same "skip" behaviour.
-//
-// Structurally identical to the corpus extractor's helper of the same shape
-// (bench/attr-corpus/cmd/extract/main.go) — see round-3 review discussion on
-// PR #35 for the empty-string ambiguity that motivated the (string, bool)
-// return.
-func cidrLiteralString(e hclsyntax.Expression) (string, bool) {
-	tpl, ok := e.(*hclsyntax.TemplateExpr)
-	if !ok || len(tpl.Parts) != 1 {
-		return "", false
-	}
-	lit, ok := tpl.Parts[0].(*hclsyntax.LiteralValueExpr)
-	if !ok {
-		return "", false
-	}
-	val, diags := lit.Value(nil)
-	if diags.HasErrors() || val.IsNull() || !val.Type().Equals(cty.String) {
-		return "", false
-	}
-	return val.AsString(), true
 }

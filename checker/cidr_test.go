@@ -354,3 +354,197 @@ resource "aws_security_group" "x" {
 		t.Fatalf("expected E101 for nested-block cidr_blocks, got: %v", codes(vs))
 	}
 }
+
+// ── Interpolation-aware validation (2026-07-08) ──────────────────────────────
+
+// TestE101_InterpolatedValidScope_NoViolation: an interpolated CIDR with
+// a valid Terraform scope root and enough literal shape produces no
+// violation. Composed form validates cleanly.
+func TestE101_InterpolatedValidScope_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${var.subnet}.0/24"
+}
+`,
+	})
+	if hasCode(vs, "E101") {
+		t.Fatalf("expected no E101, got: %v", codes(vs))
+	}
+	if hasCode(vs, "E009") {
+		t.Fatalf("expected no E009, got: %v", codes(vs))
+	}
+}
+
+// TestE101_InterpolatedInvalidLiteralOctet: an interpolated CIDR where the
+// literal parts contain an invalid octet (256) must be flagged E101 even
+// though other octets are interpolated.
+func TestE101_InterpolatedInvalidLiteralOctet_ViolationE101(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${var.subnet}.256/24"
+}
+`,
+	})
+	if !hasCode(vs, "E101") {
+		t.Fatalf("expected E101 (invalid literal octet 256), got: %v", codes(vs))
+	}
+}
+
+// TestE101_InterpolatedInsufficientShape_Skipped: when literal parts don't
+// canonically fix the octet count, composed-form check is deliberately
+// skipped to avoid false positives on legitimate prefix-style interpolations.
+func TestE101_InterpolatedInsufficientShape_Skipped(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  # var.vpc_prefix could reasonably be "10.0" → resolves to 10.0.0.0/16.
+  # Only 2 literal dots — insufficient shape, must not flag as E101.
+  cidr_block = "${var.vpc_prefix}.0.0/16"
+}
+`,
+	})
+	if hasCode(vs, "E101") {
+		t.Fatalf("expected no E101 (insufficient shape), got: %v", codes(vs))
+	}
+}
+
+// TestE009_InterpolatedInvalidScopeRoot_ViolationE009: an interpolation
+// with a typoed scope root ("vars" instead of "var") produces an E009
+// violation with a corrective hint.
+func TestE009_InterpolatedInvalidScopeRoot_ViolationE009(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${vars.subnet}.0/24"
+}
+`,
+	})
+	if !hasCode(vs, "E009") {
+		t.Fatalf("expected E009 (invalid scope root 'vars'), got: %v", codes(vs))
+	}
+	// The message must include the offending root and the corrective hint.
+	var found *checker.Violation
+	for i := range vs {
+		if vs[i].Code == "E009" {
+			found = &vs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected exactly one E009, none found")
+	}
+	if !contains(found.Message, `"vars"`) {
+		t.Errorf("message %q missing offending root 'vars'", found.Message)
+	}
+	if !contains(found.Message, `"var"`) {
+		t.Errorf("message %q missing corrective hint 'var'", found.Message)
+	}
+}
+
+// TestE009_InterpolatedResourceType_NoViolation: an interpolation whose
+// root is a valid resource-type identifier (contains an underscore) must
+// not trigger E009 — provider resource references are legitimate.
+func TestE009_InterpolatedResourceType_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_subnet" "s" {
+  vpc_id     = aws_vpc.main.id
+  cidr_block = "10.0.${aws_vpc.main.instance_tenancy}.0/24"
+}
+`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("expected no E009 (aws_vpc is a resource type), got: %v", codes(vs))
+	}
+}
+
+// TestE009_Disabled_NoScopeRootDiagnostic: with E009 disabled but E101
+// enabled, format errors surface but scope-root diagnostics do not.
+func TestE009_Disabled_NoScopeRootDiagnostic(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${vars.subnet}.0/24"
+}
+`,
+	})
+	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
+	// Only enable E101; E009 disabled.
+	enabled := checker.CheckSet{"E101": {}}
+	vs := slices.Concat(parseViolations, mustRun(context.Background(), parsed, enabled, dir))
+	if hasCode(vs, "E009") {
+		t.Fatalf("E009 should be suppressed when disabled, got: %v", codes(vs))
+	}
+}
+
+// TestE101_InterpolatedListElement_MultipleDiagnostics: a list attribute
+// with a mix of literal and interpolated elements produces independent
+// diagnostics per element.
+func TestE101_InterpolatedListElement_MultipleDiagnostics(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_security_group_rule" "x" {
+  cidr_blocks = [
+    "10.0.0.0/16",
+    "10.0.${vars.subnet}.0/24",
+    "10.0.${var.subnet}.256/24",
+  ]
+}
+`,
+	})
+	// Second element: bad scope root → E009. Third element: bad literal
+	// octet → E101. First element: clean, no diagnostic.
+	if !hasCode(vs, "E009") {
+		t.Errorf("expected E009 for 'vars' scope-root typo, got: %v", codes(vs))
+	}
+	if !hasCode(vs, "E101") {
+		t.Errorf("expected E101 for literal octet 256, got: %v", codes(vs))
+	}
+}
+
+// TestE101_ComposedMessage_ShowsPlaceholder: format violations on
+// interpolated values must include a placeholder-substituted display form
+// (<P>) in the message so users can see the shape the check operated on.
+func TestE101_ComposedMessage_ShowsPlaceholder(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${var.subnet}.256/24"
+}
+`,
+	})
+	var e101 *checker.Violation
+	for i := range vs {
+		if vs[i].Code == "E101" {
+			e101 = &vs[i]
+			break
+		}
+	}
+	if e101 == nil {
+		t.Fatalf("expected E101, got: %v", codes(vs))
+	}
+	if !contains(e101.Message, "<P>") {
+		t.Errorf("message %q should show <P> placeholder for interp", e101.Message)
+	}
+	if !contains(e101.Message, "256") {
+		t.Errorf("message %q should include the offending literal octet '256'", e101.Message)
+	}
+}
+
+// contains is a local, allocation-free helper for substring assertions.
+// Kept package-private to cidr_test.go rather than promoted to
+// checks_test.go because it's only used in this file.
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
