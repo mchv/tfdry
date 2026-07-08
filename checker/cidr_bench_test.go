@@ -118,7 +118,7 @@ func BenchmarkE101_Corpus(b *testing.B) {
 	for range b.N {
 		var v []Violation
 		for _, f := range files {
-			v = append(v, checkCIDR(f)...)
+			v = append(v, checkCIDR(f, nil)...)
 		}
 		sink = v
 	}
@@ -220,7 +220,7 @@ func BenchmarkE101_NoTriggers(b *testing.B) {
 			for range b.N {
 				var v []Violation
 				for _, f := range files {
-					v = append(v, checkCIDR(f)...)
+					v = append(v, checkCIDR(f, nil)...)
 				}
 				sink = v
 			}
@@ -249,7 +249,7 @@ func BenchmarkE101_SparseTriggers(b *testing.B) {
 			for range b.N {
 				var v []Violation
 				for _, f := range files {
-					v = append(v, checkCIDR(f)...)
+					v = append(v, checkCIDR(f, nil)...)
 				}
 				sink = v
 			}
