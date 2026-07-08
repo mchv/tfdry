@@ -52,6 +52,48 @@ var categories = []category{
 // grammar-family value.
 const maxValueLen = 1024
 
+// arnRegexp matches ARN-shape substrings anywhere in a literal string value.
+// Deliberately strict: requires all 6 canonical fields with the following
+// per-field character classes:
+//
+//	arn         literal, lowercase only (rejects `ARN:` / `Arn:`, matching
+//	                 AWS's own SDK behaviour — see aws-sdk-go-v2/aws/arn).
+//	partition   lowercase alphanumeric with dashes, must start with a letter
+//	                 (matches `aws`, `aws-cn`, `aws-us-gov`, `aws-iso[-b]`).
+//	service     lowercase alphanumeric with dashes, must start with a letter
+//	                 (matches `iam`, `s3`, `ec2`, `apigatewayv2`, `route53`).
+//	region      lowercase alphanumeric with dashes, wildcards allowed, may
+//	                 be empty (matches `us-east-1`, `eu-west-3`, `*`, ``).
+//	account     digits or `*`, may be empty (matches `123456789012`, `*`, ``).
+//	resource    anything up to the next HCL/JSON syntax terminator
+//	                 (whitespace, quote, comma, semicolon, closing bracket,
+//	                 brace, or paren). Resource may itself contain colons
+//	                 and slashes.
+//
+// The leading `\b` word boundary ensures we don't match an `arn:` that is
+// mid-identifier — `notarn:aws:...` must not yield `arn:aws:...`.
+//
+// Complementary to the name-pattern harvest: name-pattern captures whole-
+// value ARNs, this regex captures ARN literals embedded inside larger
+// strings (IAM policy heredocs, description text, values under non-`arn`
+// attribute names, etc.).
+var arnRegexp = regexp.MustCompile(
+	`\barn:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[a-z0-9*-]*:[0-9*]*:[^\s"'` + "`" + `,;)\]}]+`,
+)
+
+// trimTrailingPunct removes trailing terminal-sentence punctuation from an
+// ARN-shape substring captured by arnRegexp. AWS resource fields can
+// contain most characters (including interior dots — S3 bucket names may
+// contain `.`) but never end with terminal-sentence punctuation. When
+// Path E captures an ARN embedded in prose ("The bucket ARN is
+// arn:aws:s3:::foo.") the trailing punctuation is prose, not part of the
+// ARN, and stripping it improves signal without dropping valid ARNs.
+// The regex's own terminator class already excludes commas and
+// semicolons, so we strip the remaining sentence-ending characters here.
+func trimTrailingPunct(s string) string {
+	return strings.TrimRight(s, ".!?")
+}
+
 // extractString returns the literal string value of an expression together
 // with a boolean indicating whether the expression is a valid literal string.
 // The bool avoids conflating "not a literal" with "literal empty string": a
@@ -98,21 +140,52 @@ func extractStringList(e hclsyntax.Expression) []string {
 // literal values by category. body is expected non-nil (hclsyntax guarantees
 // this for a well-formed parse); the guard is defensive against future
 // contract changes.
+//
+// Two harvests run per attribute:
+//  1. Name-pattern harvest — the attribute name is matched against each
+//     category's regex; on a hit the whole value (scalar or list element)
+//     goes into that category's bucket.
+//  2. ARN-shape substring harvest — every literal string value (whether or
+//     not the attribute name matched anything) is scanned for ARN-shape
+//     substrings via arnRegexp; matches go into the "arn" bucket. This
+//     complements the name-pattern pass by capturing ARN literals embedded
+//     inside inline IAM policy heredocs, description strings, values under
+//     non-`arn` attribute names, and any other literal-string context.
 func walk(body *hclsyntax.Body, buckets map[string]map[string]struct{}) {
 	if body == nil {
 		return
 	}
 	for _, attr := range body.Attributes {
+		// Cache the extracted values once — both harvests need them.
+		strVal, strOK := extractString(attr.Expr)
+		var listVals []string
+		if !strOK {
+			listVals = extractStringList(attr.Expr)
+		}
+
+		// Name-pattern harvest.
 		for _, cat := range categories {
 			if !cat.pattern.MatchString(attr.Name) {
 				continue
 			}
-			if v, ok := extractString(attr.Expr); ok {
-				buckets[cat.name][v] = struct{}{}
+			if strOK {
+				buckets[cat.name][strVal] = struct{}{}
 				continue
 			}
-			for _, v := range extractStringList(attr.Expr) {
+			for _, v := range listVals {
 				buckets[cat.name][v] = struct{}{}
+			}
+		}
+
+		// ARN-shape substring harvest, name-independent.
+		if strOK {
+			for _, arn := range arnRegexp.FindAllString(strVal, -1) {
+				buckets["arn"][trimTrailingPunct(arn)] = struct{}{}
+			}
+		}
+		for _, v := range listVals {
+			for _, arn := range arnRegexp.FindAllString(v, -1) {
+				buckets["arn"][trimTrailingPunct(arn)] = struct{}{}
 			}
 		}
 	}
