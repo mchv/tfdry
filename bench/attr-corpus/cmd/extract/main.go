@@ -64,7 +64,10 @@ const maxValueLen = 1024
 //	                 (matches `iam`, `s3`, `ec2`, `apigatewayv2`, `route53`).
 //	region      lowercase alphanumeric with dashes, wildcards allowed, may
 //	                 be empty (matches `us-east-1`, `eu-west-3`, `*`, ``).
-//	account     digits or `*`, may be empty (matches `123456789012`, `*`, ``).
+//	account     digits, `*`, or lowercase letters, may be empty. Lowercase
+//	                 letters are needed for AWS-managed policies which use
+//	                 the literal token `aws` in the account slot
+//	                 (arn:aws:iam::aws:policy/AWSSupportAccess and family).
 //	resource    anything up to the next HCL/JSON syntax terminator
 //	                 (whitespace, quote, comma, semicolon, closing bracket,
 //	                 brace, or paren). Resource may itself contain colons
@@ -78,7 +81,7 @@ const maxValueLen = 1024
 // strings (IAM policy heredocs, description text, values under non-`arn`
 // attribute names, etc.).
 var arnRegexp = regexp.MustCompile(
-	`\barn:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[a-z0-9*-]*:[0-9*]*:[^\s"'` + "`" + `,;)\]}]+`,
+	`\barn:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[a-z0-9*-]*:[a-z0-9*]*:[^\s"'` + "`" + `,;)\]}]+`,
 )
 
 // trimTrailingPunct removes trailing terminal-sentence punctuation from an
