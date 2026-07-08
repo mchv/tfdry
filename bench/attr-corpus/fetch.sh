@@ -81,7 +81,14 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     # and fetched via /archive/refs/tags/${tag}.tar.gz, which surfaces a
     # 404 if the tag doesn't exist. Full-SHA-only avoids collisions with
     # tag names that happen to be short hex strings.
-    if echo "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+    #
+    # `printf '%s\n'` (not `echo`) matches the pattern used elsewhere in
+    # this loop for the same reason: a value that starts with a dash
+    # would otherwise be misinterpreted as an echo flag on shells that
+    # honour -n / -e / -E. Not a realistic risk for repos.txt-derived
+    # refs (which are always tags or SHAs), but the local idiom exists
+    # for a reason and this new code path should follow it.
+    if printf '%s\n' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
         url="https://github.com/${repo}/archive/${ref}.tar.gz"
     else
         url="https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz"
