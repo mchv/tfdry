@@ -1,0 +1,8 @@
+"arn:${data.aws_partition.current.partition}:iam::aws:policy/AWSXRayDaemonWriteAccess"
+"arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
+"arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy"
+"arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEKS_CNI_Policy"
+"arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaENIManagementAccess"
+"arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+"arn:${local.partition}:iam::aws:policy/service-role/AmazonElasticMapReduceforAutoScalingRole"
+"arn:${local.partition}:s3:::${local.bucket_id}"
