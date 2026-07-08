@@ -62,12 +62,16 @@ const maxValueLen = 1024
 //	                 (matches `aws`, `aws-cn`, `aws-us-gov`, `aws-iso[-b]`).
 //	service     lowercase alphanumeric with dashes, must start with a letter
 //	                 (matches `iam`, `s3`, `ec2`, `apigatewayv2`, `route53`).
-//	region      lowercase alphanumeric with dashes, wildcards allowed, may
-//	                 be empty (matches `us-east-1`, `eu-west-3`, `*`, ``).
-//	account     digits, `*`, or lowercase letters, may be empty. Lowercase
-//	                 letters are needed for AWS-managed policies which use
-//	                 the literal token `aws` in the account slot
-//	                 (arn:aws:iam::aws:policy/AWSSupportAccess and family).
+//	region      one of: empty, `*` (wildcard), or a lowercase alphanumeric
+//	                 name starting with a letter (`us-east-1`, `eu-west-3`,
+//	                 `ap-southeast-1`). Real AWS regions are always
+//	                 letter-prefixed with dashes; the wildcard form appears
+//	                 in IAM policies. Rejects `**`, digit-starts, etc.
+//	account     one of: empty, `*` (wildcard), the literal `aws` (AWS-managed
+//	                 policy convention: arn:aws:iam::aws:policy/...), or
+//	                 exactly 12 digits (real account ID). These four exact
+//	                 shapes are the only forms AWS emits. Rejects partial
+//	                 digits, arbitrary lowercase words, etc.
 //	resource    anything up to the next HCL/JSON syntax terminator
 //	                 (whitespace, quote, comma, semicolon, closing bracket,
 //	                 brace, or paren). Resource may itself contain colons
@@ -81,7 +85,7 @@ const maxValueLen = 1024
 // strings (IAM policy heredocs, description text, values under non-`arn`
 // attribute names, etc.).
 var arnRegexp = regexp.MustCompile(
-	`\barn:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[a-z0-9*-]*:[a-z0-9*]*:[^\s"'` + "`" + `,;)\]}]+`,
+	`\barn:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:(?:[a-z][a-z0-9-]*|\*)?:(?:aws|[0-9]{12}|\*)?:[^\s"'` + "`" + `,;)\]}]+`,
 )
 
 // trimTrailingPunct removes trailing terminal-sentence punctuation from an
