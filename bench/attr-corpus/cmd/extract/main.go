@@ -185,6 +185,43 @@ func main() {
 		log.Fatal(walkErr)
 	}
 
+	// Harvest 12-digit account IDs embedded in ARN field 5
+	// (arn:PARTITION:SERVICE:REGION:ACCOUNT:RESOURCE). This complements
+	// the direct `account_id` attribute harvest, which is architecturally
+	// near-zero because real Terraform modules use
+	// `data.aws_caller_identity.current.account_id` interpolation rather
+	// than hardcoded literals. ARN values, in contrast, do get committed
+	// with real account numbers embedded, so ARN field 5 is the practical
+	// source of account-ID diversity in the corpus.
+	//
+	// The 12-digit-numeric gate deliberately rejects:
+	//   - "aws" (managed-policy convention: arn:aws:iam::aws:policy/...)
+	//   - "*" (wildcard account fields)
+	//   - "" (global-service ARNs like arn:aws:s3:::my-bucket)
+	// Only literal 12-digit strings survive — matching the AWS account-ID
+	// contract (12 digits, leading zeros permitted).
+	for arn := range buckets["arn"] {
+		parts := strings.SplitN(arn, ":", 6)
+		if len(parts) < 5 {
+			continue
+		}
+		account := parts[4]
+		if len(account) != 12 {
+			continue
+		}
+		allDigits := true
+		for _, r := range account {
+			if r < '0' || r > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if !allDigits {
+			continue
+		}
+		buckets["account_id"][account] = struct{}{}
+	}
+
 	// Filter every bucket to what will actually be written: skip empty
 	// strings (interpolated / null sentinels), values above the length cap,
 	// and any value carrying embedded newlines. Storing the filtered slices
