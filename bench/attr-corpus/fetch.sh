@@ -1,9 +1,18 @@
 #!/bin/sh
 # bench/attr-corpus/fetch.sh — fetch pinned Terraform corpora from GitHub.
 #
-# Reads repos.txt line by line and downloads each `<owner>/<repo> <tag>` as a
+# Reads repos.txt line by line and downloads each `<owner>/<repo> <ref>` as a
 # tar.gz snapshot from GitHub into `bench/attr-corpus/files/<owner>-<repo>/`.
 # The `files/` directory is gitignored — this script is idempotent.
+#
+# Ref may be either:
+#   - a release tag  (e.g. `v5.13.0`), fetched via /archive/refs/tags/<tag>
+#   - a full commit SHA (40 lowercase hex chars), fetched via /archive/<sha>
+# Anything not matching the strict full-SHA shape is treated as a tag, so a
+# non-existent tag fails-loud rather than silently falling back to a branch
+# of the same name. Tags remain the preferred pinning form; SHAs unblock
+# repos that don't cut releases (see the aws-cloudformation/iac-model-
+# evaluation entry in repos.txt).
 #
 # Existing corpus directories are left alone. Use `make bench-corpus-clean`
 # (or delete `files/` by hand) to force a re-fetch.
@@ -49,9 +58,9 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     [ -z "$entry" ] && continue
 
     repo=$(printf '%s\n' "$entry" | awk '{print $1}')
-    tag=$(printf  '%s\n' "$entry" | awk '{print $2}')
+    ref=$(printf  '%s\n' "$entry" | awk '{print $2}')
 
-    if [ -z "$repo" ] || [ -z "$tag" ]; then
+    if [ -z "$repo" ] || [ -z "$ref" ]; then
         echo "fetch.sh: malformed entry: $line" >&2
         failed=$((failed + 1))
         continue
@@ -61,12 +70,22 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     dest="$FILES_DIR/$dest_name"
 
     if [ -d "$dest" ] && [ "$(ls -A "$dest" 2>/dev/null)" ]; then
-        printf '  ↻ %-55s %s (cached)\n' "$repo" "$tag"
+        printf '  ↻ %-55s %s (cached)\n' "$repo" "$ref"
         cached=$((cached + 1))
         continue
     fi
 
-    url="https://github.com/${repo}/archive/refs/tags/${tag}.tar.gz"
+    # A ref that is exactly 40 lowercase hex chars is treated as a commit
+    # SHA and fetched via /archive/${sha}.tar.gz (which GitHub resolves to
+    # a tree snapshot at that commit). Anything else is treated as a tag
+    # and fetched via /archive/refs/tags/${tag}.tar.gz, which surfaces a
+    # 404 if the tag doesn't exist. Full-SHA-only avoids collisions with
+    # tag names that happen to be short hex strings.
+    if echo "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+        url="https://github.com/${repo}/archive/${ref}.tar.gz"
+    else
+        url="https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz"
+    fi
 
     # Download to a temp file first so curl's exit code is checked before tar
     # runs. `curl | tar` would let tar succeed on empty stdin and hide the 404.
@@ -84,7 +103,7 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     #   where `$TMPDIR` is often unset.
     tmp=$(mktemp "${TMPDIR:-/tmp}/tfdry-attr-corpus.XXXXXXXX")
     if ! curl -fsSL "$url" -o "$tmp"; then
-        printf '  ✗ %-55s %s (HTTP error)\n' "$repo" "$tag" >&2
+        printf '  ✗ %-55s %s (HTTP error)\n' "$repo" "$ref" >&2
         rm -f "$tmp"
         tmp=""
         failed=$((failed + 1))
@@ -93,7 +112,7 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
 
     mkdir -p "$dest"
     if ! tar -xzf "$tmp" -C "$dest" --strip-components=1; then
-        printf '  ✗ %-55s %s (tar extract failed)\n' "$repo" "$tag" >&2
+        printf '  ✗ %-55s %s (tar extract failed)\n' "$repo" "$ref" >&2
         rm -f "$tmp"
         tmp=""
         rm -rf "$dest"
@@ -103,17 +122,17 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     rm -f "$tmp"
     tmp=""
 
-    # Post-check: an empty dest means the tag pointed at an empty tree (highly
+    # Post-check: an empty dest means the ref pointed at an empty tree (highly
     # unusual for a Terraform module) or the strip-components landed wrong.
     # Either way, the corpus for this repo is not usable.
     if [ ! "$(ls -A "$dest" 2>/dev/null)" ]; then
-        printf '  ✗ %-55s %s (empty extraction)\n' "$repo" "$tag" >&2
+        printf '  ✗ %-55s %s (empty extraction)\n' "$repo" "$ref" >&2
         rm -rf "$dest"
         failed=$((failed + 1))
         continue
     fi
 
-    printf '  ✓ %-55s %s\n' "$repo" "$tag"
+    printf '  ✓ %-55s %s\n' "$repo" "$ref"
     fetched=$((fetched + 1))
 done 3< "$REPOS_FILE"
 

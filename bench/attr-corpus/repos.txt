@@ -1,6 +1,13 @@
 # repos.txt — pinned open-source Terraform repos for the attribute-value corpus.
 #
-# Format: <owner>/<repo> <tag>
+# Format: <owner>/<repo> <ref>
+#
+# The <ref> is either a release tag (preferred) or a full 40-character
+# commit SHA. Tags win when a repo publishes them; commit SHAs are used
+# for repos that don't cut releases (e.g. aws-cloudformation/iac-model-
+# evaluation). SHAs must be full 40-char hex — short prefixes are
+# ambiguous and rejected by fetch.sh.
+#
 # Comments (# ...) and blank lines are ignored.
 #
 # When bumping a pin, run `make bench-corpus-refresh` and commit the diff to
@@ -29,3 +36,9 @@ cloudposse/terraform-aws-eks-cluster v4.10.0
 cloudposse/terraform-aws-s3-bucket v4.14.0
 cloudposse/terraform-aws-iam-role 0.19.0
 cloudposse/terraform-aws-security-group 2.2.0
+
+# aws-cloudformation/iac-model-evaluation — curated AWS IaC samples for
+# model evaluation. No release tags upstream; pinned to a commit SHA.
+# Contributes AWSCC-provider examples and dual-stack (IPv4+IPv6) samples
+# not present in the terraform-aws-modules/cloudposse pins.
+aws-cloudformation/iac-model-evaluation a3067403d3e0d0546f42ddb45aabb8c74789247e

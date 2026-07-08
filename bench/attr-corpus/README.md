@@ -25,7 +25,7 @@ explicit, reviewable diff.
 ```
 bench/attr-corpus/
 ├── README.md              # this file
-├── repos.txt              # pinned <owner>/<repo> <tag> lines
+├── repos.txt              # pinned <owner>/<repo> <ref> lines
 ├── fetch.sh               # downloads pinned tarballs into files/
 ├── extract.sh             # runs the Go extractor against files/
 ├── cmd/extract/main.go    # hclsyntax-based extractor (build-tag ignored)
@@ -58,14 +58,34 @@ make bench-corpus-refresh   # fetch + extract
 After refreshing, review the diff to `values/` and commit if the numbers
 look sensible.
 
-## Bumping pinned tags
+## Bumping pinned refs
 
-1. Edit `repos.txt` — bump the tag on any line, or add/remove repos.
+1. Edit `repos.txt` — bump the ref on any line, or add/remove repos.
+   Each entry pairs `<owner>/<repo>` with a `<ref>` that is either a
+   release tag (preferred) or a full 40-character commit SHA.
 2. Run `make bench-corpus-clean bench-corpus-refresh`.
 3. Review `git diff bench/attr-corpus/values/`. Typical change: a handful
    of new CIDRs/ARNs, a few obsolete ones dropped.
 4. Commit the `values/` diff separately from any check-code changes so
    corpus bumps are easy to bisect against benchmark regressions.
+
+### Tag vs commit SHA
+
+`fetch.sh` picks the URL form based on the ref shape:
+
+- **Tag** (anything not matching `^[0-9a-f]{40}$`): fetched via
+  `/archive/refs/tags/<tag>.tar.gz`. Fails-loud on a non-existent tag
+  rather than silently falling back to a branch of the same name.
+  Preferred when the repo publishes releases.
+- **Commit SHA** (exactly 40 lowercase hex): fetched via
+  `/archive/<sha>.tar.gz`. Used for repos that don't cut releases
+  (e.g. `aws-cloudformation/iac-model-evaluation`). Short prefix SHAs
+  are rejected — full-SHA-only avoids collisions with tag names that
+  happen to be short hex strings.
+
+SHA pinning is *more* reproducible than tag pinning (tags can be
+moved; SHAs cannot). Prefer tags when available for readability, fall
+back to SHAs when needed.
 
 ## Extractor semantics
 
