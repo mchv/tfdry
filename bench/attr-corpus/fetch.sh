@@ -76,11 +76,15 @@ while IFS= read -r line <&3 || [ -n "$line" ]; do
     fi
 
     # A ref that is exactly 40 lowercase hex chars is treated as a commit
-    # SHA and fetched via /archive/${sha}.tar.gz (which GitHub resolves to
-    # a tree snapshot at that commit). Anything else is treated as a tag
-    # and fetched via /archive/refs/tags/${tag}.tar.gz, which surfaces a
-    # 404 if the tag doesn't exist. Full-SHA-only avoids collisions with
-    # tag names that happen to be short hex strings.
+    # SHA. The URL then takes the /archive/<sha>.tar.gz shape — GitHub
+    # resolves it to a tree snapshot at that commit. Anything else is
+    # treated as a tag and takes the /archive/refs/tags/<tag>.tar.gz
+    # shape, which surfaces a 404 if the tag doesn't exist. Full-SHA-only
+    # (40 chars) avoids collisions with tag names that happen to be short
+    # hex strings.
+    #
+    # <sha> and <tag> above are placeholders for the ref value, not
+    # shell variables — the actual URL is built from ${ref} below.
     #
     # `printf '%s\n'` (not `echo`) matches the pattern used elsewhere in
     # this loop for the same reason: a value that starts with a dash

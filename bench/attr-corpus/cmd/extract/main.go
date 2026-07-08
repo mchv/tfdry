@@ -194,7 +194,17 @@ func main() {
 	// with real account numbers embedded, so ARN field 5 is the practical
 	// source of account-ID diversity in the corpus.
 	//
-	// The 12-digit-numeric gate deliberately rejects:
+	// Validation is strict-by-design because the "arn" bucket collects
+	// every literal string appearing in any attribute matching
+	// `(^|_)arns?$`, which includes real-world placeholders and typos
+	// (e.g. `YourPolicyARN`). The gate here rejects anything that isn't
+	// a canonically-shaped ARN before scanning field 5:
+	//   - Exactly 6 colon-delimited parts (the canonical ARN grammar).
+	//     A 5-part malformed ARN could otherwise contribute a spurious
+	//     12-digit value from the wrong field position.
+	//   - Parts[0] must equal "arn". Rejects placeholder strings that
+	//     happen to contain 5 colons.
+	// Then the 12-digit-numeric gate on field 5 rejects:
 	//   - "aws" (managed-policy convention: arn:aws:iam::aws:policy/...)
 	//   - "*" (wildcard account fields)
 	//   - "" (global-service ARNs like arn:aws:s3:::my-bucket)
@@ -202,7 +212,7 @@ func main() {
 	// contract (12 digits, leading zeros permitted).
 	for arn := range buckets["arn"] {
 		parts := strings.SplitN(arn, ":", 6)
-		if len(parts) < 5 {
+		if len(parts) != 6 || parts[0] != "arn" {
 			continue
 		}
 		account := parts[4]
