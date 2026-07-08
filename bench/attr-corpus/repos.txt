@@ -44,3 +44,19 @@ cloudposse/terraform-aws-security-group 2.2.0
 # Contributes AWSCC-provider examples and dual-stack (IPv4+IPv6) samples
 # not present in the terraform-aws-modules/cloudposse pins.
 aws-cloudformation/iac-model-evaluation a3067403d3e0d0546f42ddb45aabb8c74789247e
+
+# terraform-aws-modules — ARN-diversity expansion. Modules with rich
+# IAM policy / cross-service ARN literals in their example directories.
+# Ranked empirically by unique ARN-shape substring yield during selection.
+terraform-aws-modules/terraform-aws-eks-pod-identity v2.8.1
+terraform-aws-modules/terraform-aws-step-functions v5.1.0
+terraform-aws-modules/terraform-aws-eventbridge v4.3.0
+terraform-aws-modules/terraform-aws-cloudwatch v5.7.2
+terraform-aws-modules/terraform-aws-notify-slack v7.5.0
+terraform-aws-modules/terraform-aws-kms v4.2.0
+terraform-aws-modules/terraform-aws-emr v3.3.0
+
+# aws-ia — AWS Integration & Automation team; EKS Blueprints modules
+# published as reference architectures with concrete ARN examples.
+aws-ia/terraform-aws-eks-blueprints-addons v1.24.3
+aws-ia/terraform-aws-eks-blueprints v5.0.0
