@@ -67,7 +67,7 @@ var allChecksList = []CheckInfo{
 	{Code: "E006", Severity: "error", Summary: "Local module input type mismatch", Family: "E000"},
 	{Code: "E007", Severity: "error", Summary: "Unknown local module input key", Family: "E000"},
 	{Code: "E008", Severity: "error", Summary: "File not formatted (run tfdry --fix or terraform fmt)", Family: "E000"},
-	{Code: "E009", Severity: "error", Summary: "Invalid Terraform scope root in interpolation", Family: "E000"},
+	{Code: "E009", Severity: "error", Summary: "Invalid Terraform scope root in expression", Family: "E000"},
 	{Code: "W001", Severity: "warning", Summary: "Local defined but never used", Family: "E000"},
 	{Code: "E101", Severity: "error", Summary: "Invalid CIDR block literal", Family: "E100"},
 }
@@ -164,9 +164,18 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		if err := ctx.Err(); err != nil {
 			return violations, err
 		}
-		walkExpressions(f.Body, func(expr hclsyntax.Expression) {
+		walkExpressions(f.Body, nil, func(expr hclsyntax.Expression, iterators map[string]struct{}) {
 			switch e := expr.(type) {
 			case *hclsyntax.ScopeTraversalExpr:
+				// E009: invalid Terraform scope root in interpolation.
+				// Runs on every ScopeTraversalExpr so scope-root typos are
+				// caught in any attribute (not just CIDR-triggering ones).
+				// Iterators map carries dynamic-block-content scope.
+				if checks.Enabled("E009") {
+					if diag := ValidateScopeRoot(e, iterators); diag != nil {
+						violations = append(violations, scopeRootViolation(f.Name, diag))
+					}
+				}
 				if len(e.Traversal) < 2 || e.Traversal.RootName() != "local" {
 					return
 				}
@@ -213,7 +222,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		if checks.Enabled("E006") || checks.Enabled("E007") {
 			violations = append(violations, checkModuleInputs(f, dir, locals, checks, moduleCache)...)
 		}
-		if checks.Enabled("E101") || checks.Enabled("E009") {
+		if checks.Enabled("E101") {
 			violations = append(violations, checkCIDR(f, checks)...)
 		}
 	}
@@ -306,16 +315,115 @@ func checkCountForEach(f ParsedFile) []Violation {
 }
 
 // walkExpressions calls fn for every expression in a body, recursively.
-func walkExpressions(body *hclsyntax.Body, fn func(hclsyntax.Expression)) {
+//
+// The iterators parameter carries the set of dynamic-block iterator names
+// in lexical scope at the current traversal position — see the dynamic
+// block handling below. It is passed to fn on every callback so
+// scope-aware checks (E009) can consult it. Callers that don't do
+// scope-aware work can pass nil at the top-level call and ignore the
+// parameter in their callback.
+//
+// Dynamic-block handling: Terraform's `dynamic "X" { content { ... } }`
+// blocks introduce a fresh iterator name (X by default, or the value of
+// the `iterator = <name>` attribute) visible only inside the content{}
+// sub-block. When the walker sees a dynamic block it:
+//
+//   - Visits the block's own attributes (for_each, iterator, labels,
+//     ...) with the OUTER iterator scope — those expressions are
+//     evaluated before the iterator is bound.
+//   - Descends into content{} with the iterator name added to a fresh
+//     copy of the iterators map. Cloning (rather than add-then-remove)
+//     keeps the walker re-entrant and side-effect free for callers.
+//
+// Non-content sub-blocks of a dynamic block are unusual (Terraform's
+// grammar allows only `content`) but if present, they're visited with
+// the outer scope — the iterator is only bound inside content{}.
+func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
 	for _, attr := range body.Attributes {
 		hclsyntax.VisitAll(attr.Expr, func(node hclsyntax.Node) hcl.Diagnostics { //nolint
 			if expr, ok := node.(hclsyntax.Expression); ok {
-				fn(expr)
+				fn(expr, iterators)
 			}
 			return nil
 		})
 	}
 	for _, block := range body.Blocks {
-		walkExpressions(block.Body, fn)
+		if block.Type == "dynamic" && len(block.Labels) == 1 {
+			walkDynamicBlock(block, iterators, fn)
+			continue
+		}
+		walkExpressions(block.Body, iterators, fn)
 	}
+}
+
+// walkDynamicBlock handles a `dynamic "X" { ... }` block, applying the
+// scoping rule described in walkExpressions. Extracted to keep the
+// main walker readable.
+func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
+	iterName := dynamicIteratorName(block)
+
+	// Visit dynamic-level attributes (for_each, labels, iterator) with
+	// the OUTER scope — they are evaluated before the iterator is bound.
+	// Notably: the `iterator = <name>` attribute itself parses as a
+	// ScopeTraversalExpr but is a declaration, not a reference; we skip
+	// it here so E009 doesn't flag the iterator name being introduced.
+	for _, attr := range block.Body.Attributes {
+		if attr.Name == "iterator" {
+			continue
+		}
+		hclsyntax.VisitAll(attr.Expr, func(node hclsyntax.Node) hcl.Diagnostics { //nolint
+			if expr, ok := node.(hclsyntax.Expression); ok {
+				fn(expr, iterators)
+			}
+			return nil
+		})
+	}
+
+	// Descend into sub-blocks. content{} sees the iterator; others don't
+	// (Terraform's grammar only allows content, but we tolerate other
+	// shapes without crashing).
+	augmented := cloneIterators(iterators, iterName)
+	for _, sub := range block.Body.Blocks {
+		if sub.Type == "content" {
+			walkExpressions(sub.Body, augmented, fn)
+		} else {
+			walkExpressions(sub.Body, iterators, fn)
+		}
+	}
+}
+
+// dynamicIteratorName returns the iterator name for a `dynamic "X"` block:
+// the value of `iterator = <name>` if present (a bare-identifier
+// ScopeTraversalExpr), otherwise the block label X. Returns the empty
+// string only if the block has no label — a malformed input that the
+// caller should already have skipped via the `len(block.Labels) == 1`
+// guard.
+func dynamicIteratorName(block *hclsyntax.Block) string {
+	if attr, ok := block.Body.Attributes["iterator"]; ok {
+		if trav, ok := attr.Expr.(*hclsyntax.ScopeTraversalExpr); ok && len(trav.Traversal) == 1 {
+			if root, ok := trav.Traversal[0].(hcl.TraverseRoot); ok {
+				return root.Name
+			}
+		}
+	}
+	if len(block.Labels) == 1 {
+		return block.Labels[0]
+	}
+	return ""
+}
+
+// cloneIterators returns a new map containing every entry in iterators
+// plus name. Nil-safe: a nil input yields a fresh single-entry map.
+// Cloning is intentional — the walker is otherwise side-effect free,
+// and mutating a shared map across recursive calls would corrupt outer
+// scope on return.
+func cloneIterators(iterators map[string]struct{}, name string) map[string]struct{} {
+	out := make(map[string]struct{}, len(iterators)+1)
+	for k := range iterators {
+		out[k] = struct{}{}
+	}
+	if name != "" {
+		out[name] = struct{}{}
+	}
+	return out
 }

@@ -30,9 +30,11 @@ import (
 // through net/netip.ParsePrefix as before. Templated values are handled
 // via the checker/template.go subsystem — the composed form (with each
 // ${...} replaced by a "0" placeholder) is validated as a CIDR when the
-// literal parts carry enough shape information to be meaningful, and
-// each interpolation is separately checked for a valid Terraform scope
-// root via ValidateScopeRoot (E009). See #23 for the model discussion.
+// literal parts carry enough shape information to be meaningful. E009
+// (invalid scope root in interpolation) is emitted independently from
+// walkExpressions in checks.go, which threads dynamic-block iterator
+// scope through the traversal; this file no longer emits E009 itself.
+// See #23 for the model discussion.
 
 // cidrShape encodes whether an attribute holds a single CIDR string or a
 // list of CIDR strings. The zero value cidrShapeNone corresponds to a
@@ -91,14 +93,11 @@ const cidrPlaceholderNumeric = "0"
 // interpolations landed in the value they wrote.
 const cidrPlaceholderDisplay = "<P>"
 
-// checkCIDR runs E101 (and, for interpolation contexts, E009) over a single
-// parsed file, returning one Violation per finding. The outer dispatch in
-// Run() invokes checkCIDR when either E101 or E009 is enabled; individual
-// diagnostics are gated by their own check code so:
-//
-//	--checks=E101 alone:   format errors emitted, scope-root suppressed
-//	--checks=E009 alone:   scope-root emitted, format suppressed
-//	--checks=E101,E009:    both emitted (default)
+// checkCIDR runs E101 over a single parsed file, returning one Violation
+// per finding. The outer dispatch in Run() invokes checkCIDR only when
+// E101 is enabled — E009 (scope-root validation in interpolations) is
+// emitted separately from walkExpressions in checks.go, which handles
+// the general expression walk and dynamic-block iterator scope tracking.
 func checkCIDR(f ParsedFile, checks CheckSet) []Violation {
 	var violations []Violation
 	walkCIDRBlocks(f.Body, f.Name, checks, &violations)
@@ -211,56 +210,38 @@ func checkCIDRList(file string, attr *hclsyntax.Attribute, checks CheckSet, viol
 	}
 }
 
-// validateCIDRTemplate runs the two-part validation for one CIDR-shaped
-// template value:
+// validateCIDRTemplate runs the format check for one CIDR-shaped template
+// value: validates the composed (placeholder-substituted) form as a CIDR
+// via net/netip.ParsePrefix. Pure literals always run the check;
+// interpolated forms run it only when the literal parts carry enough
+// shape information to make the check meaningful (see cidrHasEnoughShape).
+// Emits E101 on format failure.
 //
-//  1. Format check — validates the composed (placeholder-substituted) form
-//     as a CIDR via net/netip.ParsePrefix. Pure literals always run the
-//     check; interpolated forms run it only when the literal parts carry
-//     enough shape information to make the check meaningful (see
-//     cidrHasEnoughShape). Emits E101 on format failure.
-//  2. Scope-root check — for each interpolation part, validates that its
-//     root identifier is a known Terraform scope root or a resource-type
-//     identifier. Emits E009 on scope-root failure (only when the user
-//     has E009 enabled).
-//
-// Both checks run independently: a value can produce zero, one, or both
-// kinds of diagnostics. The two checks answer different questions and
-// their findings are complementary rather than redundant.
+// Scope-root validation (E009) for the interpolations is not done here —
+// walkExpressions in checks.go handles it as part of the general
+// expression walk, with dynamic-block iterator scope tracking.
 func validateCIDRTemplate(file string, line int, attrName string, parts []TemplatePart, checks CheckSet, violations *[]Violation) {
-	// Format check (E101). Gated by checks.Enabled so a user running
-	// with --checks=E009 alone (E101 disabled) does not receive format
-	// diagnostics — the walker was entered on their behalf only for the
-	// scope-root pass below.
-	if checks.Enabled("E101") {
-		if IsAllLiteral(parts) {
-			v := LiteralString(parts)
-			if v != "" {
-				if err := validateCIDR(v); err != nil {
-					*violations = append(*violations, cidrViolation(file, line, attrName, v, err))
-				}
-			}
-		} else if cidrHasEnoughShape(parts) {
-			composed := Compose(parts, cidrPlaceholderNumeric)
-			if err := validateCIDR(composed); err != nil {
-				display := Compose(parts, cidrPlaceholderDisplay)
-				*violations = append(*violations, cidrViolation(file, line, attrName, display, err))
-			}
-		}
-	}
-
-	// Scope-root check (E009). Gated separately from E101 — a user who
-	// runs with --checks=E101,-E009 gets format errors but no scope-root
-	// diagnostics.
-	if !checks.Enabled("E009") {
+	// Format check (E101). Gated on E101 because the caller (walkCIDRBlocks)
+	// may in the future invoke this path for other reasons; today the
+	// outer gate in Run() already ensures E101 is enabled, so this is a
+	// belt-and-braces guard.
+	if !checks.Enabled("E101") {
 		return
 	}
-	for _, p := range parts {
-		if !p.IsInterp() {
-			continue
+	if IsAllLiteral(parts) {
+		v := LiteralString(parts)
+		if v != "" {
+			if err := validateCIDR(v); err != nil {
+				*violations = append(*violations, cidrViolation(file, line, attrName, v, err))
+			}
 		}
-		if diag := ValidateScopeRoot(p.Interp); diag != nil {
-			*violations = append(*violations, scopeRootViolation(file, diag))
+		return
+	}
+	if cidrHasEnoughShape(parts) {
+		composed := Compose(parts, cidrPlaceholderNumeric)
+		if err := validateCIDR(composed); err != nil {
+			display := Compose(parts, cidrPlaceholderDisplay)
+			*violations = append(*violations, cidrViolation(file, line, attrName, display, err))
 		}
 	}
 }
@@ -346,23 +327,6 @@ func cidrViolation(file string, line int, attrName, value string, err error) Vio
 		File:     file,
 		Line:     line,
 		Message:  attrName + ": invalid CIDR block \"" + value + "\" (" + err.Error() + ")",
-	}
-}
-
-// scopeRootViolation packages an E009 diagnostic for a scope-root failure
-// in a CIDR-attribute interpolation. The message includes the offending
-// root and, when known, a suggested correction.
-func scopeRootViolation(file string, diag *ScopeRootDiag) Violation {
-	msg := "invalid Terraform scope root \"" + diag.Root + "\""
-	if diag.Hint != "" {
-		msg += " (did you mean \"" + diag.Hint + "\"?)"
-	}
-	return Violation{
-		Code:     "E009",
-		Severity: "error",
-		File:     file,
-		Line:     diag.Range.Start.Line,
-		Message:  msg,
 	}
 }
 

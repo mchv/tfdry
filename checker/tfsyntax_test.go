@@ -97,7 +97,7 @@ func TestValidateScopeRoot_ValidRoots(t *testing.T) {
 		t.Run(expr, func(t *testing.T) {
 			t.Parallel()
 			e := parseExprFromString(t, expr)
-			if diag := ValidateScopeRoot(e); diag != nil {
+			if diag := ValidateScopeRoot(e, nil); diag != nil {
 				t.Errorf("ValidateScopeRoot(%q) = %+v, want nil", expr, diag)
 			}
 		})
@@ -129,7 +129,7 @@ func TestValidateScopeRoot_InvalidRoots(t *testing.T) {
 		t.Run(tc.expr, func(t *testing.T) {
 			t.Parallel()
 			e := parseExprFromString(t, tc.expr)
-			diag := ValidateScopeRoot(e)
+			diag := ValidateScopeRoot(e, nil)
 			if diag == nil {
 				t.Fatalf("ValidateScopeRoot(%q) = nil, want diagnostic", tc.expr)
 			}
@@ -161,9 +161,47 @@ func TestValidateScopeRoot_NonTraversalExpr_ReturnsNil(t *testing.T) {
 		t.Run(expr, func(t *testing.T) {
 			t.Parallel()
 			e := parseExprFromString(t, expr)
-			if diag := ValidateScopeRoot(e); diag != nil {
+			if diag := ValidateScopeRoot(e, nil); diag != nil {
 				t.Errorf("ValidateScopeRoot(%q) = %+v, want nil (not a scope traversal)", expr, diag)
 			}
 		})
+	}
+}
+
+// TestValidateScopeRoot_IteratorsRecognized verifies that a root name
+// listed in the iterators map (dynamic-block scope) is accepted by
+// ValidateScopeRoot even though it is not in tfScopeRoots and not a
+// resource-type identifier.
+//
+// The iterators parameter carries lexical scope from the caller's walk
+// (see walkExpressions in checks.go, which pushes dynamic-block iterator
+// names when descending into content{} sub-blocks).
+func TestValidateScopeRoot_IteratorsRecognized(t *testing.T) {
+	t.Parallel()
+
+	iterators := map[string]struct{}{"ingress": {}, "rule": {}}
+
+	// In-scope iterator: accepted.
+	e := parseExprFromString(t, "ingress.value")
+	if diag := ValidateScopeRoot(e, iterators); diag != nil {
+		t.Errorf("ValidateScopeRoot(ingress.value, {ingress, rule}) = %+v, want nil", diag)
+	}
+
+	// Custom-iterator name: accepted.
+	e = parseExprFromString(t, "rule.key")
+	if diag := ValidateScopeRoot(e, iterators); diag != nil {
+		t.Errorf("ValidateScopeRoot(rule.key, {ingress, rule}) = %+v, want nil", diag)
+	}
+
+	// Not in the iterator set — still rejected.
+	e = parseExprFromString(t, "egress.value")
+	if diag := ValidateScopeRoot(e, iterators); diag == nil {
+		t.Errorf("ValidateScopeRoot(egress.value, {ingress, rule}) = nil, want diagnostic")
+	}
+
+	// Nil iterators map — behaves like the pre-round-5 signature.
+	e = parseExprFromString(t, "vars.foo")
+	if diag := ValidateScopeRoot(e, nil); diag == nil {
+		t.Errorf("ValidateScopeRoot(vars.foo, nil) = nil, want diagnostic")
 	}
 }

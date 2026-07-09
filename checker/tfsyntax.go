@@ -113,16 +113,25 @@ type ScopeRootDiag struct {
 }
 
 // ValidateScopeRoot inspects the root of a ScopeTraversalExpr and returns
-// a diagnostic if the root identifier is neither in tfScopeRoots nor a
-// valid resource-type identifier. Returns nil for well-formed roots and
-// for expression types that aren't scope traversals (function calls,
-// binary ops, literals — those are checked elsewhere or not at all).
+// a diagnostic if the root identifier is neither in tfScopeRoots, in the
+// caller-supplied iterators set, nor a valid resource-type identifier.
+// Returns nil for well-formed roots and for expression types that aren't
+// scope traversals (function calls, binary ops, literals — those are
+// checked elsewhere or not at all).
+//
+// The iterators parameter carries lexical scope from the caller's walk.
+// Terraform's `dynamic "X" { content { ... } }` blocks introduce X (or
+// the value of `iterator = ...`) as a valid scope root visible only
+// inside content{}; callers should thread the active iterator set
+// through their traversal and pass it here. Nil is accepted and means
+// "no active iterators", equivalent to an empty map — safe for callers
+// that don't do dynamic-block-aware walking.
 //
 // The check is deliberately narrow: only the outermost traversal root is
 // examined. Nested expressions inside function calls or binary ops are
 // out of scope for this first pass; a follow-up can walk the expression
 // tree if needed.
-func ValidateScopeRoot(expr hclsyntax.Expression) *ScopeRootDiag {
+func ValidateScopeRoot(expr hclsyntax.Expression, iterators map[string]struct{}) *ScopeRootDiag {
 	trav, ok := expr.(*hclsyntax.ScopeTraversalExpr)
 	if !ok || len(trav.Traversal) == 0 {
 		return nil
@@ -134,6 +143,12 @@ func ValidateScopeRoot(expr hclsyntax.Expression) *ScopeRootDiag {
 	if _, known := tfScopeRoots[root.Name]; known {
 		return nil
 	}
+	// Nil-safe: Go map lookup on a nil map returns the zero value
+	// (bool false), so callers that don't do iterator tracking can
+	// pass nil without a guard here.
+	if _, isIter := iterators[root.Name]; isIter {
+		return nil
+	}
 	if isResourceTypeIdentifier(root.Name) {
 		return nil
 	}
@@ -141,5 +156,25 @@ func ValidateScopeRoot(expr hclsyntax.Expression) *ScopeRootDiag {
 		Range: root.SrcRange,
 		Root:  root.Name,
 		Hint:  scopeRootTypo[root.Name],
+	}
+}
+
+// scopeRootViolation packages an E009 diagnostic for a scope-root failure
+// found during expression traversal. The message includes the offending
+// root and, when known, a suggested correction. Kept alongside the
+// ScopeRootDiag type since E009 is now emitted from the general
+// expression walker (walkExpressions in checks.go) rather than from any
+// single check family.
+func scopeRootViolation(file string, diag *ScopeRootDiag) Violation {
+	msg := "invalid Terraform scope root \"" + diag.Root + "\""
+	if diag.Hint != "" {
+		msg += " (did you mean \"" + diag.Hint + "\"?)"
+	}
+	return Violation{
+		Code:     "E009",
+		Severity: "error",
+		File:     file,
+		Line:     diag.Range.Start.Line,
+		Message:  msg,
 	}
 }
