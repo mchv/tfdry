@@ -391,6 +391,24 @@ func main() {
 		for _, suffix := range []string{"", "_templates"} {
 			bucketName := c.name + suffix
 			outPath := filepath.Join(outDir, bucketName+".txt")
+
+			// For the _templates sibling files, skip file creation when
+			// the bucket is empty and remove any existing empty file from
+			// a prior run. Most categories yield zero templates (real
+			// Terraform uses cidrsubnet()/bare traversals rather than
+			// interpolated CIDR strings), and an empty file pollutes the
+			// tree with untracked zero-byte artefacts on local extract
+			// runs. The primary bucket file (suffix "") is written
+			// unconditionally because benchmarks depend on its existence
+			// and the primary file is essentially always populated on a
+			// well-formed corpus.
+			if suffix == "_templates" && len(filtered[bucketName]) == 0 {
+				if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
+					log.Fatal(err)
+				}
+				continue
+			}
+
 			f, err := os.Create(outPath)
 			if err != nil {
 				log.Fatal(err)

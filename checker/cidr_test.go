@@ -608,3 +608,76 @@ resource "aws_vpc" "x" {
 		t.Fatalf("E101 pure-literal branch must be suppressed when E101 is disabled, got: %v", codes(vs))
 	}
 }
+
+// TestE101_InterpolatedPartialOctet_NoFalsePositive verifies that an
+// interpolation mid-octet does not produce a false E101 when the
+// placeholder-substituted composed form happens to be invalid. The
+// user's intent is opaque — '${var.suffix}' in "10.0.0.26${var.suffix}"
+// could reasonably resolve to anything, so we cannot statically decide.
+//
+// Why existing tests missed this: previous coverage placed interpolations
+// only at segment boundaries (between dots, or immediately before a
+// slash), where placeholder substitution is a clean single-segment
+// replacement. Mid-octet interpolations weren't exercised.
+func TestE101_InterpolatedPartialOctet_NoFalsePositive(t *testing.T) {
+	// Composed with placeholder "0" would be "10.0.0.260/24" — invalid,
+	// 260 > 255. But we cannot know the user's intent; must not flag.
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.0.26${var.suffix}/24"
+}
+`,
+	})
+	if hasCode(vs, "E101") {
+		t.Fatalf("expected no E101 (interp mid-octet, opaque intent), got: %v", codes(vs))
+	}
+}
+
+// TestE101_InterpolatedTrailingDigits_NoFalsePositive: interpolation
+// followed by literal digits before the slash — same category as the
+// partial-octet case (interp not adjacent to segment separator).
+func TestE101_InterpolatedTrailingDigits_NoFalsePositive(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.0.${var.prefix}5/24"
+}
+`,
+	})
+	if hasCode(vs, "E101") {
+		t.Fatalf("expected no E101 (interp adjacent to digit '5'), got: %v", codes(vs))
+	}
+}
+
+// TestE101_InterpolatedSegmentBoundary_StillChecked confirms the boundary
+// case still fires: interp between dots, with an invalid literal octet
+// elsewhere in the value, must produce E101.
+func TestE101_InterpolatedSegmentBoundary_StillChecked(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${var.x}.256/24"
+}
+`,
+	})
+	if !hasCode(vs, "E101") {
+		t.Fatalf("expected E101 (256 in literal, interp at segment boundary), got: %v", codes(vs))
+	}
+}
+
+// TestE101_AdjacentInterpolations_Skipped covers two interpolations back
+// to back with no literal separator between them — cannot determine
+// where one segment ends and the next begins.
+func TestE101_AdjacentInterpolations_Skipped(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${var.a}${var.b}.0/24"
+}
+`,
+	})
+	if hasCode(vs, "E101") {
+		t.Fatalf("expected no E101 (adjacent interps), got: %v", codes(vs))
+	}
+}

@@ -92,11 +92,13 @@ const cidrPlaceholderNumeric = "0"
 const cidrPlaceholderDisplay = "<P>"
 
 // checkCIDR runs E101 (and, for interpolation contexts, E009) over a single
-// parsed file, returning one Violation per finding. E009 diagnostics are
-// only emitted when the user has E009 enabled — E101 gates the outer
-// dispatch, so a user with only --checks=E101 sees CIDR format errors
-// (including composed-form errors for templated values) but no scope-root
-// diagnostics.
+// parsed file, returning one Violation per finding. The outer dispatch in
+// Run() invokes checkCIDR when either E101 or E009 is enabled; individual
+// diagnostics are gated by their own check code so:
+//
+//	--checks=E101 alone:   format errors emitted, scope-root suppressed
+//	--checks=E009 alone:   scope-root emitted, format suppressed
+//	--checks=E101,E009:    both emitted (default)
 func checkCIDR(f ParsedFile, checks CheckSet) []Violation {
 	var violations []Violation
 	walkCIDRBlocks(f.Body, f.Name, checks, &violations)
@@ -270,17 +272,26 @@ func validateCIDRTemplate(file string, line int, attrName string, parts []Templa
 // Rationale: an interpolation can substitute a single octet ("10"), or
 // multiple octets ("10.0"), or the whole IP address, or the whole CIDR
 // including prefix. Only when the literal parts commit to the canonical
-// IPv4 octet count is a placeholder substitution meaningful — otherwise
-// the composed form is guessing at the number of segments.
+// IPv4 octet count AND every interpolation sits at a segment boundary is
+// a placeholder substitution meaningful — otherwise the composed form is
+// guessing at the number of segments or fabricating octets from literal
+// digits stitched to placeholder digits.
 //
 // The check requires all of:
 //
 //   - A `/` (CIDR prefix separator) — signals the user has committed to
 //     the CIDR shape with an explicit prefix boundary.
 //   - Exactly 3 dots (`.`) in the literal parts before the `/` — pins the
-//     IPv4 octet count at 4, leaving each interpolation as a single-octet
-//     placeholder. `10.0.${var}.0/24` (3 literal dots) is checked;
-//     `${var}.0.0/16` (2 literal dots — interp could be "10.0") is not.
+//     IPv4 octet count at 4, leaving each interpolation as a single-segment
+//     placeholder.
+//   - Every interpolation is adjacent to `.` or `/` on both sides (or the
+//     start/end of the value). An interpolation with a digit neighbour
+//     (e.g. `"10.0.0.26${var.suffix}/24"`) is mid-octet: composing with
+//     placeholder "0" would produce `"10.0.0.260/24"` which is invalid
+//     as a literal, but semantically opaque because we don't know what
+//     digits the interpolation supplies. Adjacent interpolations
+//     (`"${a}${b}.0.0.0/24"`) are similarly opaque — no literal boundary
+//     between them.
 //
 // IPv6 support is deliberately deferred: the `::` compression rule makes
 // literal-colon-counting ambiguous without a full parse. Templated IPv6
@@ -292,8 +303,37 @@ func cidrHasEnoughShape(parts []TemplatePart) bool {
 	if slashIdx < 0 {
 		return false
 	}
-	ipPart := litSum[:slashIdx]
-	return strings.Count(ipPart, ".") == 3
+	if strings.Count(litSum[:slashIdx], ".") != 3 {
+		return false
+	}
+	// Every interpolation must sit at a segment boundary. `.` and `/`
+	// are the boundary characters for IPv4 CIDR; interpolations at the
+	// very start or very end of the value are also boundary-safe
+	// (nothing on the outside to stitch to).
+	for i, p := range parts {
+		if !p.IsInterp() {
+			continue
+		}
+		if i > 0 {
+			prev := parts[i-1]
+			if prev.IsInterp() {
+				return false
+			}
+			if !strings.HasSuffix(prev.Literal, ".") && !strings.HasSuffix(prev.Literal, "/") {
+				return false
+			}
+		}
+		if i < len(parts)-1 {
+			next := parts[i+1]
+			if next.IsInterp() {
+				return false
+			}
+			if !strings.HasPrefix(next.Literal, ".") && !strings.HasPrefix(next.Literal, "/") {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // cidrViolation packages a Violation for E101. Extracted so the scalar and

@@ -24,6 +24,16 @@ import (
 // out-of-tree consumer could point at their own copy without patching.
 var corpusCIDRPath = filepath.Join("..", "bench", "attr-corpus", "values", "cidr.txt")
 
+// benchE101Only is the explicit CheckSet used by every checkCIDR invocation
+// in this file. Previously the call sites passed a nil CheckSet (which
+// evaluates to "all checks enabled" via CheckSet.Enabled's empty-map
+// shortcut). The behaviours are identical *today* — the E101 corpus has no
+// interpolations, so E009 never fires — but the intent-stability argument
+// stands: a future sub-check added under checkCIDR must not accidentally
+// alter these benchmarks' scope. Explicit is better than implicit for
+// benchmark scaffolding.
+var benchE101Only = CheckSet{"E101": {}}
+
 // loadCorpusCIDRs reads the committed corpus values file and returns the
 // individual CIDR strings, one per line. Empty lines are dropped.
 func loadCorpusCIDRs(tb testing.TB) []string {
@@ -118,7 +128,7 @@ func BenchmarkE101_Corpus(b *testing.B) {
 	for range b.N {
 		var v []Violation
 		for _, f := range files {
-			v = append(v, checkCIDR(f, nil)...)
+			v = append(v, checkCIDR(f, benchE101Only)...)
 		}
 		sink = v
 	}
@@ -220,7 +230,7 @@ func BenchmarkE101_NoTriggers(b *testing.B) {
 			for range b.N {
 				var v []Violation
 				for _, f := range files {
-					v = append(v, checkCIDR(f, nil)...)
+					v = append(v, checkCIDR(f, benchE101Only)...)
 				}
 				sink = v
 			}
@@ -249,7 +259,7 @@ func BenchmarkE101_SparseTriggers(b *testing.B) {
 			for range b.N {
 				var v []Violation
 				for _, f := range files {
-					v = append(v, checkCIDR(f, nil)...)
+					v = append(v, checkCIDR(f, benchE101Only)...)
 				}
 				sink = v
 			}
