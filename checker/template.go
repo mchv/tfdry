@@ -89,9 +89,21 @@ func TryLiteralString(expr hclsyntax.Expression) (string, bool) {
 // should treat nil as "not statically analysable as a string" and skip.
 //
 // Handles both TemplateExpr (the general case, multi-part) and
-// TemplateWrapExpr (the compact case for `"${expr}"`). More exotic
-// template forms (TemplateJoinExpr from `%{for ...}` directives) return
-// nil for now — they can be added when a check needs them.
+// TemplateWrapExpr (the compact case for `"${expr}"`).
+//
+// Templates containing a `%{for ...}...%{endfor}` directive return nil.
+// HCL models these directives with a TemplateJoinExpr part whose semantics
+// (a variable-iteration join of a tuple's values) don't fit the flat
+// literal/interpolation part model — the composed shape depends on the
+// iterated tuple's length, so placeholder substitution would fabricate a
+// value whose validity can't be reasoned about statically.
+//
+// Templates containing a `%{if ...}...%{endif}` directive are, by contrast,
+// modelled with a plain ConditionalExpr part — structurally identical to a
+// regular `${x ? y : z}` interpolation. Since we can't distinguish the two
+// at the AST level, SplitTemplate accepts the ConditionalExpr as an opaque
+// interpolation part; placeholder substitution over it is no worse than
+// over any other value-producing interpolation.
 //
 // A malformed literal part (non-string cty value, HCL diagnostic errors)
 // causes SplitTemplate to return nil for the whole expression. This is
@@ -102,6 +114,13 @@ func TryLiteralString(expr hclsyntax.Expression) (string, bool) {
 func SplitTemplate(expr hclsyntax.Expression) []TemplatePart {
 	switch e := expr.(type) {
 	case *hclsyntax.TemplateExpr:
+		// Reject templates that contain a directive-join (`%{for}` block)
+		// as an early exit before allocating the parts slice.
+		for _, sub := range e.Parts {
+			if _, isJoin := sub.(*hclsyntax.TemplateJoinExpr); isJoin {
+				return nil
+			}
+		}
 		parts := make([]TemplatePart, 0, len(e.Parts))
 		for _, sub := range e.Parts {
 			lit, isLit := sub.(*hclsyntax.LiteralValueExpr)
@@ -119,7 +138,13 @@ func SplitTemplate(expr hclsyntax.Expression) []TemplatePart {
 	case *hclsyntax.TemplateWrapExpr:
 		// `"${expr}"` — the whole string is one interpolation, no literal
 		// parts. HCL emits this compact form as an optimisation over the
-		// equivalent TemplateExpr{Parts: [expr]}.
+		// equivalent TemplateExpr{Parts: [expr]}. Defensive guard for the
+		// (syntactically unusual) case where the wrapped expression is a
+		// TemplateJoinExpr — matches the TemplateExpr rejection above so
+		// the two entry paths stay consistent.
+		if _, isJoin := e.Wrapped.(*hclsyntax.TemplateJoinExpr); isJoin {
+			return nil
+		}
 		return []TemplatePart{{Interp: e.Wrapped}}
 	default:
 		return nil
