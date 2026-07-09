@@ -12,11 +12,16 @@ import (
 
 // ── HCL template splitting ───────────────────────────────────────────────────
 //
-// Terraform string attribute values are always HCL template expressions. A
-// template is a sequence of parts, each of which is either a literal string
-// chunk or an interpolation expression (`${...}`). This file provides
-// SplitTemplate to expose that structure to family checks (E101, future
-// E20x) so they can validate both:
+// Terraform quoted-string attribute values parse as HCL template
+// expressions. A template is a sequence of parts, each of which is either
+// a literal string chunk or an interpolation expression (`${...}`).
+// Non-quoted-string right-hand sides — bare traversals (`cidr_block =
+// var.foo`), function calls, numeric or boolean literals — are not
+// templates and produce a different AST type; SplitTemplate below returns
+// nil for those, so callers can uniformly treat "template result was nil"
+// as "not analysable as a string literal, skip". This file provides
+// SplitTemplate to expose the template structure to family checks (E101,
+// future E20x) so they can validate both:
 //
 //   1. The composed shape after placeholder substitution — a "canonical"
 //      form of the value with every interpolation replaced by a

@@ -105,8 +105,10 @@ func trimTrailingPunct(s string) string {
 // with a boolean indicating whether the expression is a valid literal string.
 // The bool avoids conflating "not a literal" with "literal empty string": a
 // list `[..., ""]` should keep its non-empty elements rather than being
-// dropped entirely on the empty one. HCL strings are always template
-// expressions; a template with a single literal part is a plain string.
+// dropped entirely on the empty one. HCL quoted-string literals parse as
+// template expressions; a template with a single literal part is a plain
+// string. Non-template expressions (bare traversals like `var.foo`, function
+// calls, numeric literals) return ("", false) and are filtered out.
 func extractString(e hclsyntax.Expression) (string, bool) {
 	tpl, ok := e.(*hclsyntax.TemplateExpr)
 	if !ok || len(tpl.Parts) != 1 {
