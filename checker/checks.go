@@ -213,7 +213,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		if checks.Enabled("E006") || checks.Enabled("E007") {
 			violations = append(violations, checkModuleInputs(f, dir, locals, checks, moduleCache)...)
 		}
-		if checks.Enabled("E101") {
+		if checks.Enabled("E101") || checks.Enabled("E009") {
 			violations = append(violations, checkCIDR(f, checks)...)
 		}
 	}
