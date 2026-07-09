@@ -217,3 +217,47 @@ func TestTryLiteralString_NonTemplate_ReturnsFalse(t *testing.T) {
 		})
 	}
 }
+
+// TestSplitTemplate_ForDirective_ReturnsNil verifies that a template
+// containing a %{for ...}...%{endfor} directive is treated as
+// "not analysable" — the resulting AST includes a TemplateJoinExpr
+// whose semantics (variable-iteration join) don't fit the flat
+// literal/interpolation part model.
+//
+// Why existing tests missed this: prior fixtures covered pure literals,
+// pure interpolations, and mixed literal/interp parts, but never
+// exercised a template with a directive part. The AST shape wasn't in
+// the coverage matrix.
+func TestSplitTemplate_ForDirective_ReturnsNil(t *testing.T) {
+	t.Parallel()
+	e := parseExprFromString(t, `"prefix-%{for x in [1, 2]}${x}%{endfor}-suffix"`)
+	if parts := SplitTemplate(e); parts != nil {
+		t.Errorf("SplitTemplate on %%{for} template = %+v, want nil", parts)
+	}
+}
+
+// TestSplitTemplate_IfDirective_StillSplit verifies the flip side:
+// %{if}...%{else}...%{endif} produces a ConditionalExpr in the AST
+// (structurally identical to a normal `${x ? y : z}` conditional), so
+// SplitTemplate handles it as a normal interpolation part.
+//
+// Rationale: we cannot tell a template `%{if}` directive from a normal
+// `${x ? y : z}` interpolation at the AST level — both are
+// ConditionalExpr. Rejecting all ConditionalExpr parts would
+// over-restrict legitimate conditional interpolations, so we accept the
+// %{if} case as an opaque interp. Placeholder substitution over it is
+// no worse than any other conditional-value interp.
+func TestSplitTemplate_IfDirective_StillSplit(t *testing.T) {
+	t.Parallel()
+	e := parseExprFromString(t, `"prefix-%{if x}A%{else}B%{endif}-suffix"`)
+	parts := SplitTemplate(e)
+	if parts == nil {
+		t.Fatalf("SplitTemplate on %%{if} template = nil, want split parts")
+	}
+	if len(parts) != 3 {
+		t.Errorf("len(parts) = %d, want 3", len(parts))
+	}
+	if !parts[1].IsInterp() {
+		t.Errorf("middle part should be interp (ConditionalExpr)")
+	}
+}
