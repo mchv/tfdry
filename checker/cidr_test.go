@@ -548,3 +548,63 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestE009_EnabledAlone_FiresWithoutE101 verifies that a user running with
+// only E009 enabled (--checks=E009) still gets scope-root diagnostics on
+// interpolated CIDR attributes. Existing coverage (TestE009_Disabled_*)
+// tested the E101-alone direction; this test closes the bidirectional
+// gate matrix by exercising the E009-alone direction.
+func TestE009_EnabledAlone_FiresWithoutE101(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${vars.subnet}.0/24"
+}
+`,
+	})
+	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
+	enabled := checker.CheckSet{"E009": {}}
+	vs := slices.Concat(parseViolations, mustRun(context.Background(), parsed, enabled, dir))
+	if !hasCode(vs, "E009") {
+		t.Fatalf("expected E009 with only E009 enabled, got: %v", codes(vs))
+	}
+}
+
+// TestE101_Disabled_NoFormatDiagnostic verifies the flipside: with only
+// E009 enabled and a CIDR value that would normally trigger E101 (invalid
+// literal octet 256), the E101 diagnostic must be suppressed even though
+// checkCIDR runs (because E009 is enabled).
+func TestE101_Disabled_NoFormatDiagnostic(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "10.0.${var.subnet}.256/24"
+}
+`,
+	})
+	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
+	enabled := checker.CheckSet{"E009": {}}
+	vs := slices.Concat(parseViolations, mustRun(context.Background(), parsed, enabled, dir))
+	if hasCode(vs, "E101") {
+		t.Fatalf("E101 must be suppressed when E101 is disabled (only E009 enabled), got: %v", codes(vs))
+	}
+}
+
+// TestE101_Disabled_NoFormatDiagnostic_PureLiteral covers the same
+// suppression for the pure-literal fast path — E101-disabled must not
+// emit format diagnostics on hardcoded invalid CIDRs either.
+func TestE101_Disabled_NoFormatDiagnostic_PureLiteral(t *testing.T) {
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `
+resource "aws_vpc" "x" {
+  cidr_block = "not-a-cidr"
+}
+`,
+	})
+	parsed, parseViolations, _ := checker.ParseDir(context.Background(), dir)
+	enabled := checker.CheckSet{"E009": {}}
+	vs := slices.Concat(parseViolations, mustRun(context.Background(), parsed, enabled, dir))
+	if hasCode(vs, "E101") {
+		t.Fatalf("E101 pure-literal branch must be suppressed when E101 is disabled, got: %v", codes(vs))
+	}
+}

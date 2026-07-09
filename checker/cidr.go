@@ -157,7 +157,9 @@ func walkCIDRBlocks(body *hclsyntax.Body, file string, checks CheckSet, violatio
 // values, which are the minority.
 func checkCIDRScalar(file string, attr *hclsyntax.Attribute, checks CheckSet, violations *[]Violation) {
 	if s, ok := TryLiteralString(attr.Expr); ok {
-		if s == "" {
+		// Fast path: pure literal — only E101 applies (no interpolation
+		// for E009 to check). If E101 is disabled, nothing to do.
+		if !checks.Enabled("E101") || s == "" {
 			return
 		}
 		if err := validateCIDR(s); err != nil {
@@ -188,7 +190,10 @@ func checkCIDRList(file string, attr *hclsyntax.Attribute, checks CheckSet, viol
 	}
 	for _, elem := range tuple.Exprs {
 		if s, ok := TryLiteralString(elem); ok {
-			if s == "" {
+			// Fast path: pure literal element — only E101 applies. If E101
+			// is disabled, skip to the next element (nothing to check on
+			// a pure-literal element for E009).
+			if !checks.Enabled("E101") || s == "" {
 				continue
 			}
 			if err := validateCIDR(s); err != nil {
@@ -221,19 +226,24 @@ func checkCIDRList(file string, attr *hclsyntax.Attribute, checks CheckSet, viol
 // kinds of diagnostics. The two checks answer different questions and
 // their findings are complementary rather than redundant.
 func validateCIDRTemplate(file string, line int, attrName string, parts []TemplatePart, checks CheckSet, violations *[]Violation) {
-	// Format check (E101).
-	if IsAllLiteral(parts) {
-		v := LiteralString(parts)
-		if v != "" {
-			if err := validateCIDR(v); err != nil {
-				*violations = append(*violations, cidrViolation(file, line, attrName, v, err))
+	// Format check (E101). Gated by checks.Enabled so a user running
+	// with --checks=E009 alone (E101 disabled) does not receive format
+	// diagnostics — the walker was entered on their behalf only for the
+	// scope-root pass below.
+	if checks.Enabled("E101") {
+		if IsAllLiteral(parts) {
+			v := LiteralString(parts)
+			if v != "" {
+				if err := validateCIDR(v); err != nil {
+					*violations = append(*violations, cidrViolation(file, line, attrName, v, err))
+				}
 			}
-		}
-	} else if cidrHasEnoughShape(parts) {
-		composed := Compose(parts, cidrPlaceholderNumeric)
-		if err := validateCIDR(composed); err != nil {
-			display := Compose(parts, cidrPlaceholderDisplay)
-			*violations = append(*violations, cidrViolation(file, line, attrName, display, err))
+		} else if cidrHasEnoughShape(parts) {
+			composed := Compose(parts, cidrPlaceholderNumeric)
+			if err := validateCIDR(composed); err != nil {
+				display := Compose(parts, cidrPlaceholderDisplay)
+				*violations = append(*violations, cidrViolation(file, line, attrName, display, err))
+			}
 		}
 	}
 
