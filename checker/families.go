@@ -61,9 +61,15 @@ var allFamiliesList = []Family{
 		Name:        "Network",
 		Description: "Protocol-level literals — CIDR blocks (IPv4/IPv6), IP addresses, port ranges, protocol names. Applies across all cloud providers.",
 	},
-	// E200 (AWS), E400 (GCP), E600 (Azure), E800 (Kubernetes) are reserved
-	// by the range scheme but not yet materialised as Family entries.
-	// Add them when their first concrete check lands.
+	{
+		Code:        "E200",
+		Severity:    "error",
+		Name:        "AWS",
+		Description: "AWS-specific literals — region codes, 12-digit account IDs, ARN grammar (across the aws, aws-us-gov, and aws-cn partitions). Provider-specific checks that catch AWS reference typos without requiring provider gRPC.",
+	},
+	// E400 (GCP), E600 (Azure), E800 (Kubernetes) are reserved by the
+	// range scheme but not yet materialised as Family entries. Add them
+	// when their first concrete check lands.
 }
 
 // reservedFamilyHeaders lists family header codes that are documented in the
@@ -85,7 +91,6 @@ var allFamiliesList = []Family{
 // so a user typing --checks=E900 correctly gets the generic "unknown
 // code" message until a family stakes that range.
 var reservedFamilyHeaders = []string{
-	"E200", // AWS
 	"E400", // GCP
 	"E600", // Azure
 	"E800", // Kubernetes / container

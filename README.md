@@ -30,10 +30,11 @@ pre-commit hooks, CI pipelines, and editor integrations.
   (more on smaller ones). The speedup persists with `terraform init`
   already warmed — it's the provider-load round-trip we skip, not just
   the network.
-- **Focused.** Nine deterministic lint checks (E001–E008 + W001) — HCL
+- **Focused.** Fourteen deterministic lint checks (E001–E009 + E101 + E201–E203 + W001) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
-  and `terraform fmt`-parity formatting. Plus the special `E000`
+  `terraform fmt`-parity formatting, CIDR block validation, and AWS
+  region / account ID / ARN grammar. Plus the special `E000`
   tool-error code for unreadable files, oversize input, and write
   failures (routed to exit `2`, not `--checks=`-toggleable). No
   opinionated style nags.
@@ -136,6 +137,11 @@ exit code).
 | E006  | error    | Module input type mismatch (relative-path modules only — remote modules aren't fetched). |
 | E007  | error    | Unknown input key for a relative-path module. |
 | E008  | error    | File is not formatted (`terraform fmt` parity, auto-fixable with `--fix`). |
+| E009  | error    | Invalid Terraform scope root in expression (e.g. `${vars.foo}` — did you mean `${var.foo}`?). |
+| E101  | error    | Invalid CIDR block literal (IPv4 / IPv6, with interpolation-aware placeholder composition). |
+| E201  | error    | Invalid AWS region — attribute value is not a recognised region across aws, aws-us-gov, or aws-cn partitions. |
+| E202  | error    | Invalid AWS account ID — value is not a 12-digit string on an `account_id` attribute. |
+| E203  | error    | Invalid AWS ARN — grammar violation on an `*_arn` or `*_arns` attribute (bad prefix, unknown partition, malformed structure, empty resource). |
 | W001  | warning  | Local defined but never referenced. |
 
 ### Tool-error code
@@ -195,7 +201,7 @@ The `describe` subcommand prints the check table to stdout (or JSON with `--json
 | Code  | Meaning |
 |-------|---------|
 | `0`   | No violations (or all violations fixed by `--fix`). |
-| `1`   | One or more lint violations found (E001–E008, excluding E000). |
+| `1`   | One or more lint violations found (E001–E203, W001; excluding E000). |
 | `2`   | Tool error: bad arguments, unreadable directory, oversize file, write failure during `--fix`. **E000 violations route here, taking precedence over exit 1 when both are present** — the tool couldn't run cleanly on all input, so the loud signal is more useful than the routine "lint found issues" code. |
 | `3`   | `tfdry fmt -check` found unformatted files. |
 | `130` | Interrupted by SIGINT / SIGTERM, or a context deadline expired. |

@@ -124,7 +124,7 @@ func handleFatalErr(err error, stderr io.Writer, prefix string) (int, bool) {
 // errors/diagnostics to stderr. Returns the exit code:
 //   - 0 = clean (no violations found, or all fixed)
 //   - 1 = one or more lint violations found by the lint pass
-//     (E001-E008, excluding E000 — see exit 2)
+//     (E001-E203, excluding E000 — see exit 2)
 //   - 2 = tool error — covers usage mistakes (unknown flags, misplaced
 //     subcommand args), I/O failures (unreadable directories, oversize
 //     files, write failures during --fix or fmt), stdout broken-pipe /

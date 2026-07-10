@@ -1964,21 +1964,24 @@ func TestValidateCheckCodes_MaterialisedFamilyHeader(t *testing.T) {
 	}
 }
 
-// A user typing --checks=E200 (reserved header, no checks yet) must get a
-// message reflecting the "reserved but empty" state — no fake example
-// invented, no misleading family name attached.
+// A user typing --checks=E400 (reserved header for GCP, no checks yet) must
+// get a message reflecting the "reserved but empty" state — no fake example
+// invented, no misleading family name attached. Uses E400 rather than E200
+// because E200 was materialised as the AWS family header once E201-E203
+// landed; the reserved-but-empty path still applies to E400 (GCP), E600
+// (Azure), and E800 (Kubernetes).
 func TestValidateCheckCodes_ReservedFamilyHeader(t *testing.T) {
 	t.Parallel()
-	err := checker.ValidateCheckCodes([]string{"E200"})
+	err := checker.ValidateCheckCodes([]string{"E400"})
 	if err == nil {
-		t.Fatal("expected error for reserved family header E200")
+		t.Fatal("expected error for reserved family header E400")
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "reserved family header") {
 		t.Errorf("expected 'reserved family header' in error, got: %s", msg)
 	}
 	// The reserved case must not fabricate an example — there is no
-	// registered check in the E200 range yet.
+	// registered check in the E400 range yet.
 	if strings.Contains(msg, "e.g.") {
 		t.Errorf("reserved header should not include 'e.g.' example, got: %s", msg)
 	}
