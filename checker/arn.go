@@ -83,17 +83,22 @@ const arnTriggerSuffix = "_arn"
 // attributes: `policy_arns`, `managed_policy_arns`, `subject_alternative_arns`.
 const arnListTriggerSuffix = "_arns"
 
-// arnMinLength is the shortest possible well-formed ARN. Even the most
-// minimal valid ARN (S3 bucket ARN: `arn:aws:s3:::b`) requires 14 bytes.
-// Anything shorter cannot possibly parse; used as a fast-reject filter.
-const arnMinLength = len("arn:aws:s3:::b")
+// arnMinLength is the shortest possible well-formed ARN. Computed from
+// the minimum-length wildcard form `arn:*:*:::*` (11 bytes) — partition
+// and service each 1-char wildcard, empty region and account, 1-char
+// resource. Anything shorter cannot possibly parse; used as a fast-reject
+// filter. The concrete-partition minimum is 14 bytes (`arn:aws:s3:::b`);
+// bounding on the shorter wildcard form is required to avoid falsely
+// rejecting valid `arn:*:*:*:*:*` policy patterns before wildcard handling
+// gets a chance to accept them.
+const arnMinLength = len("arn:*:*:::*")
 
 // arnWildcard is the AWS-standard wildcard character permitted in the
-// service, region, and account fields of an ARN. Policy documents in
-// particular routinely use wildcards (`arn:aws:s3:::*`, `arn:aws:*:*:*`),
-// so accepting `*` in these positions is required to match AWS's actual
-// grammar rather than a hypothetically strict one. Partition remains
-// strict — the three partitions are exact identifiers, never wildcarded.
+// partition, service, region, and account fields of an ARN. Policy
+// documents in particular routinely use wildcards
+// (`arn:aws:s3:::*`, `arn:aws:*:*:*`, `arn:*:*:*:*:*`), so accepting `*`
+// in these positions is required to match AWS's actual grammar rather
+// than a hypothetically strict one.
 const arnWildcard = "*"
 
 // checkARN runs E203 over a single parsed file, returning one Violation
@@ -216,11 +221,14 @@ func checkARNList(file string, attr *hclsyntax.Attribute, violations *[]Violatio
 // are substring slices (zero-copy string headers), no map allocations
 // beyond the pre-existing package-level partitions/regions maps.
 func validateARN(s string) string {
-	if len(s) < arnMinLength {
-		return "too short to be an ARN"
-	}
+	// Prefix check first — a non-`arn:` value gets a more actionable
+	// diagnostic than a length-based one, even for short inputs like
+	// "xyz" or "not-an-arn".
 	if !strings.HasPrefix(s, "arn:") {
 		return "must start with \"arn:\""
+	}
+	if len(s) < arnMinLength {
+		return "too short to be an ARN"
 	}
 
 	// Parse 5 fields after "arn:". Fields[0..3] are partition, service,
@@ -291,9 +299,10 @@ func validateARNFields(fields [5]string, permissive bool) string {
 	account := fields[3]
 	resource := fields[4]
 
-	// Partition — must be one of the three known partitions unless
-	// interpolated.
-	if !fieldInterpolated(partition, permissive) {
+	// Partition — must be one of the three known partitions, or the
+	// wildcard `*` (permitted by AWS's policy grammar in resource ARN
+	// patterns like `arn:*:*:*:*:*` and `arn:*:s3:::*`).
+	if !fieldInterpolated(partition, permissive) && partition != arnWildcard {
 		if _, ok := awsPartitions[partition]; !ok {
 			return "invalid partition \"" + partition + "\""
 		}

@@ -13,6 +13,42 @@ import (
 
 // ── E201: AWS region validation ─────────────────────────────────────────────
 
+// TestE201_ExtremelyLongInput_Rejected verifies inputs far outside the
+// valid AWS region length range are rejected efficiently by the length
+// filter before hitting the map lookup. Regression guard for the
+// length-filter fast-reject claim in the region.go docstring.
+func TestE201_ExtremelyLongInput_Rejected(t *testing.T) {
+	// Longest valid region is 14 chars ("ap-northeast-3", "cn-northwest-1").
+	// This input is 40 chars — should never match.
+	longInput := "us-east-1-with-a-really-long-suffix-abcd"
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "aws" {
+  region = "` + longInput + `"
+}
+`,
+	})
+	if !hasCode(vs, "E201") {
+		t.Fatalf("expected E201 for extremely long input, got: %v", codes(vs))
+	}
+}
+
+// TestE201_ExtremelyShortInput_Rejected verifies inputs below the min
+// valid region length are rejected efficiently. Shortest valid region
+// is 9 chars (us-east-1, us-west-1, etc.).
+func TestE201_ExtremelyShortInput_Rejected(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "aws" {
+  region = "us"
+}
+`,
+	})
+	if !hasCode(vs, "E201") {
+		t.Fatalf("expected E201 for 2-char input, got: %v", codes(vs))
+	}
+}
+
 // TestE201_ValidStandardRegion_NoViolation verifies a well-known commercial
 // region parses cleanly.
 func TestE201_ValidStandardRegion_NoViolation(t *testing.T) {

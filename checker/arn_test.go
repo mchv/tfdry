@@ -13,6 +13,34 @@ import (
 
 // ── E203: AWS ARN validation ────────────────────────────────────────────────
 
+// TestE203_WildcardPartition_NoViolation verifies that `*` in the
+// partition field is accepted — a valid pattern in IAM policy resource
+// expressions like `arn:*:*:*:*:*` and `arn:*:s3:::*`. Partition being
+// exact-match-only would produce false positives on legitimate policy
+// wildcard patterns.
+func TestE203_WildcardPartition_NoViolation(t *testing.T) {
+	cases := []string{
+		"arn:*:*:*:*:*",        // full wildcard
+		"arn:*:s3:::my-bucket", // partition wildcard, rest concrete
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{
+				"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "` + tc + `"
+}
+`,
+			})
+			if hasCode(vs, "E203") {
+				t.Fatalf("wildcard partition %q should not fire E203, got: %v", tc, codes(vs))
+			}
+		})
+	}
+}
+
 // TestE203_ValidCommercialARN_NoViolation verifies a well-formed ARN in the
 // commercial (aws) partition passes cleanly.
 func TestE203_ValidCommercialARN_NoViolation(t *testing.T) {
