@@ -41,6 +41,56 @@ resource "aws_iam_role_policy_attachment" "x" {
 	}
 }
 
+// TestE203_ISOPartition_NoViolation verifies ARNs in the four official
+// AWS ISO partitions (aws-iso, aws-iso-b, aws-iso-e, aws-iso-f) are
+// accepted. These are used in air-gapped classified environments (CIA,
+// SC2S, and NATO-partner MODs). Their region names are not publicly
+// enumerable in a stable form, so validateARNFields skips strict region
+// validation when the partition is an ISO partition — a legitimate
+// ISO ARN like `arn:aws-iso:s3:us-iso-east-1:...` must not false-positive.
+func TestE203_ISOPartition_NoViolation(t *testing.T) {
+	cases := []string{
+		"arn:aws-iso:s3:us-iso-east-1:111111111111:my-bucket",
+		"arn:aws-iso:iam::111111111111:role/admin",
+		"arn:aws-iso-b:s3:us-isob-east-1:111111111111:my-bucket",
+		"arn:aws-iso-e:s3:eu-isoe-west-1:111111111111:my-bucket",
+		"arn:aws-iso-f:iam::111111111111:role/admin",
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{
+				"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "` + tc + `"
+}
+`,
+			})
+			if hasCode(vs, "E203") {
+				t.Fatalf("ISO ARN %q should not fire E203, got: %v", tc, codes(vs))
+			}
+		})
+	}
+}
+
+// TestE203_ISORegionInCommercialPartition_Violation verifies that the
+// ISO-region skip is scoped to ISO partitions — an ISO region code
+// appearing in a commercial-partition ARN is still flagged. Regression
+// guard for over-permissive region skipping.
+func TestE203_ISORegionInCommercialPartition_Violation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "arn:aws:s3:us-iso-east-1:111111111111:my-bucket"
+}
+`,
+	})
+	if !hasCode(vs, "E203") {
+		t.Fatalf("ISO region in commercial partition should fire E203, got: %v", codes(vs))
+	}
+}
+
 // TestE203_ValidCommercialARN_NoViolation verifies a well-formed ARN in the
 // commercial (aws) partition passes cleanly.
 func TestE203_ValidCommercialARN_NoViolation(t *testing.T) {

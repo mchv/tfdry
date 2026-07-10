@@ -16,9 +16,13 @@ import (
 //	arn:PARTITION:SERVICE:REGION:ACCOUNT:RESOURCE
 //
 // Fields:
-//   - PARTITION   one of the three AWS partitions (aws, aws-us-gov, aws-cn)
+//   - PARTITION   one of the AWS partitions (aws, aws-us-gov, aws-cn,
+//                 aws-iso, aws-iso-b, aws-iso-e, aws-iso-f) or `*`
 //   - SERVICE     lowercase service identifier (iam, s3, ec2, lambda, ...)
-//   - REGION      an AWS region code, or empty for global services (IAM, S3)
+//   - REGION      an AWS region code, or empty for global services (IAM, S3).
+//                 Strict region validation is skipped when the partition
+//                 is an ISO partition — those region sets are not publicly
+//                 enumerable in a stable form.
 //   - ACCOUNT     a 12-digit account ID, empty, or the sentinel "aws" for
 //                 AWS-managed IAM policies (arn:aws:iam::aws:policy/...)
 //   - RESOURCE    everything after the 5th colon — service-specific,
@@ -52,13 +56,40 @@ import (
 //   - Fixed-size [5]string array for field boundaries — stack-allocated.
 //   - Fields extracted via substring slicing (zero-copy string headers).
 
-// awsPartitions enumerates the three AWS partitions. Locked list — new
-// partitions have not been added since aws-cn in 2013; adding one requires
-// a documented AWS announcement.
+// awsPartitions enumerates the AWS partitions. The three commercial-style
+// partitions (aws, aws-us-gov, aws-cn) are documented in AWS's
+// Fault Isolation Boundaries whitepaper. The four ISO partitions
+// (aws-iso, aws-iso-b, aws-iso-e, aws-iso-f) are used in air-gapped
+// classified environments (CIA, SC2S, NATO-partner MODs); they're
+// documented in the AWS Go/Java SDKs and the terraform-provider-aws
+// issue tracker (hashicorp/terraform-provider-aws#18593). Legitimate
+// ISO ARNs must not false-positive on the partition field.
+//
+// Locked list — new partitions have not been added since aws-iso-f;
+// adding one requires a documented AWS announcement.
 var awsPartitions = map[string]struct{}{
+	// Commercial / GovCloud / China
 	"aws":        {}, // commercial
 	"aws-us-gov": {}, // GovCloud
-	"aws-cn":     {}, // China
+	"aws-cn":     {}, // China (Sinnet + NWCD)
+	// ISO (classified environments — regions are not publicly enumerable
+	// in a stable form, so validateARNFields skips strict region
+	// validation when the partition is one of these)
+	"aws-iso":   {}, // C2S — US TS
+	"aws-iso-b": {}, // SC2S — US SCI
+	"aws-iso-e": {}, // ISOE — EU classified
+	"aws-iso-f": {}, // ISOF — UK / NATO partner classified
+}
+
+// isISOPartition reports whether partition is one of the four ISO
+// partitions. Called from validateARNFields to relax the region check
+// (the ISO region set is not publicly enumerable in a stable form).
+func isISOPartition(partition string) bool {
+	switch partition {
+	case "aws-iso", "aws-iso-b", "aws-iso-e", "aws-iso-f":
+		return true
+	}
+	return false
 }
 
 // arnPlaceholder is the sentinel value used to mark interpolation positions
@@ -320,9 +351,13 @@ func validateARNFields(fields [5]string, permissive bool) string {
 		}
 	}
 
-	// Region — empty (global services), the wildcard `*`, or a known AWS
-	// region. The wildcard is used in resource ARN patterns.
-	if !fieldInterpolated(region, permissive) && region != "" && region != arnWildcard {
+	// Region — empty (global services), the wildcard `*`, a known AWS
+	// region, OR any value when the partition is an ISO partition (the
+	// ISO region set is not publicly enumerable). The wildcard case
+	// covers resource ARN patterns; the ISO case prevents false
+	// positives on legitimate air-gapped-environment ARNs.
+	partitionIsISO := isISOPartition(partition)
+	if !fieldInterpolated(region, permissive) && region != "" && region != arnWildcard && !partitionIsISO {
 		if !validateRegion(region) {
 			return "invalid region \"" + region + "\""
 		}
