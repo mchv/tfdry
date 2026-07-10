@@ -201,7 +201,7 @@ The `describe` subcommand prints the check table to stdout (or JSON with `--json
 | Code  | Meaning |
 |-------|---------|
 | `0`   | No violations (or all violations fixed by `--fix`). |
-| `1`   | One or more lint violations found (E001–E203, W001; excluding E000). |
+| `1`   | One or more lint error violations found (E001–E203; excluding E000). Warnings (W001) do not affect the exit code. |
 | `2`   | Tool error: bad arguments, unreadable directory, oversize file, write failure during `--fix`. **E000 violations route here, taking precedence over exit 1 when both are present** — the tool couldn't run cleanly on all input, so the loud signal is more useful than the routine "lint found issues" code. |
 | `3`   | `tfdry fmt -check` found unformatted files. |
 | `130` | Interrupted by SIGINT / SIGTERM, or a context deadline expired. |

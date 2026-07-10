@@ -155,16 +155,30 @@ func checkRegionScalar(file string, attr *hclsyntax.Attribute, violations *[]Vio
 	*violations = append(*violations, regionViolation(file, attr.Expr.Range().Start.Line, attr.Name, s))
 }
 
-// validateRegion reports whether s is a known AWS region code. Exported-style
-// (unexported for now) helper for callers that want the raw validation
-// primitive without a Violation wrapper — kept for use in benchmarks and
-// potentially the ARN region-field check.
+// Region length bounds. Enforced up front by validateRegion so grossly
+// out-of-range inputs (a full URL, a paragraph of text, an empty string
+// that slipped past the caller filter) short-circuit before hitting the
+// map lookup's hash + compare. Computed from the current awsRegions set:
 //
-// Zero-alloc: one map lookup, no intermediate allocations. The empty string
-// is treated as "not a region" (unlike checkRegionScalar which treats it
-// as "silently skip"); callers with the "skip empty" policy should filter
-// upstream.
+//   - Min: 9 bytes  ("us-east-1", "us-west-1", "eu-west-1", "sa-east-1")
+//   - Max: 14 bytes ("ap-northeast-3", "ap-southeast-4", "cn-northwest-1")
+//
+// A new AWS region with a shorter or longer code would require updating
+// these bounds; the awsRegions comment references the same documentation
+// URL that would introduce such a region.
+const (
+	regionMinLength = 9
+	regionMaxLength = 14
+)
+
+// validateRegion reports whether s is a known AWS region code. Fast path:
+// a length filter shortcuts out-of-range inputs in a single comparison
+// before the map lookup runs (hash + key compare on Go maps costs several
+// ns even for miss lookups). Zero-alloc.
 func validateRegion(s string) bool {
+	if len(s) < regionMinLength || len(s) > regionMaxLength {
+		return false
+	}
 	_, ok := awsRegions[s]
 	return ok
 }
