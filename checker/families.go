@@ -65,7 +65,7 @@ var allFamiliesList = []Family{
 		Code:        "E200",
 		Severity:    "error",
 		Name:        "AWS",
-		Description: "AWS-specific literals — region codes, 12-digit account IDs, ARN grammar (across the aws, aws-us-gov, and aws-cn partitions). Provider-specific checks that catch AWS reference typos without requiring provider gRPC.",
+		Description: "AWS-specific literals — region codes, 12-digit account IDs, ARN grammar (across the aws, aws-us-gov, aws-cn, aws-iso, aws-iso-b, aws-iso-e, and aws-iso-f partitions). Provider-specific checks that catch AWS reference typos without requiring provider gRPC.",
 	},
 	// E400 (GCP), E600 (Azure), E800 (Kubernetes) are reserved by the
 	// range scheme but not yet materialised as Family entries. Add them
