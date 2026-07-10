@@ -143,13 +143,16 @@ func walkRegionBlocks(body *hclsyntax.Body, file string, violations *[]Violation
 //
 // Fast path: pure-literal values (the overwhelming majority of hardcoded
 // regions) go through TryLiteralString and validateRegion directly, without
-// allocating any []TemplatePart slice.
+// allocating any []TemplatePart slice. Using validateRegion (rather than
+// a direct awsRegions map lookup) keeps the length-filter fast-reject
+// on the E201 hot path — a single consolidated validation entry-point
+// per the DRY principle.
 func checkRegionScalar(file string, attr *hclsyntax.Attribute, violations *[]Violation) {
 	s, ok := TryLiteralString(attr.Expr)
 	if !ok || s == "" {
 		return
 	}
-	if _, valid := awsRegions[s]; valid {
+	if validateRegion(s) {
 		return
 	}
 	*violations = append(*violations, regionViolation(file, attr.Expr.Range().Start.Line, attr.Name, s))
