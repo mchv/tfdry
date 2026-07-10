@@ -199,7 +199,20 @@ func LiteralString(parts []TemplatePart) string {
 // satisfies its grammar in the relevant field positions (a digit for
 // numeric fields, a sentinel for opaque resource paths, etc.).
 func Compose(parts []TemplatePart, placeholder string) string {
+	// Pre-size the builder to the exact composed length. strings.Builder
+	// otherwise grows by doubling (8 → 16 → 32 → ... 4 allocs for a
+	// 60-byte ARN); one Grow call up front cuts that to a single
+	// allocation of the correct size.
+	var n int
+	for _, p := range parts {
+		if p.IsInterp() {
+			n += len(placeholder)
+			continue
+		}
+		n += len(p.Literal)
+	}
 	var b strings.Builder
+	b.Grow(n)
 	for _, p := range parts {
 		if p.IsInterp() {
 			b.WriteString(placeholder)
