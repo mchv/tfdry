@@ -19,8 +19,11 @@ import (
 //   ${locals.foo}     — typo, should be ${local.foo}
 //   ${datas.aws.foo}  — typo, should be ${data.aws.foo}
 //
-// This file provides ValidateScopeRoot to catch such typos in interpolation
-// expressions, complementing the family-grammar checks (E101, future E20x).
+// This file provides ValidateScopeRoot to catch such typos on any
+// scope traversal — whether it appears bare on the RHS of an
+// attribute (`bucket = vars.name`) or inside a template interpolation
+// (`"prefix-${vars.env}"`) — complementing the family-grammar checks
+// (E101, future E20x).
 
 // tfScopeRoots is the enumerated list of fixed Terraform top-level scope root
 // names in reference expressions. Sourced from the Terraform language
@@ -103,9 +106,10 @@ var scopeRootTypo = map[string]string{
 }
 
 // ScopeRootDiag describes a scope-root validation failure — the root
-// identifier of an interpolation is neither a fixed Terraform scope root
-// nor a resource-type identifier per convention. Carries an optional
-// suggested correction when the typo matches a known pattern.
+// identifier of a scope traversal is neither a fixed Terraform scope root,
+// a dynamic-block iterator in current scope, nor a resource-type identifier
+// per convention. Carries an optional suggested correction when the typo
+// matches a known pattern.
 type ScopeRootDiag struct {
 	Range hcl.Range // source range of the offending root identifier
 	Root  string    // the unrecognised identifier

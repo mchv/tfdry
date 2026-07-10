@@ -31,7 +31,7 @@ import (
 // via the checker/template.go subsystem — the composed form (with each
 // ${...} replaced by a "0" placeholder) is validated as a CIDR when the
 // literal parts carry enough shape information to be meaningful. E009
-// (invalid scope root in interpolation) is emitted independently from
+// (invalid Terraform scope root) is emitted independently from
 // walkExpressions in checks.go, which threads dynamic-block iterator
 // scope through the traversal; this file no longer emits E009 itself.
 // See #23 for the model discussion.
@@ -95,9 +95,10 @@ const cidrPlaceholderDisplay = "<P>"
 
 // checkCIDR runs E101 over a single parsed file, returning one Violation
 // per finding. The outer dispatch in Run() invokes checkCIDR only when
-// E101 is enabled — E009 (scope-root validation in interpolations) is
-// emitted separately from walkExpressions in checks.go, which handles
-// the general expression walk and dynamic-block iterator scope tracking.
+// E101 is enabled — E009 (scope-root validation on any traversal, whether
+// bare or inside a template interpolation) is emitted separately from
+// walkExpressions in checks.go, which handles the general expression
+// walk and dynamic-block iterator scope tracking.
 func checkCIDR(f ParsedFile, checks CheckSet) []Violation {
 	var violations []Violation
 	walkCIDRBlocks(f.Body, f.Name, checks, &violations)
@@ -217,7 +218,8 @@ func checkCIDRList(file string, attr *hclsyntax.Attribute, checks CheckSet, viol
 // shape information to make the check meaningful (see cidrHasEnoughShape).
 // Emits E101 on format failure.
 //
-// Scope-root validation (E009) for the interpolations is not done here —
+// Scope-root validation (E009) for any traversals — including the ones
+// appearing as this template's interpolation parts — is not done here.
 // walkExpressions in checks.go handles it as part of the general
 // expression walk, with dynamic-block iterator scope tracking.
 func validateCIDRTemplate(file string, line int, attrName string, parts []TemplatePart, checks CheckSet, violations *[]Violation) {
