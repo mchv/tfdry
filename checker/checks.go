@@ -167,10 +167,12 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		walkExpressions(f.Body, nil, func(expr hclsyntax.Expression, iterators map[string]struct{}) {
 			switch e := expr.(type) {
 			case *hclsyntax.ScopeTraversalExpr:
-				// E009: invalid Terraform scope root in interpolation.
-				// Runs on every ScopeTraversalExpr so scope-root typos are
-				// caught in any attribute (not just CIDR-triggering ones).
-				// Iterators map carries dynamic-block-content scope.
+				// E009: invalid Terraform scope root. Runs on every
+				// ScopeTraversalExpr — bare traversals (`bucket = vars.name`)
+				// as well as interpolated ones (`"prefix-${vars.env}"`) —
+				// so scope-root typos are caught in any attribute, not
+				// just CIDR-triggering ones. Iterators map carries
+				// dynamic-block-content scope from the enclosing walker.
 				if checks.Enabled("E009") {
 					if diag := ValidateScopeRoot(e, iterators); diag != nil {
 						violations = append(violations, scopeRootViolation(f.Name, diag))
