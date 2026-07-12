@@ -91,6 +91,83 @@ resource "aws_iam_role_policy_attachment" "x" {
 	}
 }
 
+// TestE203_ISORegionInInterpolatedPartition_NoViolation verifies that
+// when the partition is interpolated (composed placeholder = "<INTERP>")
+// and the region is a literal ISO region code, E203 does NOT fire. This
+// covers a real ISO-user pattern:
+//
+//	policy_arn = "arn:${var.partition}:s3:us-iso-east-1:...:..."
+//
+// The partition can't be validated statically, and the region shape
+// (matching an ISO region prefix) signals we're in an ISO-target
+// deployment where the region set isn't publicly enumerable.
+//
+// The rule is prefix-scoped rather than "skip whenever partition is
+// unknown" so that commercial-region typos in interpolated-partition
+// templates are still caught — see the sibling
+// TestE203_CommercialRegionInInterpolatedPartition_Violation.
+func TestE203_ISORegionInInterpolatedPartition_NoViolation(t *testing.T) {
+	cases := []struct{ name, arn string }{
+		{"us-iso", `arn:${var.partition}:s3:us-iso-east-1:111111111111:my-bucket`},
+		{"us-isob", `arn:${var.partition}:s3:us-isob-east-1:111111111111:my-bucket`},
+		{"eu-isoe", `arn:${var.partition}:s3:eu-isoe-west-1:111111111111:my-bucket`},
+		{"us-isof", `arn:${var.partition}:s3:us-isof-south-1:111111111111:my-bucket`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{
+				"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "` + tc.arn + `"
+}
+`,
+			})
+			if hasCode(vs, "E203") {
+				t.Fatalf("ISO region in interpolated partition (%s) should not fire E203, got: %v", tc.name, codes(vs))
+			}
+		})
+	}
+}
+
+// TestE203_WildcardPartitionISORegion_NoViolation is the wildcard-shape
+// counterpart to TestE203_ISORegionInInterpolatedPartition_NoViolation.
+// AWS IAM policy grammar routinely uses `arn:*:...`, and if the region
+// slot in that pattern is an ISO code the check must not fire.
+func TestE203_WildcardPartitionISORegion_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "arn:*:s3:us-iso-east-1:111111111111:my-bucket"
+}
+`,
+	})
+	if hasCode(vs, "E203") {
+		t.Fatalf("wildcard partition with ISO region should not fire E203, got: %v", codes(vs))
+	}
+}
+
+// TestE203_CommercialRegionInInterpolatedPartition_Violation guards the
+// (B) design choice from round 3: an *invalid* region (typo, not an ISO
+// prefix) inside an interpolated-partition template still fires E203.
+// Under approach (A) — "skip region validation whenever partition is
+// unknown" — this typo would silently pass. Approach (B) uses
+// isISORegion() to scope the skip to ISO-shaped region codes only,
+// preserving commercial-region typo detection.
+func TestE203_CommercialRegionInInterpolatedPartition_Violation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "arn:${var.partition}:s3:us-east-11:111111111111:my-bucket"
+}
+`,
+	})
+	if !hasCode(vs, "E203") {
+		t.Fatalf("commercial-region typo in interpolated-partition template should fire E203, got: %v", codes(vs))
+	}
+}
+
 // TestE203_ValidCommercialARN_NoViolation verifies a well-formed ARN in the
 // commercial (aws) partition passes cleanly.
 func TestE203_ValidCommercialARN_NoViolation(t *testing.T) {
@@ -388,6 +465,27 @@ resource "aws_iam_role_policy_attachment" "x" {
 	})
 	if hasCode(vs, "E203") {
 		t.Fatalf("mid-field interpolation should be skipped, got: %v", codes(vs))
+	}
+}
+
+// TestE203_TemplatedEmptyResource_Violation verifies that a literally empty
+// resource field in a template still fires E203, even when other fields
+// contain interpolations. Rationale: Compose() replaces every
+// interpolation with a non-empty placeholder ("<INTERP>"), so an empty
+// composed resource field can only come from a literal `:::` at the tail
+// of the template. That's always a malformed ARN — there's no such
+// thing as a valid ARN with an empty resource field, so permissive mode
+// should NOT skip it.
+func TestE203_TemplatedEmptyResource_Violation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "arn:${var.partition}:s3:::"
+}
+`,
+	})
+	if !hasCode(vs, "E203") {
+		t.Fatalf("templated ARN with literally empty resource should fire E203, got: %v", codes(vs))
 	}
 }
 
