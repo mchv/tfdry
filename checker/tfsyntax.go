@@ -4,6 +4,8 @@
 package checker
 
 import (
+	"strings"
+
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
@@ -181,4 +183,37 @@ func scopeRootViolation(file string, diag *ScopeRootDiag) Violation {
 		Line:     diag.Range.Start.Line,
 		Message:  msg,
 	}
+}
+
+// isAWSBlock reports whether a top-level block (provider / resource /
+// data) carries AWS applicability — i.e. attributes inside it can be
+// assumed to reference AWS grammar (region codes, account IDs) by
+// default. Used by the AWS-family checks (E201, E202) to gate their
+// validation so they don't false-positive on cross-provider generic
+// attribute names.
+//
+// Rules:
+//
+//   - provider "aws"           → true
+//   - provider "OTHER"         → false (google, google-beta, cloudflare, azurerm, ...)
+//   - resource "aws_*" "..."   → true
+//   - resource "OTHER_*" "..." → false
+//   - data "aws_*" "..."       → true
+//   - data "OTHER_*" "..."     → false
+//   - anything else            → false
+//
+// Nested blocks inside a resource/data body (e.g. `destination { ... }`)
+// are handled by the caller, which inherits the parent block's AWS
+// context when recursing.
+func isAWSBlock(blockType string, labels []string) bool {
+	if len(labels) == 0 {
+		return false
+	}
+	switch blockType {
+	case "provider":
+		return labels[0] == "aws"
+	case "resource", "data":
+		return strings.HasPrefix(labels[0], "aws_")
+	}
+	return false
 }

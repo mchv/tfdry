@@ -248,3 +248,140 @@ resource "aws_s3_bucket_replication_configuration" "x" {
 		t.Fatalf("expected E201 on nested-block region, got: %v", codes(vs))
 	}
 }
+
+// ── AWS applicability gating (round 4 redesign) ─────────────────────────────
+
+// TestE201_GoogleProviderRegion_NoViolation verifies that a `region`
+// attribute inside `provider "google"` does NOT fire E201. `region` is
+// generic across cloud providers (GCP, DigitalOcean, Cloudflare Workers,
+// etc.), and a default-error finding on non-AWS Terraform configurations
+// would violate the "default errors must be highly certain" contract.
+// AWS applicability must be established before validating the value.
+func TestE201_GoogleProviderRegion_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "google" {
+  region = "us-central1"
+}
+`,
+	})
+	if hasCode(vs, "E201") {
+		t.Fatalf("GCP provider region should not fire E201, got: %v", codes(vs))
+	}
+}
+
+// TestE201_GoogleBetaProviderRegion_NoViolation covers the google-beta
+// provider variant, which appears in official GCP Terraform docs.
+func TestE201_GoogleBetaProviderRegion_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "google-beta" {
+  region = "europe-west1"
+}
+`,
+	})
+	if hasCode(vs, "E201") {
+		t.Fatalf("google-beta provider region should not fire E201, got: %v", codes(vs))
+	}
+}
+
+// TestE201_GCPResourceRegion_NoViolation covers the case where the AWS
+// signal isn't the provider block but the resource type. A google_* or
+// digitalocean_* resource with a region attribute must not fire.
+func TestE201_GCPResourceRegion_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "google_compute_instance" "x" {
+  region = "us-central1"
+}
+`,
+	})
+	if hasCode(vs, "E201") {
+		t.Fatalf("GCP resource region should not fire E201, got: %v", codes(vs))
+	}
+}
+
+// TestE201_GenericModuleInput_NoViolation covers module inputs. Without
+// knowing the module's schema or origin, `region = "..."` inside a
+// `module "..." { ... }` block cannot be assumed to be an AWS region.
+// Skip.
+func TestE201_GenericModuleInput_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+module "network" {
+  source = "./modules/network"
+  region = "eu-west-99"
+}
+`,
+	})
+	if hasCode(vs, "E201") {
+		t.Fatalf("module input region should not fire E201, got: %v", codes(vs))
+	}
+}
+
+// TestE201_AWSResourceRegion_StillFires is the positive regression
+// guard: an obviously-invalid region inside an aws_* resource must
+// still fire E201 after the scoping change.
+func TestE201_AWSResourceRegion_StillFires(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_s3_bucket_replication_configuration" "x" {
+  destination {
+    region = "atlantis-central-1"
+  }
+}
+`,
+	})
+	if !hasCode(vs, "E201") {
+		t.Fatalf("invalid region inside aws_* resource should still fire E201, got: %v", codes(vs))
+	}
+}
+
+// TestE201_AWSDataSourceRegion_StillFires covers data blocks — `data
+// "aws_*"` should also carry AWS applicability.
+func TestE201_AWSDataSourceRegion_StillFires(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+data "aws_availability_zones" "x" {
+  region = "atlantis-central-1"
+}
+`,
+	})
+	if !hasCode(vs, "E201") {
+		t.Fatalf("invalid region inside aws_* data should still fire E201, got: %v", codes(vs))
+	}
+}
+
+// ── Missing regions from AWS documentation (as of 2026) ─────────────────────
+
+// TestE201_ApSoutheast6_NoViolation verifies that ap-southeast-6 is
+// recognised as a valid AWS region. Present in official AWS region
+// documentation; missing from the round-3 hand-maintained list which
+// contained ap-southeast-5 and -7 but skipped -6.
+func TestE201_ApSoutheast6_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "aws" {
+  region = "ap-southeast-6"
+}
+`,
+	})
+	if hasCode(vs, "E201") {
+		t.Fatalf("ap-southeast-6 is a valid AWS region and should not fire E201, got: %v", codes(vs))
+	}
+}
+
+// TestE201_ApEast2_NoViolation verifies that ap-east-2 (Taipei) is
+// recognised as a valid AWS region. Announced by AWS in mid-2025.
+func TestE201_ApEast2_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "aws" {
+  region = "ap-east-2"
+}
+`,
+	})
+	if hasCode(vs, "E201") {
+		t.Fatalf("ap-east-2 (Taipei) is a valid AWS region and should not fire E201, got: %v", codes(vs))
+	}
+}

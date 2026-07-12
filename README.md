@@ -141,7 +141,7 @@ exit code).
 | E101  | error    | Invalid CIDR block literal (IPv4 / IPv6, with interpolation-aware placeholder composition). |
 | E201  | error    | Invalid AWS region — attribute value is not a recognised region across aws, aws-us-gov, or aws-cn partitions. |
 | E202  | error    | Invalid AWS account ID — value is not a 12-digit string on an `account_id` attribute. |
-| E203  | error    | Invalid AWS ARN — grammar violation on an `*_arn` or `*_arns` attribute (bad prefix, unknown partition, malformed structure, empty resource). |
+| E203  | error    | Malformed ARN structure — grammar violation on an `*_arn` or `*_arns` attribute (bad prefix, unknown partition, malformed structure, empty resource). Validates ARN structure rather than service-specific resource semantics. |
 | W001  | warning  | Local defined but never referenced. |
 
 ### Tool-error code

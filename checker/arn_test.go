@@ -13,12 +13,14 @@ import (
 
 // ── E203: AWS ARN validation ────────────────────────────────────────────────
 
-// TestE203_WildcardPartition_NoViolation verifies that `*` in the
-// partition field is accepted — a valid pattern in IAM policy resource
-// expressions like `arn:*:*:*:*:*` and `arn:*:s3:::*`. Partition being
-// exact-match-only would produce false positives on legitimate policy
-// wildcard patterns.
-func TestE203_WildcardPartition_NoViolation(t *testing.T) {
+// TestE203_WildcardPartition_Violation verifies that `*` in the
+// partition field is REJECTED. This appears in NotResource policy
+// patterns (e.g. `arn:*:iam::*:root`) but never in Terraform `_arn`
+// attributes — those always point to a specific resource, so a
+// partition wildcard indicates a bug. Round 4 reversal of round 1's
+// permissive behaviour: partition wildcards fire E203 on the
+// tfdry-supported trigger surface.
+func TestE203_WildcardPartition_Violation(t *testing.T) {
 	cases := []string{
 		"arn:*:*:*:*:*",        // full wildcard
 		"arn:*:s3:::my-bucket", // partition wildcard, rest concrete
@@ -34,10 +36,61 @@ resource "aws_iam_role_policy_attachment" "x" {
 }
 `,
 			})
-			if hasCode(vs, "E203") {
-				t.Fatalf("wildcard partition %q should not fire E203, got: %v", tc, codes(vs))
+			if !hasCode(vs, "E203") {
+				t.Fatalf("wildcard partition %q should fire E203, got: %v", tc, codes(vs))
 			}
 		})
+	}
+}
+
+// TestE203_WildcardService_Violation verifies that `*` in the service
+// segment is REJECTED. AWS's IAM Resource docs explicitly say:
+// "You can't use a wildcard in the service segment that identifies the
+// AWS product." Round-1 wildcard-tolerant implementation missed this
+// documented restriction.
+func TestE203_WildcardService_Violation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "arn:aws:*:us-east-1:111111111111:my-resource"
+}
+`,
+	})
+	if !hasCode(vs, "E203") {
+		t.Fatalf("wildcard service segment should fire E203, got: %v", codes(vs))
+	}
+}
+
+// TestE203_WildcardRegion_NoViolation retains wildcard acceptance for
+// the region segment. AWS documents this as permitted grammar
+// (`Resource: "arn:aws:iam::*:role/x"` style) — different from the
+// service segment which is explicitly forbidden.
+func TestE203_WildcardRegion_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_lambda_permission" "x" {
+  function_arn = "arn:aws:lambda:*:111111111111:function:my-func"
+}
+`,
+	})
+	if hasCode(vs, "E203") {
+		t.Fatalf("wildcard region should not fire E203, got: %v", codes(vs))
+	}
+}
+
+// TestE203_WildcardAccount_NoViolation retains wildcard acceptance for
+// the account segment. AWS documents this as permitted grammar (used
+// in resource patterns that span accounts).
+func TestE203_WildcardAccount_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_iam_role_policy_attachment" "x" {
+  policy_arn = "arn:aws:iam::*:role/my-role"
+}
+`,
+	})
+	if hasCode(vs, "E203") {
+		t.Fatalf("wildcard account should not fire E203, got: %v", codes(vs))
 	}
 }
 
@@ -131,11 +184,13 @@ resource "aws_iam_role_policy_attachment" "x" {
 	}
 }
 
-// TestE203_WildcardPartitionISORegion_NoViolation is the wildcard-shape
-// counterpart to TestE203_ISORegionInInterpolatedPartition_NoViolation.
-// AWS IAM policy grammar routinely uses `arn:*:...`, and if the region
-// slot in that pattern is an ISO code the check must not fire.
-func TestE203_WildcardPartitionISORegion_NoViolation(t *testing.T) {
+// TestE203_WildcardPartitionEvenWithISORegion_Violation guards against
+// a subtle round-3-vs-round-4 interaction. In round 3 the wildcard
+// partition case was compensated for by skipping strict region
+// validation when the region looked ISO-shaped. Round 4 rejects
+// partition wildcards outright — so this pattern must fire E203 on
+// the partition, independent of the region shape.
+func TestE203_WildcardPartitionEvenWithISORegion_Violation(t *testing.T) {
 	vs := run(t, map[string]string{
 		"main.tf": `
 resource "aws_iam_role_policy_attachment" "x" {
@@ -143,8 +198,8 @@ resource "aws_iam_role_policy_attachment" "x" {
 }
 `,
 	})
-	if hasCode(vs, "E203") {
-		t.Fatalf("wildcard partition with ISO region should not fire E203, got: %v", codes(vs))
+	if !hasCode(vs, "E203") {
+		t.Fatalf("wildcard partition should fire E203 even with ISO-shaped region, got: %v", codes(vs))
 	}
 }
 
