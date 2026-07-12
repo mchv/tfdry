@@ -92,6 +92,30 @@ func isISOPartition(partition string) bool {
 	return false
 }
 
+// isISORegion reports whether region has the shape of an AWS ISO region
+// code. Prefix-based heuristic keyed on the well-known first segments
+// of each ISO partition's region names:
+//
+//   - us-iso-*   → aws-iso partition   (e.g. us-iso-east-1)
+//   - us-isob-*  → aws-iso-b partition (e.g. us-isob-east-1)
+//   - eu-isoe-*  → aws-iso-e partition (e.g. eu-isoe-west-1)
+//   - us-isof-*  → aws-iso-f partition (e.g. us-isof-south-1)
+//
+// Used in validateARNFields to relax strict region validation when the
+// partition is not a concrete literal (interpolated or wildcarded) but
+// the region shape indicates ISO scope. This is deliberately narrower
+// than "skip whenever partition is unknown": commercial-region typos in
+// interpolated-partition templates are still caught because their
+// region doesn't match any ISO prefix.
+//
+// Zero-alloc: 4× HasPrefix on constants, no map lookup.
+func isISORegion(region string) bool {
+	return strings.HasPrefix(region, "us-iso-") ||
+		strings.HasPrefix(region, "us-isob-") ||
+		strings.HasPrefix(region, "eu-isoe-") ||
+		strings.HasPrefix(region, "us-isof-")
+}
+
 // arnPlaceholder is the sentinel value used to mark interpolation positions
 // during template composition. Chosen to be lexically distinct from any
 // legitimate ARN field content (contains `<>` which are illegal in AWS
@@ -352,12 +376,18 @@ func validateARNFields(fields [5]string, permissive bool) string {
 	}
 
 	// Region — empty (global services), the wildcard `*`, a known AWS
-	// region, OR any value when the partition is an ISO partition (the
-	// ISO region set is not publicly enumerable). The wildcard case
-	// covers resource ARN patterns; the ISO case prevents false
-	// positives on legitimate air-gapped-environment ARNs.
-	partitionIsISO := isISOPartition(partition)
-	if !fieldInterpolated(region, permissive) && region != "" && region != arnWildcard && !partitionIsISO {
+	// region, OR skipped when partition context indicates ISO scope.
+	// Skip cases:
+	//   - partition is a concrete ISO literal (aws-iso, aws-iso-b, ...)
+	//   - partition is interpolated OR wildcard, AND the region has the
+	//     shape of an ISO region code (matches an isISORegion prefix)
+	// The prefix-scoped skip means commercial-region typos in
+	// interpolated-partition templates are still caught (the region
+	// doesn't match any ISO prefix), while legitimate ISO ARNs like
+	// `arn:${var.partition}:s3:us-iso-east-1:...` pass cleanly.
+	partitionUnknown := fieldInterpolated(partition, permissive) || partition == arnWildcard
+	skipRegion := isISOPartition(partition) || (partitionUnknown && isISORegion(region))
+	if !fieldInterpolated(region, permissive) && region != "" && region != arnWildcard && !skipRegion {
 		if !validateRegion(region) {
 			return "invalid region \"" + region + "\""
 		}
@@ -371,13 +401,14 @@ func validateARNFields(fields [5]string, permissive bool) string {
 		}
 	}
 
-	// Resource — must be non-empty. In permissive mode, an empty
-	// resource might mean the resource is entirely interpolated but
-	// the composed form has it empty; treat as skip.
+	// Resource — must be non-empty. Compose() always replaces
+	// interpolations with a non-empty placeholder (arnPlaceholder), so
+	// an empty resource field in the composed form can only come from
+	// a literal empty resource in the template (e.g. `arn:aws:s3:::`
+	// or `arn:${var.p}:s3:::`). That's always a malformed ARN — no
+	// valid ARN has an empty resource — so permissive mode does NOT
+	// skip this check.
 	if resource == "" {
-		if permissive {
-			return ""
-		}
 		return "resource must not be empty"
 	}
 
