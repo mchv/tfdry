@@ -46,27 +46,42 @@ const accountIDLength = 12
 // Violation per finding. Called from Run() when E202 is enabled.
 func checkAccountID(f ParsedFile) []Violation {
 	var violations []Violation
-	walkAccountIDBlocks(f.Body, f.Name, &violations)
+	// Entry point starts with awsContext=false; walker sets true inside
+	// provider "aws" / resource "aws_*" / data "aws_*" blocks.
+	walkAccountIDBlocks(f.Body, f.Name, false, &violations)
 	return violations
 }
 
-// walkAccountIDBlocks descends into a body's attributes and child blocks.
-// Skips `variable` blocks (Tier-3 exclusion, mirrors E101/E201).
-func walkAccountIDBlocks(body *hclsyntax.Body, file string, violations *[]Violation) {
+// walkAccountIDBlocks descends into a body's attributes and child
+// blocks, carrying an AWS-context flag. E202 fires only on
+// `account_id` attributes inside a known AWS scope — the attribute
+// name is shared with GCP (`google_service_account.account_id` is a
+// short identifier), Cloudflare (32-char hex string), and other
+// providers whose account IDs aren't 12-digit AWS accounts.
+//
+// Skipped block types match walkRegionBlocks — variable, module.
+// AWS context propagates to nested blocks in the usual way.
+func walkAccountIDBlocks(body *hclsyntax.Body, file string, awsContext bool, violations *[]Violation) {
 	if body == nil {
 		return
 	}
-	for _, attr := range body.Attributes {
-		if accountIDTriggers[attr.Name] != cidrShapeScalar {
-			continue
+	if awsContext {
+		for _, attr := range body.Attributes {
+			if accountIDTriggers[attr.Name] != cidrShapeScalar {
+				continue
+			}
+			checkAccountIDScalar(file, attr, violations)
 		}
-		checkAccountIDScalar(file, attr, violations)
 	}
 	for _, block := range body.Blocks {
-		if block.Type == "variable" {
+		switch block.Type {
+		case "variable", "module":
 			continue
+		case "provider", "resource", "data":
+			walkAccountIDBlocks(block.Body, file, isAWSBlock(block.Type, block.Labels), violations)
+		default:
+			walkAccountIDBlocks(block.Body, file, awsContext, violations)
 		}
-		walkAccountIDBlocks(block.Body, file, violations)
 	}
 }
 

@@ -9,7 +9,14 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
-// ── E203: AWS ARN validation ────────────────────────────────────────────────
+// ── E203: Malformed ARN structure ────────────────────────────────────────────
+//
+// Validates ARN grammar (prefix, segment count, partition set, service
+// lexical form, region shape, account shape, non-empty resource). Does
+// NOT validate service-specific semantics — the resource segment is
+// too heterogeneous across services to check meaningfully without a
+// per-service schema. The check catches malformed structure, not
+// invalid-for-a-specific-service references.
 //
 // AWS ARN grammar:
 //
@@ -138,22 +145,20 @@ const arnTriggerSuffix = "_arn"
 // attributes: `policy_arns`, `managed_policy_arns`, `subject_alternative_arns`.
 const arnListTriggerSuffix = "_arns"
 
-// arnMinLength is the shortest possible well-formed ARN. Computed from
-// the minimum-length wildcard form `arn:*:*:::*` (11 bytes) — partition
-// and service each 1-char wildcard, empty region and account, 1-char
-// resource. Anything shorter cannot possibly parse; used as a fast-reject
-// filter. The concrete-partition minimum is 14 bytes (`arn:aws:s3:::b`);
-// bounding on the shorter wildcard form is required to avoid falsely
-// rejecting valid `arn:*:*:*:*:*` policy patterns before wildcard handling
-// gets a chance to accept them.
-const arnMinLength = len("arn:*:*:::*")
+// arnMinLength is the shortest possible well-formed ARN. The minimum
+// concrete-partition-and-service form is `arn:aws:s3:::b` (14 bytes) —
+// shortest partition (`aws`, 3 chars) plus shortest service (`s3`, 2
+// chars) plus empty region and account plus 1-char resource. Round 4
+// removed partition/service wildcard support, so this bound is now
+// tight; anything shorter cannot possibly parse.
+const arnMinLength = len("arn:aws:s3:::b")
 
-// arnWildcard is the AWS-standard wildcard character permitted in the
-// partition, service, region, and account fields of an ARN. Policy
-// documents in particular routinely use wildcards
-// (`arn:aws:s3:::*`, `arn:aws:*:*:*`, `arn:*:*:*:*:*`), so accepting `*`
-// in these positions is required to match AWS's actual grammar rather
-// than a hypothetically strict one.
+// arnWildcard is the `*` character permitted in the region and account
+// fields of an ARN. Round 4 narrowed the accepted positions: AWS docs
+// explicitly forbid wildcards in the service segment, and the partition
+// wildcard only appears in `Resource`/`NotResource` policy patterns
+// which are outside this check's trigger surface (Terraform `*_arn`
+// attributes always name a specific resource).
 const arnWildcard = "*"
 
 // checkARN runs E203 over a single parsed file, returning one Violation
@@ -354,22 +359,27 @@ func validateARNFields(fields [5]string, permissive bool) string {
 	account := fields[3]
 	resource := fields[4]
 
-	// Partition — must be one of the three known partitions, or the
-	// wildcard `*` (permitted by AWS's policy grammar in resource ARN
-	// patterns like `arn:*:*:*:*:*` and `arn:*:s3:::*`).
-	if !fieldInterpolated(partition, permissive) && partition != arnWildcard {
+	// Partition — must be one of the known partitions (commercial or
+	// ISO). The `*` wildcard is NOT accepted here: while wildcards
+	// appear in AWS IAM `Resource`/`NotResource` policy patterns, this
+	// check's trigger surface (Terraform `*_arn` attributes) always
+	// references a specific resource — no legitimate `*_arn` value
+	// carries a wildcard partition. Round 4 revision of round 1's
+	// wildcard-permissive behaviour.
+	if !fieldInterpolated(partition, permissive) {
 		if _, ok := awsPartitions[partition]; !ok {
 			return "invalid partition \"" + partition + "\""
 		}
 	}
 
-	// Service — lowercase ASCII alphanumerics and hyphens, or the wildcard
-	// `*`. Doesn't enumerate all 200+ AWS services — a permissive grammar
-	// check catches obvious typos (uppercase, whitespace, unexpected
-	// punctuation) without pretending to enforce the exhaustive service
-	// list. The wildcard case handles policy-document ARN patterns like
-	// `arn:aws:*:*:*:*`.
-	if !fieldInterpolated(service, permissive) && service != arnWildcard {
+	// Service — lowercase ASCII alphanumerics and hyphens. AWS's IAM
+	// Resource docs explicitly forbid wildcards here:
+	//   "You can't use a wildcard in the service segment that identifies
+	//    the AWS product."
+	// Round 4 removes the wildcard acceptance from round 1; the round-1
+	// permissive design was based on a misreading of the IAM policy
+	// grammar. Round 4 aligns with AWS documentation.
+	if !fieldInterpolated(service, permissive) {
 		if !isValidARNService(service) {
 			return "invalid service \"" + service + "\""
 		}
@@ -379,14 +389,16 @@ func validateARNFields(fields [5]string, permissive bool) string {
 	// region, OR skipped when partition context indicates ISO scope.
 	// Skip cases:
 	//   - partition is a concrete ISO literal (aws-iso, aws-iso-b, ...)
-	//   - partition is interpolated OR wildcard, AND the region has the
-	//     shape of an ISO region code (matches an isISORegion prefix)
+	//   - partition is interpolated, AND the region has the shape of
+	//     an ISO region code (matches an isISORegion prefix)
 	// The prefix-scoped skip means commercial-region typos in
 	// interpolated-partition templates are still caught (the region
 	// doesn't match any ISO prefix), while legitimate ISO ARNs like
 	// `arn:${var.partition}:s3:us-iso-east-1:...` pass cleanly.
-	partitionUnknown := fieldInterpolated(partition, permissive) || partition == arnWildcard
-	skipRegion := isISOPartition(partition) || (partitionUnknown && isISORegion(region))
+	// (Round 4: wildcard partition case removed — partition wildcards
+	// no longer reach this branch, they've already returned above.)
+	partitionInterpolated := fieldInterpolated(partition, permissive)
+	skipRegion := isISOPartition(partition) || (partitionInterpolated && isISORegion(region))
 	if !fieldInterpolated(region, permissive) && region != "" && region != arnWildcard && !skipRegion {
 		if !validateRegion(region) {
 			return "invalid region \"" + region + "\""
@@ -461,6 +473,6 @@ func arnViolation(file string, line int, attrName, value, diag string) Violation
 		Severity: "error",
 		File:     file,
 		Line:     line,
-		Message:  attrName + ": invalid AWS ARN \"" + value + "\" (" + diag + ")",
+		Message:  attrName + ": malformed ARN \"" + value + "\" (" + diag + ")",
 	}
 }

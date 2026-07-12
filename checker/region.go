@@ -54,6 +54,7 @@ var awsRegions = map[string]struct{}{
 	"af-south-1": {}, // Cape Town
 	// Commercial (aws partition) — Asia Pacific
 	"ap-east-1":      {}, // Hong Kong
+	"ap-east-2":      {}, // Taipei (announced August 2025)
 	"ap-south-1":     {}, // Mumbai
 	"ap-south-2":     {}, // Hyderabad
 	"ap-northeast-1": {}, // Tokyo
@@ -64,6 +65,7 @@ var awsRegions = map[string]struct{}{
 	"ap-southeast-3": {}, // Jakarta
 	"ap-southeast-4": {}, // Melbourne
 	"ap-southeast-5": {}, // Malaysia
+	"ap-southeast-6": {}, // New Zealand (Auckland — announced August 2025)
 	"ap-southeast-7": {}, // Thailand
 	// Commercial (aws partition) — Canada
 	"ca-central-1": {}, // Central
@@ -109,28 +111,55 @@ var regionTriggers = map[string]cidrShape{
 // per finding. Called from Run() when E201 is enabled.
 func checkRegion(f ParsedFile) []Violation {
 	var violations []Violation
-	walkRegionBlocks(f.Body, f.Name, &violations)
+	// Entry point starts with awsContext=false; the walker sets it to true
+	// as it descends into provider "aws", resource "aws_*", or data "aws_*"
+	// blocks. Top-level attributes (which shouldn't appear anyway in
+	// well-formed Terraform) are silently ignored.
+	walkRegionBlocks(f.Body, f.Name, false, &violations)
 	return violations
 }
 
 // walkRegionBlocks descends into a body's attributes and child blocks,
-// mirroring walkCIDRBlocks. Skips `variable` blocks entirely because
-// their defaults are Tier-3-excluded (mirrors the CIDR policy).
-func walkRegionBlocks(body *hclsyntax.Body, file string, violations *[]Violation) {
+// carrying an AWS-context flag. E201 fires only on attributes inside a
+// known AWS scope — `provider "aws"`, `resource "aws_*"`, or `data
+// "aws_*"` — because the `region` attribute name is shared across many
+// providers (GCP, DigitalOcean, Cloudflare Workers, ...). A default-error
+// finding on a non-AWS region literal would be a false positive.
+//
+// Skipped block types:
+//   - variable — bodies opaque (Tier-3 exclusion, mirrors E101/E202)
+//   - module   — schema unknown; can't assume AWS applicability
+//
+// AWS context propagates to nested blocks (e.g. `destination { ... }`
+// inside an `aws_s3_bucket_replication_configuration` still carries
+// AWS scope).
+func walkRegionBlocks(body *hclsyntax.Body, file string, awsContext bool, violations *[]Violation) {
 	if body == nil {
 		return
 	}
-	for _, attr := range body.Attributes {
-		if regionTriggers[attr.Name] != cidrShapeScalar {
-			continue
+	if awsContext {
+		for _, attr := range body.Attributes {
+			if regionTriggers[attr.Name] != cidrShapeScalar {
+				continue
+			}
+			checkRegionScalar(file, attr, violations)
 		}
-		checkRegionScalar(file, attr, violations)
 	}
 	for _, block := range body.Blocks {
-		if block.Type == "variable" {
+		switch block.Type {
+		case "variable", "module":
 			continue
+		case "provider", "resource", "data":
+			walkRegionBlocks(block.Body, file, isAWSBlock(block.Type, block.Labels), violations)
+		default:
+			// Nested block inside a resource/data body (e.g.
+			// `destination { ... }`) OR a top-level Terraform block like
+			// `locals`, `output`, `terraform`, `check`, `moved`. The
+			// nested case inherits AWS context; the top-level case has
+			// awsContext=false already, which correctly excludes locals
+			// and outputs from AWS-scoped validation.
+			walkRegionBlocks(block.Body, file, awsContext, violations)
 		}
-		walkRegionBlocks(block.Body, file, violations)
 	}
 }
 

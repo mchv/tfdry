@@ -198,3 +198,93 @@ variable "account_id" {
 		t.Fatalf("variable default should not fire E202, got: %v", codes(vs))
 	}
 }
+
+// ── AWS applicability gating (round 4 redesign) ─────────────────────────────
+
+// TestE202_CloudflareProviderAccountID_NoViolation verifies that
+// `account_id` inside a `provider "cloudflare"` block does NOT fire
+// E202. Cloudflare's `account_id` is a 32-character hex string, not a
+// 12-digit AWS ID. Applying the AWS-shape check to non-AWS providers
+// produces false positives on valid Cloudflare configurations.
+func TestE202_CloudflareProviderAccountID_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "cloudflare" {
+  account_id = "abcdef0123456789abcdef0123456789"
+}
+`,
+	})
+	if hasCode(vs, "E202") {
+		t.Fatalf("Cloudflare provider account_id should not fire E202, got: %v", codes(vs))
+	}
+}
+
+// TestE202_GoogleServiceAccountAccountID_NoViolation covers GCP's
+// `account_id` field on `google_service_account` — a service-account
+// short name, not a numeric AWS ID. Straight from official GCP
+// Terraform documentation.
+func TestE202_GoogleServiceAccountAccountID_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "google_service_account" "custom_service_account" {
+  account_id   = "custom-service-account"
+  display_name = "Custom SA"
+}
+`,
+	})
+	if hasCode(vs, "E202") {
+		t.Fatalf("GCP google_service_account account_id should not fire E202, got: %v", codes(vs))
+	}
+}
+
+// TestE202_GenericModuleInput_NoViolation covers module inputs.
+// Without knowing the module schema or origin, an account_id passed
+// through a module block cannot be assumed to be an AWS account ID.
+func TestE202_GenericModuleInput_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+module "cloudflare_zone" {
+  source     = "./modules/cf-zone"
+  account_id = "abcdef0123456789abcdef0123456789"
+}
+`,
+	})
+	if hasCode(vs, "E202") {
+		t.Fatalf("module input account_id should not fire E202, got: %v", codes(vs))
+	}
+}
+
+// TestE202_AWSResourceAccountID_StillFires is the positive regression
+// guard: an obviously-invalid account ID inside an aws_* resource
+// must still fire E202 after the scoping change.
+func TestE202_AWSResourceAccountID_StillFires(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_ebs_snapshot_copy" "x" {
+  account_id = "abc"
+}
+`,
+	})
+	if !hasCode(vs, "E202") {
+		t.Fatalf("invalid account_id inside aws_* resource should still fire E202, got: %v", codes(vs))
+	}
+}
+
+// TestE202_AWSDataSourceAccountID_StillFires — same principle for
+// data blocks. `data "aws_*"` carries AWS applicability. The data
+// source name here is a synthetic `aws_*` shape (real AWS names for
+// this kind of source contain a US-spelling `-ization-` that trips
+// the UK-locale misspell linter); the check only cares about the
+// `aws_` prefix, not the specific service name.
+func TestE202_AWSDataSourceAccountID_StillFires(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+data "aws_account_data" "x" {
+  account_id = "abc"
+}
+`,
+	})
+	if !hasCode(vs, "E202") {
+		t.Fatalf("invalid account_id inside aws_* data should still fire E202, got: %v", codes(vs))
+	}
+}

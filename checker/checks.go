@@ -72,7 +72,7 @@ var allChecksList = []CheckInfo{
 	{Code: "E101", Severity: "error", Summary: "Invalid CIDR block literal", Family: "E100"},
 	{Code: "E201", Severity: "error", Summary: "Invalid AWS region", Family: "E200"},
 	{Code: "E202", Severity: "error", Summary: "Invalid AWS account ID", Family: "E200"},
-	{Code: "E203", Severity: "error", Summary: "Invalid AWS ARN", Family: "E200"},
+	{Code: "E203", Severity: "error", Summary: "Malformed ARN structure", Family: "E200"},
 }
 
 // AllChecks returns the canonical ordered list of all checks.
