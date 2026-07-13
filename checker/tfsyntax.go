@@ -37,6 +37,7 @@ var tfScopeRoots = map[string]struct{}{
 	"local":     {}, // local.<NAME> — locals
 	"module":    {}, // module.<NAME>.<OUTPUT> — child module outputs
 	"data":      {}, // data.<TYPE>.<NAME>.<ATTR> — data sources
+	"ephemeral": {}, // ephemeral.<TYPE>.<NAME>.<ATTR> — ephemeral resources (Terraform 1.10+)
 	"path":      {}, // path.module, path.root, path.cwd
 	"terraform": {}, // terraform.workspace
 	"each":      {}, // each.key, each.value — inside for_each

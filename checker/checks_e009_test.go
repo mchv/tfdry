@@ -226,3 +226,148 @@ resource "aws_vpc" "x" {
 		t.Fatalf("E009 must still fire in CIDR context after move, got: %v", codes(vs))
 	}
 }
+
+// ── ForExpr scope tracking (fix for merged-code bug) ────────────────────────
+
+// TestE009_ForExprValueVar_NoFalsePositive verifies that the value
+// variable of a tuple for-expression is in scope inside the value
+// expression, and does NOT fire E009 as an unknown scope root.
+//
+// The bug: walkExpressions previously used hclsyntax.VisitAll on
+// attribute expressions, which visits every descendant with the
+// enclosing scope. Inside `[for s in var.names : upper(s)]`, the
+// traversal `s` was seen without `s` being in the iterators map, so
+// E009 flagged it as an unknown root.
+//
+// The fix uses hclsyntax.Walk with a scoped Walker that responds to
+// the ChildScope nodes HCL synthesises around ForExpr's KeyExpr /
+// ValExpr / CondExpr — pushing KeyVar and ValVar into scope on entry
+// and popping on exit.
+func TestE009_ForExprValueVar_NoFalsePositive(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+locals {
+  upper_names = [for s in var.names : upper(s)]
+}
+`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("for-expression value var 's' must not fire E009, got: %v", codes(vs))
+	}
+}
+
+// TestE009_ForExprKeyValueVars_NoFalsePositive verifies that BOTH the
+// key and value variables of an object for-expression are in scope
+// inside the produced key and value expressions. Covers the `{for K,
+// V in COLL : K => V.name}` shape.
+func TestE009_ForExprKeyValueVars_NoFalsePositive(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+locals {
+  name_by_key = {for k, v in var.items : k => v.name}
+}
+`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("for-expression key/value vars 'k'/'v' must not fire E009, got: %v", codes(vs))
+	}
+}
+
+// TestE009_ForExprIfCondition_NoFalsePositive verifies that the
+// iterator var is in scope inside the `if` clause of a for-expression.
+// HCL synthesises a ChildScope for CondExpr too, so if the walker
+// mishandles that node the guard fires wrongly.
+func TestE009_ForExprIfCondition_NoFalsePositive(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+locals {
+  non_empty = [for s in var.names : s if s != ""]
+}
+`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("for-expression iterator 's' in if-condition must not fire E009, got: %v", codes(vs))
+	}
+}
+
+// TestE009_ForExprCollectionTypo_StillFires guards the scope
+// boundary: the collection expression is evaluated BEFORE the
+// iterator vars are bound, so a scope-root typo inside CollExpr
+// must still fire E009. Otherwise the fix would over-relax and
+// stop catching legitimate typos.
+func TestE009_ForExprCollectionTypo_StillFires(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+locals {
+  bad = [for s in vars.names : upper(s)]
+}
+`,
+	})
+	if !hasCode(vs, "E009") {
+		t.Fatalf("scope-root typo 'vars' in for-expression collection must still fire E009, got: %v", codes(vs))
+	}
+}
+
+// TestE009_ForExprAfterEnd_StillFires verifies the iterator scope is
+// popped after the for-expression: a reference to the iterator name
+// in an adjacent attribute must fire E009 (the name is not
+// package-scoped, only expression-scoped).
+func TestE009_ForExprAfterEnd_StillFires(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+locals {
+  inside  = [for s in var.names : upper(s)]
+  outside = s
+}
+`,
+	})
+	if !hasCode(vs, "E009") {
+		t.Fatalf("iterator 's' used outside its for-expression must fire E009, got: %v", codes(vs))
+	}
+}
+
+// TestE009_NestedForExpr_BothIteratorsInScope covers scope-stack
+// discipline. Inside an inner for-expression, both the outer and
+// inner iterator names must be visible. If the walker replaces
+// (rather than augments) the scope on entry, the outer name would
+// disappear and cause a false E009.
+func TestE009_NestedForExpr_BothIteratorsInScope(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+locals {
+  matrix = [for row in var.rows : [for cell in row : cell + row[0]]]
+}
+`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("nested for-expression must see both iterators; got E009: %v", codes(vs))
+	}
+}
+
+// ── ephemeral root (Terraform 1.10+) ────────────────────────────────────────
+
+// TestE009_EphemeralRoot_NoFalsePositive verifies that the
+// `ephemeral.*` scope root (introduced in Terraform 1.10 for ephemeral
+// resources like `ephemeral "random_password" "..."`) is recognised
+// and does not fire E009 as an unknown root.
+//
+// Bug: tfScopeRoots was frozen at Terraform 1.x baseline (var, local,
+// module, data, path, terraform, each, count, self) and had not been
+// updated when Terraform 1.10 added `ephemeral`. Any Terraform config
+// referencing `ephemeral.<TYPE>.<NAME>.<ATTR>` would fire E009.
+func TestE009_EphemeralRoot_NoFalsePositive(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+ephemeral "random_password" "db_password" {
+  length = 32
+}
+
+resource "aws_db_instance" "x" {
+  password = ephemeral.random_password.db_password.result
+}
+`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("ephemeral.* root must not fire E009, got: %v", codes(vs))
+	}
+}
