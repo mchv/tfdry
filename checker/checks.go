@@ -352,14 +352,30 @@ func checkCountForEach(f ParsedFile) []Violation {
 // Non-content sub-blocks of a dynamic block are unusual (Terraform's
 // grammar allows only `content`) but if present, they're visited with
 // the outer scope — the iterator is only bound inside content{}.
+// walkExpressions walks every expression in body and calls fn(expr, iterators)
+// for each one, with iterators giving the set of iterator-variable names in
+// scope at that point.
+//
+// Two scope-introducing constructs are handled:
+//
+//   - Dynamic blocks: `dynamic "X" { ... }` binds X (or the value of
+//     `iterator = <name>`) inside content{}. See walkDynamicBlock.
+//
+//   - For-expressions: `[for K, V in COLL : ...]` and `{for K, V in COLL :
+//     ... => ...}` bind KeyVar and ValVar inside KeyExpr, ValExpr, and
+//     CondExpr — but NOT inside CollExpr. HCL synthesises ChildScope
+//     wrapper nodes around KeyExpr/ValExpr/CondExpr during Walk; the
+//     scopedExprWalker pushes/pops iterator names as those wrappers
+//     enter/exit.
+//
+// The walker is re-entrant and side-effect free: each augmented iterator
+// map is cloned rather than mutated, and the scope stack is saved
+// on push and restored on pop.
 func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
 	for _, attr := range body.Attributes {
-		hclsyntax.VisitAll(attr.Expr, func(node hclsyntax.Node) hcl.Diagnostics { //nolint
-			if expr, ok := node.(hclsyntax.Expression); ok {
-				fn(expr, iterators)
-			}
-			return nil
-		})
+		w := &scopedExprWalker{iterators: iterators, fn: fn}
+		//nolint:errcheck // Callback returns no diagnostics; we don't use hclsyntax.Walk's aggregated diagnostics.
+		hclsyntax.Walk(attr.Expr, w)
 	}
 	for _, block := range body.Blocks {
 		if block.Type == "dynamic" && len(block.Labels) == 1 {
@@ -368,6 +384,63 @@ func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn fun
 		}
 		walkExpressions(block.Body, iterators, fn)
 	}
+}
+
+// scopedExprWalker is an hclsyntax.Walker that tracks iterator-variable
+// scope introduced by for-expressions. HCL wraps a ForExpr's KeyExpr /
+// ValExpr / CondExpr in ChildScope nodes during Walk (see
+// hclsyntax.ForExpr.walkChildNodes); this walker responds to those
+// wrappers by pushing the local names onto its stack. Non-wrapper
+// expression nodes just forward to fn with the current scope.
+type scopedExprWalker struct {
+	iterators map[string]struct{}   // current in-scope iterator names
+	stack     []map[string]struct{} // saved states, one per active ChildScope frame
+	fn        func(hclsyntax.Expression, map[string]struct{})
+}
+
+// Enter implements hclsyntax.Walker. Pushes iterator names on
+// ChildScope frames (introduced by ForExpr) and forwards Expression
+// nodes to the caller's fn with the current scope.
+func (w *scopedExprWalker) Enter(n hclsyntax.Node) hcl.Diagnostics {
+	switch tn := n.(type) {
+	case hclsyntax.ChildScope:
+		// HCL synthesises ChildScope around ForExpr's KeyExpr /
+		// ValExpr / CondExpr (never around CollExpr, which is
+		// evaluated in the outer scope). Push a fresh iterators map
+		// with the ForExpr's KeyVar and ValVar added.
+		w.stack = append(w.stack, w.iterators)
+		w.iterators = cloneIteratorsBulk(w.iterators, tn.LocalNames)
+	case hclsyntax.Expression:
+		w.fn(tn, w.iterators)
+	}
+	return nil
+}
+
+// Exit implements hclsyntax.Walker. Pops the scope stack when leaving
+// a ChildScope frame, restoring the iterator set to what it was on
+// entry.
+func (w *scopedExprWalker) Exit(n hclsyntax.Node) hcl.Diagnostics {
+	if _, ok := n.(hclsyntax.ChildScope); ok {
+		top := len(w.stack) - 1
+		w.iterators = w.stack[top]
+		w.stack = w.stack[:top]
+	}
+	return nil
+}
+
+// cloneIteratorsBulk returns a new map containing every entry in
+// iterators plus every key in add. Nil-safe on both arguments. Mirrors
+// cloneIterators (single-name) but avoids repeated allocations when
+// pushing multi-name scopes like a ForExpr's key+value pair.
+func cloneIteratorsBulk(iterators, add map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(iterators)+len(add))
+	for k := range iterators {
+		out[k] = struct{}{}
+	}
+	for k := range add {
+		out[k] = struct{}{}
+	}
+	return out
 }
 
 // walkDynamicBlock handles a `dynamic "X" { ... }` block, applying the
@@ -381,16 +454,17 @@ func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, fn 
 	// Notably: the `iterator = <name>` attribute itself parses as a
 	// ScopeTraversalExpr but is a declaration, not a reference; we skip
 	// it here so E009 doesn't flag the iterator name being introduced.
+	//
+	// Uses the same scoped Walker as walkExpressions so ForExpr scope
+	// (e.g. `for_each = [for x in var.list : x.id]`) is honoured inside
+	// the dynamic-block's own attribute expressions.
 	for _, attr := range block.Body.Attributes {
 		if attr.Name == "iterator" {
 			continue
 		}
-		hclsyntax.VisitAll(attr.Expr, func(node hclsyntax.Node) hcl.Diagnostics { //nolint
-			if expr, ok := node.(hclsyntax.Expression); ok {
-				fn(expr, iterators)
-			}
-			return nil
-		})
+		w := &scopedExprWalker{iterators: iterators, fn: fn}
+		//nolint:errcheck // Callback returns no diagnostics.
+		hclsyntax.Walk(attr.Expr, w)
 	}
 
 	// Descend into sub-blocks. content{} sees the iterator; others don't
