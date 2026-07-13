@@ -453,7 +453,9 @@ func isValidARNService(s string) bool {
 	if s[0] < 'a' || s[0] > 'z' {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
+	// Loop starts at index 1: s[0] has already been validated as a
+	// lowercase letter above, so re-scanning it would be redundant.
+	for i := 1; i < len(s); i++ {
 		c := s[i]
 		switch {
 		case c >= 'a' && c <= 'z':
