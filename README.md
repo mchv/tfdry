@@ -123,7 +123,7 @@ Same input with `--json`:
 
 ### Lint checks
 
-These nine codes lint Terraform code itself. All are toggleable via
+The codes below lint Terraform code itself. All are toggleable via
 `--checks=` and route to exit `1` on violation (warnings don't affect
 exit code).
 

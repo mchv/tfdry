@@ -71,7 +71,9 @@ func isResourceTypeIdentifier(name string) bool {
 	}
 	seenUnderscore := false
 	prevUnderscore := false
-	for i := 0; i < len(name); i++ {
+	// Loop starts at index 1: name[0] has already been validated as a
+	// lowercase letter above, so re-scanning it would be redundant.
+	for i := 1; i < len(name); i++ {
 		c := name[i]
 		switch {
 		case c == '_':
