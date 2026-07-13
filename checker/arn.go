@@ -24,8 +24,14 @@ import (
 //
 // Fields:
 //   - PARTITION   one of the AWS partitions (aws, aws-us-gov, aws-cn,
-//                 aws-iso, aws-iso-b, aws-iso-e, aws-iso-f) or `*`
-//   - SERVICE     lowercase service identifier (iam, s3, ec2, lambda, ...)
+//                 aws-iso, aws-iso-b, aws-iso-e, aws-iso-f). Wildcards are
+//                 not accepted on the `_arn` trigger surface — the wildcard
+//                 partition pattern (`arn:*:...`) only appears in IAM
+//                 policy `Resource`/`NotResource` fields, which are not
+//                 checked here.
+//   - SERVICE     lowercase service identifier (iam, s3, ec2, lambda, ...).
+//                 Wildcards not accepted — AWS's IAM Resource docs
+//                 explicitly forbid `*` in the service segment.
 //   - REGION      an AWS region code, or empty for global services (IAM, S3).
 //                 Strict region validation is skipped when the partition
 //                 is an ISO partition — those region sets are not publicly
@@ -109,8 +115,9 @@ func isISOPartition(partition string) bool {
 //   - us-isof-*  → aws-iso-f partition (e.g. us-isof-south-1)
 //
 // Used in validateARNFields to relax strict region validation when the
-// partition is not a concrete literal (interpolated or wildcarded) but
-// the region shape indicates ISO scope. This is deliberately narrower
+// partition is interpolated but the region shape indicates ISO scope.
+// (Wildcard partitions are rejected earlier and never reach this check.)
+// This is deliberately narrower
 // than "skip whenever partition is unknown": commercial-region typos in
 // interpolated-partition templates are still caught because their
 // region doesn't match any ISO prefix.

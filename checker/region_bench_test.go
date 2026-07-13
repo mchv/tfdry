@@ -4,7 +4,6 @@
 package checker
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,55 +95,4 @@ func BenchmarkE201_NoTriggers(b *testing.B) {
 			}
 		})
 	}
-}
-
-// parseFile is a thin test-helper wrapper over ParseDir that avoids
-// touching the filesystem — writes the source to a temp directory and
-// parses it back. Used by the benchmarks to build synthetic fixtures.
-func parseFile(source, name string) ([]ParsedFile, error) {
-	dir, err := os.MkdirTemp("", "tfdry-bench-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
-		return nil, err
-	}
-	parsed, _, err := ParseDir(context.Background(), dir)
-	return parsed, err
-}
-
-// itoa is a tiny int→string helper — avoids the strconv import in a bench
-// file (keeps the file self-contained).
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [12]byte
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
-}
-
-// splitLines returns the newline-delimited lines of s, without trailing
-// empty strings. Local helper to avoid the strings import overhead in
-// this test-only file.
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		out = append(out, s[start:])
-	}
-	return out
 }
