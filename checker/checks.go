@@ -4,7 +4,7 @@
 // Package checker implements tfdry's static analysis checks for Terraform
 // files. It parses .tf files via hashicorp/hcl, builds a per-directory map
 // of locals and module schemas, and runs a configurable set of checks
-// (E001-E009, E101, E201-E203, W001) without requiring `terraform init` or
+// (E001-E009, E101, E201-E203, W001, W009) without requiring `terraform init` or
 // any provider downloads.
 package checker
 
@@ -69,6 +69,7 @@ var allChecksList = []CheckInfo{
 	{Code: "E008", Severity: "error", Summary: "File not formatted (run tfdry --fix or terraform fmt)", Family: "E000"},
 	{Code: "E009", Severity: "error", Summary: "Invalid Terraform scope root in expression", Family: "E000"},
 	{Code: "W001", Severity: "warning", Summary: "Local defined but never used", Family: "E000"},
+	{Code: "W009", Severity: "warning", Summary: "Unfamiliar Terraform scope root (may be typo or unrecognised construct)", Family: "E000"},
 	{Code: "E101", Severity: "error", Summary: "Invalid CIDR block literal", Family: "E100"},
 	{Code: "E201", Severity: "error", Summary: "Invalid AWS region", Family: "E200"},
 	{Code: "E202", Severity: "error", Summary: "Invalid AWS account ID", Family: "E200"},
@@ -170,15 +171,25 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		walkExpressions(f.Body, nil, func(expr hclsyntax.Expression, iterators map[string]struct{}) {
 			switch e := expr.(type) {
 			case *hclsyntax.ScopeTraversalExpr:
-				// E009: invalid Terraform scope root. Runs on every
-				// ScopeTraversalExpr — bare traversals (`bucket = vars.name`)
-				// as well as interpolated ones (`"prefix-${vars.env}"`) —
-				// so scope-root typos are caught in any attribute, not
-				// just CIDR-triggering ones. Iterators map carries
-				// dynamic-block-content scope from the enclosing walker.
-				if checks.Enabled("E009") {
+				// E009 / W009: scope-root validation. Runs on every
+				// ScopeTraversalExpr — bare traversals (`bucket =
+				// vars.name`) as well as interpolated ones
+				// (`"prefix-${vars.env}"`) — so scope-root issues
+				// are caught in any attribute, not just CIDR-triggering
+				// ones. Iterators map carries dynamic-block-content and
+				// for-expression scope from the enclosing walker.
+				//
+				// Severity split (see scopeRootViolation): known typos
+				// (`vars`, `locals`, ...) fire E009 error; genuinely
+				// uncertain roots fire W009 warning. The validator
+				// runs when EITHER code is enabled; the resulting
+				// violation's code determines final emission.
+				if checks.Enabled("E009") || checks.Enabled("W009") {
 					if diag := ValidateScopeRoot(e, iterators); diag != nil {
-						violations = append(violations, scopeRootViolation(f.Name, diag))
+						v := scopeRootViolation(f.Name, diag)
+						if checks.Enabled(v.Code) {
+							violations = append(violations, v)
+						}
 					}
 				}
 				if len(e.Traversal) < 2 || e.Traversal.RootName() != "local" {

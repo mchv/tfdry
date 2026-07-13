@@ -30,7 +30,7 @@ pre-commit hooks, CI pipelines, and editor integrations.
   (more on smaller ones). The speedup persists with `terraform init`
   already warmed — it's the provider-load round-trip we skip, not just
   the network.
-- **Focused.** Fourteen deterministic lint checks (E001–E009 + E101 + E201–E203 + W001) — HCL
+- **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E203 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
   `terraform fmt`-parity formatting, CIDR block validation, and AWS
@@ -143,6 +143,7 @@ exit code).
 | E202  | error    | Invalid AWS account ID — value is not a 12-digit string on an `account_id` attribute. |
 | E203  | error    | Malformed ARN structure — grammar violation on an `*_arn` or `*_arns` attribute (bad prefix, unknown partition, malformed structure, empty resource). Validates ARN structure rather than service-specific resource semantics. |
 | W001  | warning  | Local defined but never referenced. |
+| W009  | warning  | Unfamiliar Terraform scope root — an identifier that isn't a known top-level root (`var`, `local`, `data`, ...), a scoped iterator variable, or a resource-type-shaped name. May be a typo of an unfamiliar root or a newer Terraform construct we don't track yet. Downgraded from E009 for uncertain cases per the "defaults must be highly certain" contract. |
 
 ### Tool-error code
 
@@ -201,12 +202,12 @@ The `describe` subcommand prints the check table to stdout (or JSON with `--json
 | Code  | Meaning |
 |-------|---------|
 | `0`   | No violations (or all violations fixed by `--fix`). |
-| `1`   | One or more lint error violations found (E001–E203; excluding E000). Warnings (W001) do not affect the exit code. |
+| `1`   | One or more lint error violations found (E001–E203; excluding E000). Warnings (W001, W009) do not affect the exit code. |
 | `2`   | Tool error: bad arguments, unreadable directory, oversize file, write failure during `--fix`. **E000 violations route here, taking precedence over exit 1 when both are present** — the tool couldn't run cleanly on all input, so the loud signal is more useful than the routine "lint found issues" code. |
 | `3`   | `tfdry fmt -check` found unformatted files. |
 | `130` | Interrupted by SIGINT / SIGTERM, or a context deadline expired. |
 
-Warnings (W001) do not affect the exit code.
+Warnings (W001, W009) do not affect the exit code.
 
 ### JSON output schema
 

@@ -355,7 +355,7 @@ func TestRun_Describe_ListsChecks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("describe should exit 0, got %d", code)
 	}
-	for _, code := range []string{"E001", "E008", "W001", "E101", "E201", "E202", "E203"} {
+	for _, code := range []string{"E001", "E008", "W001", "W009", "E101", "E201", "E202", "E203"} {
 		if !strings.Contains(stdout, code) {
 			t.Errorf("describe output missing %s; got: %s", code, stdout)
 		}
@@ -393,7 +393,7 @@ func TestRun_DescribeJSON_ParsesAndContainsAllCodes(t *testing.T) {
 	for _, c := range got.Checks {
 		codes[c.Code] = true
 	}
-	for _, want := range []string{"E001", "E002", "E003", "E004", "E005", "E006", "E007", "E008", "E009", "W001", "E101", "E201", "E202", "E203"} {
+	for _, want := range []string{"E001", "E002", "E003", "E004", "E005", "E006", "E007", "E008", "E009", "W001", "W009", "E101", "E201", "E202", "E203"} {
 		if !codes[want] {
 			t.Errorf("describe --json missing %s", want)
 		}

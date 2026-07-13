@@ -14,14 +14,14 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
   - `tfdry fmt [path]` — rewrites unformatted files in place (default), unless `-check` is passed (read-only, exit 3 on dirt).
 - **Exit codes are strict:**
   - `0` — no violations found (or all violations were fixed by `--fix`)
-  - `1` — one or more lint error violations found (E001-E203; excluding E000). Warnings (W001) do not affect the exit code.
+  - `1` — one or more lint error violations found (E001-E203; excluding E000). Warnings (W001, W009) do not affect the exit code.
   - `2` — tool error (bad arguments, unreadable directory, oversize file, write failure during `--fix`); E000 violations route here. Takes precedence over exit 1 when both are present.
   - `3` — `tfdry fmt -check` found unformatted files
   - `130` — interrupted by SIGINT / SIGTERM, or a context deadline expired
 - **Always use `--json` for machine consumption.** Human output format is not stable.
 - **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`.
 - **`--checks` filters are additive.** Passing `--checks=E003,E004` runs only those two checks.
-- **Warnings (W001) do not affect exit code.** Only errors (E001-E203) cause exit 1; E000 maps to exit 2 (tool error).
+- **Warnings (W001, W009) do not affect exit code.** Only errors (E001-E203) cause exit 1; E000 maps to exit 2 (tool error).
 
 ## Checks
 
@@ -36,6 +36,7 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
 | E007 | error    | Unknown local module input key |
 | E008 | error    | File not formatted (equivalent to `terraform fmt --check`) |
 | W001 | warning  | Local defined but never used |
+| W009 | warning  | Unfamiliar Terraform scope root (may be typo or unrecognised construct) |
 
 ## Scope limitations
 
