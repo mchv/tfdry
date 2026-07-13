@@ -119,6 +119,14 @@ type ScopeRootDiag struct {
 	Range hcl.Range // source range of the offending root identifier
 	Root  string    // the unrecognised identifier
 	Hint  string    // suggested correction (empty if no obvious match)
+	// IsTypo is true when the root matches a known pluralisation-style
+	// typo in scopeRootTypo (`vars`, `locals`, `datas`, ...). High
+	// confidence — used by scopeRootViolation to pick between E009
+	// (error) and W009 (warning) severity. Unknown roots without a
+	// mapped hint are genuinely uncertain — we can't tell if the user
+	// mistyped something we don't know about or if Terraform grew a
+	// new root — so those downgrade to W009.
+	IsTypo bool
 }
 
 // ValidateScopeRoot inspects the root of a ScopeTraversalExpr and returns
@@ -161,27 +169,48 @@ func ValidateScopeRoot(expr hclsyntax.Expression, iterators map[string]struct{})
 	if isResourceTypeIdentifier(root.Name) {
 		return nil
 	}
+	hint := scopeRootTypo[root.Name]
 	return &ScopeRootDiag{
-		Range: root.SrcRange,
-		Root:  root.Name,
-		Hint:  scopeRootTypo[root.Name],
+		Range:  root.SrcRange,
+		Root:   root.Name,
+		Hint:   hint,
+		IsTypo: hint != "",
 	}
 }
 
-// scopeRootViolation packages an E009 diagnostic for a scope-root failure
-// found during expression traversal. The message includes the offending
-// root and, when known, a suggested correction. Kept alongside the
-// ScopeRootDiag type since E009 is now emitted from the general
-// expression walker (walkExpressions in checks.go) rather than from any
-// single check family.
+// scopeRootViolation packages a diagnostic for a scope-root failure
+// found during expression traversal. The severity split reflects our
+// confidence in the diagnosis:
+//
+//   - High-confidence typos (scopeRootTypo hit — e.g. `vars`, `locals`,
+//     `datas`) fire E009 with severity "error". We know what the user
+//     meant, so failing the build is appropriate.
+//
+//   - Genuinely uncertain roots (unknown to us, not a known typo, and
+//     not resource-shaped) fire W009 with severity "warning". We can't
+//     tell if the user mistyped something we don't recognise or if
+//     Terraform introduced a new root we haven't listed — matching the
+//     project's "default findings must be highly certain" contract.
+//
+// The message includes the offending root and, when known, a suggested
+// correction. Kept alongside ScopeRootDiag since both E009 and W009 are
+// emitted from the general expression walker (walkExpressions in
+// checks.go) rather than from any single check family.
 func scopeRootViolation(file string, diag *ScopeRootDiag) Violation {
-	msg := "invalid Terraform scope root \"" + diag.Root + "\""
-	if diag.Hint != "" {
-		msg += " (did you mean \"" + diag.Hint + "\"?)"
+	code := "W009"
+	severity := "warning"
+	msg := "unfamiliar Terraform scope root \"" + diag.Root + "\" (may be a typo or an unrecognised construct)"
+	if diag.IsTypo {
+		code = "E009"
+		severity = "error"
+		msg = "invalid Terraform scope root \"" + diag.Root + "\""
+		if diag.Hint != "" {
+			msg += " (did you mean \"" + diag.Hint + "\"?)"
+		}
 	}
 	return Violation{
-		Code:     "E009",
-		Severity: "error",
+		Code:     code,
+		Severity: severity,
 		File:     file,
 		Line:     diag.Range.Start.Line,
 		Message:  msg,

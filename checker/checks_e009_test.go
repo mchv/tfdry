@@ -115,11 +115,16 @@ resource "aws_security_group" "x" {
 	}
 }
 
-// TestE009_DynamicBlockOutsideScope_StillFires verifies that the
+// TestW009_DynamicBlockOutsideScope_StillFires verifies that the
 // iterator name is only in scope inside the dynamic block's content{}.
 // A reference to `ingress.value` in a sibling attribute or outside the
-// block must still fire E009 — otherwise the iterator scope is leaking.
-func TestE009_DynamicBlockOutsideScope_StillFires(t *testing.T) {
+// block must still produce a diagnostic — otherwise the iterator scope
+// is leaking. As of the E009/W009 hierarchy split, `ingress` here is a
+// genuinely-uncertain root (no scopeRootTypo hint, no resource-type
+// shape), so the diagnostic is W009 (warning), not E009 (error).
+// Renamed from TestE009_DynamicBlockOutsideScope_StillFires to reflect
+// the new severity.
+func TestW009_DynamicBlockOutsideScope_StillFires(t *testing.T) {
 	vs := run(t, map[string]string{
 		"main.tf": `
 resource "aws_security_group" "x" {
@@ -135,8 +140,11 @@ resource "aws_security_group" "x" {
 }
 `,
 	})
-	if !hasCode(vs, "E009") {
-		t.Fatalf("expected E009 on 'ingress' used outside dynamic block content, got: %v", codes(vs))
+	if !hasCode(vs, "W009") {
+		t.Fatalf("expected W009 on 'ingress' used outside dynamic block content, got: %v", codes(vs))
+	}
+	if hasCode(vs, "E009") {
+		t.Fatalf("'ingress' is a genuinely-uncertain root, not a known typo — should fire W009 not E009, got: %v", codes(vs))
 	}
 }
 
@@ -308,11 +316,14 @@ locals {
 	}
 }
 
-// TestE009_ForExprAfterEnd_StillFires verifies the iterator scope is
+// TestW009_ForExprAfterEnd_StillFires verifies the iterator scope is
 // popped after the for-expression: a reference to the iterator name
-// in an adjacent attribute must fire E009 (the name is not
-// package-scoped, only expression-scoped).
-func TestE009_ForExprAfterEnd_StillFires(t *testing.T) {
+// in an adjacent attribute must produce a diagnostic (the name is
+// not package-scoped, only expression-scoped). Under the E009/W009
+// hierarchy split, `s` here is a genuinely-uncertain root (no
+// scopeRootTypo hint, no resource-type shape), so the diagnostic is
+// W009 (warning), not E009 (error).
+func TestW009_ForExprAfterEnd_StillFires(t *testing.T) {
 	vs := run(t, map[string]string{
 		"main.tf": `
 locals {
@@ -321,8 +332,11 @@ locals {
 }
 `,
 	})
-	if !hasCode(vs, "E009") {
-		t.Fatalf("iterator 's' used outside its for-expression must fire E009, got: %v", codes(vs))
+	if !hasCode(vs, "W009") {
+		t.Fatalf("iterator 's' used outside its for-expression must fire W009, got: %v", codes(vs))
+	}
+	if hasCode(vs, "E009") {
+		t.Fatalf("'s' is a genuinely-uncertain root — should fire W009 not E009, got: %v", codes(vs))
 	}
 }
 
@@ -370,4 +384,99 @@ resource "aws_db_instance" "x" {
 	if hasCode(vs, "E009") {
 		t.Fatalf("ephemeral.* root must not fire E009, got: %v", codes(vs))
 	}
+}
+
+// ── E009/W009 hierarchy split (round 2: conservatism) ───────────────────────
+
+// TestE009_KnownTypo_FiresAsError verifies the E009 side of the
+// hierarchy: high-confidence typos (roots that appear in the
+// scopeRootTypo table with a mapped correction hint) fire E009 as an
+// error — these are the highest-confidence diagnostics because we
+// know what the user meant.
+//
+// Covers all six known typos: vars, locals, modules, datas, paths,
+// terraforms. Each has a documented hint pointing at the correct root.
+func TestE009_KnownTypo_FiresAsError(t *testing.T) {
+	cases := []struct{ typo, hint string }{
+		{"vars", "var"},
+		{"locals", "local"},
+		{"modules", "module"},
+		{"datas", "data"},
+		{"paths", "path"},
+		{"terraforms", "terraform"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.typo, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{
+				"main.tf": `
+resource "aws_s3_bucket" "b" {
+  bucket = "prefix-${` + tc.typo + `.env}"
+}
+`,
+			})
+			if !hasCode(vs, "E009") {
+				t.Fatalf("known typo %q must fire E009 (error), got: %v", tc.typo, codes(vs))
+			}
+			if hasCode(vs, "W009") {
+				t.Fatalf("known typo %q should not also fire W009 (it's a high-confidence error, not an uncertain warning), got: %v", tc.typo, codes(vs))
+			}
+		})
+	}
+}
+
+// TestW009_UnknownRootWithoutHint_FiresAsWarning verifies the W009
+// side of the hierarchy: a scope root that's neither in the known-roots
+// table, nor an iterator, nor a resource-type identifier, nor a known
+// typo (no scopeRootTypo hint) is genuinely uncertain. We can't tell
+// if the user typoed something we don't know about, or if Terraform
+// grew a new top-level root we haven't listed. Downgraded from E009
+// error to W009 warning: the signal is preserved but does not fail
+// the build.
+//
+// This is the round-2 refinement per the reviewer's suggestion: "a
+// default finding should be highly certain". W009 keeps the diagnostic
+// visible without staking it as a hard failure.
+func TestW009_UnknownRootWithoutHint_FiresAsWarning(t *testing.T) {
+	// `mynewthing` isn't in tfScopeRoots, not an iterator, not a
+	// resource-type identifier shape (no underscore), and not in
+	// scopeRootTypo (no hint). Under the round-2 hierarchy this is a
+	// W009 warning, not an E009 error.
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_s3_bucket" "b" {
+  bucket = "prefix-${mynewthing.env}"
+}
+`,
+	})
+	if !hasCode(vs, "W009") {
+		t.Fatalf("genuinely-uncertain root 'mynewthing' must fire W009 (warning), got: %v", codes(vs))
+	}
+	if hasCode(vs, "E009") {
+		t.Fatalf("'mynewthing' has no hint — should fire W009 not E009 (avoid default-error false positives on unfamiliar roots), got: %v", codes(vs))
+	}
+}
+
+// TestW009_HasWarningSeverity verifies W009 diagnostics carry the
+// "warning" severity, matching W001's precedent. Combined with the
+// existing exit-code invariant (only errors trigger exit 1), this
+// means W009 doesn't fail CI on unfamiliar-but-plausible roots.
+func TestW009_HasWarningSeverity(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_s3_bucket" "b" {
+  bucket = "prefix-${mynewthing.env}"
+}
+`,
+	})
+	for _, v := range vs {
+		if v.Code == "W009" {
+			if v.Severity != "warning" {
+				t.Fatalf("W009 must have severity 'warning' (matches W001 precedent), got %q", v.Severity)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected at least one W009 violation, got codes: %v", codes(vs))
 }
