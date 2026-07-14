@@ -87,9 +87,7 @@ resource "aws_security_group" "x" {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("dynamic block iterator 'ingress' must not fire E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "dynamic block iterator 'ingress'")
 }
 
 // TestE009_DynamicBlockCustomIterator_NoFalsePositive verifies that a
@@ -110,9 +108,7 @@ resource "aws_security_group" "x" {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("custom iterator 'rule' must not fire E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "custom iterator 'rule'")
 }
 
 // TestW009_DynamicBlockOutsideScope_StillFires verifies that the
@@ -171,9 +167,7 @@ resource "aws_security_group" "x" {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("nested dynamic-block iterators must not fire E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "nested dynamic-block iterators")
 }
 
 // TestE009_DynamicBlockIteratorAttribute_NotFlagged verifies that the
@@ -200,14 +194,9 @@ resource "aws_security_group" "x" {
 `,
 	})
 	// The iterator attribute value ('rule') must not itself be flagged.
-	// If E009 fires with root "rule" here, the iterator declaration
-	// is being mis-interpreted as a reference.
-	for _, v := range vs {
-		if v.Code != "E009" {
-			continue
-		}
-		t.Fatalf("unexpected E009 %q — the iterator declaration must not be treated as a reference", v.Message)
-	}
+	// If E009 or W009 fires with root "rule" here, the iterator
+	// declaration is being mis-interpreted as a reference.
+	assertNoScopeRootDiag(t, vs, "iterator declaration 'rule'")
 }
 
 // ── Regression guards for the CIDR-context tests already in cidr_test.go ────
@@ -259,9 +248,7 @@ locals {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("for-expression value var 's' must not fire E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "for-expression value var 's'")
 }
 
 // TestE009_ForExprKeyValueVars_NoFalsePositive verifies that BOTH the
@@ -276,9 +263,7 @@ locals {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("for-expression key/value vars 'k'/'v' must not fire E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "for-expression key/value vars 'k'/'v'")
 }
 
 // TestE009_ForExprIfCondition_NoFalsePositive verifies that the
@@ -293,9 +278,7 @@ locals {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("for-expression iterator 's' in if-condition must not fire E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "for-expression iterator 's' in if-condition")
 }
 
 // TestE009_ForExprCollectionTypo_StillFires guards the scope
@@ -353,9 +336,7 @@ locals {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("nested for-expression must see both iterators; got E009: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "nested for-expression iterators")
 }
 
 // ── ephemeral root (Terraform 1.10+) ────────────────────────────────────────
@@ -381,9 +362,7 @@ resource "aws_db_instance" "x" {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("ephemeral.* root must not fire E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "ephemeral.* root")
 }
 
 // ── E009/W009 hierarchy split (round 2: conservatism) ───────────────────────

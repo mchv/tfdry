@@ -63,6 +63,31 @@ func hasCode(vs []checker.Violation, code string) bool {
 	return false
 }
 
+// hasScopeRootDiag reports whether any scope-root diagnostic (E009
+// error OR W009 warning) is present. Used in tests that assert
+// scope-tracking correctness — a broken scope tracker could fire
+// either code depending on whether the offending root matches a
+// known typo, so a single-code assertion like hasCode(vs, "E009")
+// would let regressions slip through when they surfaced as W009.
+// Future scope-root check codes should be added here.
+func hasScopeRootDiag(vs []checker.Violation) bool {
+	return hasCode(vs, "E009") || hasCode(vs, "W009")
+}
+
+// assertNoScopeRootDiag fatals if any scope-root diagnostic (E009 or
+// W009) is present in vs. Kept as a helper so tests don't repeat the
+// "must not fire E009 or W009" phrasing in every Fatalf message and
+// so a future addition to the scope-root diagnostic set (e.g. a new
+// W code) only needs updating in one place. `what` is a short
+// human-readable descriptor of the subject that should not have
+// fired — for example "for-expression value var 's'".
+func assertNoScopeRootDiag(t *testing.T, vs []checker.Violation, what string) {
+	t.Helper()
+	if hasScopeRootDiag(vs) {
+		t.Fatalf("%s must not fire E009 or W009, got: %v", what, codes(vs))
+	}
+}
+
 // E001 — invalid HCL syntax
 func TestE001_InvalidSyntax(t *testing.T) {
 	t.Parallel()

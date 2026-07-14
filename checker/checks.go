@@ -434,6 +434,14 @@ func (w *scopedExprWalker) Exit(n hclsyntax.Node) hcl.Diagnostics {
 	if _, ok := n.(hclsyntax.ChildScope); ok {
 		top := len(w.stack) - 1
 		w.iterators = w.stack[top]
+		// Nil the popped slot before truncating so the map it referenced
+		// can be garbage-collected immediately. Without this, the
+		// underlying array (which survives the [:top] slice down) keeps
+		// the map reachable until either the array is grown past this
+		// index or the walker itself is discarded. Bounded but real
+		// retention — matters more now that the walker is reused across
+		// multiple attributes in walkExpressions and walkDynamicBlock.
+		w.stack[top] = nil
 		w.stack = w.stack[:top]
 	}
 	return nil

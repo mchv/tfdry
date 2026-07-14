@@ -371,9 +371,7 @@ resource "aws_vpc" "x" {
 	if hasCode(vs, "E101") {
 		t.Fatalf("expected no E101, got: %v", codes(vs))
 	}
-	if hasCode(vs, "E009") {
-		t.Fatalf("expected no E009, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "var.subnet in CIDR interpolation")
 }
 
 // TestE101_InterpolatedInvalidLiteralOctet: an interpolated CIDR where the
@@ -459,9 +457,7 @@ resource "aws_subnet" "s" {
 }
 `,
 	})
-	if hasCode(vs, "E009") {
-		t.Fatalf("expected no E009 (aws_vpc is a resource type), got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "aws_vpc resource-type reference")
 }
 
 // TestE009_Disabled_NoScopeRootDiagnostic: with E009 disabled but E101
@@ -478,9 +474,7 @@ resource "aws_vpc" "x" {
 	// Only enable E101; E009 disabled.
 	enabled := checker.CheckSet{"E101": {}}
 	vs := slices.Concat(parseViolations, mustRun(context.Background(), parsed, enabled, dir))
-	if hasCode(vs, "E009") {
-		t.Fatalf("E009 should be suppressed when disabled, got: %v", codes(vs))
-	}
+	assertNoScopeRootDiag(t, vs, "E009 disabled via --checks=E101")
 }
 
 // TestE101_InterpolatedListElement_MultipleDiagnostics: a list attribute
