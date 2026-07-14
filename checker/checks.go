@@ -339,49 +339,37 @@ func checkCountForEach(f ParsedFile) []Violation {
 	return violations
 }
 
-// walkExpressions calls fn for every expression in a body, recursively.
+// walkExpressions calls fn for every expression in a body, recursively,
+// with iterators giving the set of iterator-variable names in scope at
+// that point.
 //
-// The iterators parameter carries the set of dynamic-block iterator names
-// in lexical scope at the current traversal position — see the dynamic
-// block handling below. It is passed to fn on every callback so
-// scope-aware checks (E009) can consult it. Callers that don't do
-// scope-aware work can pass nil at the top-level call and ignore the
-// parameter in their callback.
-//
-// Dynamic-block handling: Terraform's `dynamic "X" { content { ... } }`
-// blocks introduce a fresh iterator name (X by default, or the value of
-// the `iterator = <name>` attribute) visible only inside the content{}
-// sub-block. When the walker sees a dynamic block it:
-//
-//   - Visits the block's own attributes (for_each, iterator, labels,
-//     ...) with the OUTER iterator scope — those expressions are
-//     evaluated before the iterator is bound.
-//   - Descends into content{} with the iterator name added to a fresh
-//     copy of the iterators map. Cloning (rather than add-then-remove)
-//     keeps the walker re-entrant and side-effect free for callers.
-//
-// Non-content sub-blocks of a dynamic block are unusual (Terraform's
-// grammar allows only `content`) but if present, they're visited with
-// the outer scope — the iterator is only bound inside content{}.
-// walkExpressions walks every expression in body and calls fn(expr, iterators)
-// for each one, with iterators giving the set of iterator-variable names in
-// scope at that point.
+// The iterators parameter is passed to fn on every callback so
+// scope-aware checks (E009 / W009) can consult it. Callers that don't
+// do scope-aware work can pass nil at the top-level call and ignore
+// the parameter in their callback.
 //
 // Two scope-introducing constructs are handled:
 //
-//   - Dynamic blocks: `dynamic "X" { ... }` binds X (or the value of
-//     `iterator = <name>`) inside content{}. See walkDynamicBlock.
+//   - Dynamic blocks: `dynamic "X" { content { ... } }` binds X (or
+//     the value of `iterator = <name>`) inside content{}. The walker
+//     visits the block's own attributes (for_each, iterator, labels,
+//     ...) with the OUTER scope — those expressions are evaluated
+//     before the iterator is bound — then descends into content{}
+//     with the iterator name added to a fresh copy of the iterators
+//     map. Non-content sub-blocks (unusual — Terraform's grammar
+//     allows only `content`) are visited with the outer scope. See
+//     walkDynamicBlock.
 //
-//   - For-expressions: `[for K, V in COLL : ...]` and `{for K, V in COLL :
-//     ... => ...}` bind KeyVar and ValVar inside KeyExpr, ValExpr, and
-//     CondExpr — but NOT inside CollExpr. HCL synthesises ChildScope
-//     wrapper nodes around KeyExpr/ValExpr/CondExpr during Walk; the
-//     scopedExprWalker pushes/pops iterator names as those wrappers
-//     enter/exit.
+//   - For-expressions: `[for K, V in COLL : ...]` and `{for K, V in
+//     COLL : ... => ...}` bind KeyVar and ValVar inside KeyExpr,
+//     ValExpr, and CondExpr — but NOT inside CollExpr. HCL synthesises
+//     ChildScope wrapper nodes around KeyExpr/ValExpr/CondExpr during
+//     Walk; scopedExprWalker pushes/pops iterator names as those
+//     wrappers enter/exit.
 //
-// The walker is re-entrant and side-effect free: each augmented iterator
-// map is cloned rather than mutated, and the scope stack is saved
-// on push and restored on pop.
+// The walker is re-entrant and side-effect free: each augmented
+// iterator map is cloned rather than mutated, and the scope stack is
+// saved on push and restored on pop.
 func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
 	for _, attr := range body.Attributes {
 		w := &scopedExprWalker{iterators: iterators, fn: fn}
