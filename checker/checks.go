@@ -371,8 +371,20 @@ func checkCountForEach(f ParsedFile) []Violation {
 // iterator map is cloned rather than mutated, and the scope stack is
 // saved on push and restored on pop.
 func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
+	if body == nil {
+		return
+	}
+	// One walker per body — reuse across all attributes in this body
+	// to avoid a heap allocation per attribute. Safe because
+	// hclsyntax.Walk guarantees symmetric Enter/Exit calls, so the
+	// stack is empty when Walk returns; the `[:0]` reset is defensive.
+	// Recursive walkExpressions and walkDynamicBlock calls still
+	// allocate their own walker (they're bounded by nesting depth,
+	// not attribute count).
+	w := &scopedExprWalker{fn: fn}
 	for _, attr := range body.Attributes {
-		w := &scopedExprWalker{iterators: iterators, fn: fn}
+		w.iterators = iterators
+		w.stack = w.stack[:0]
 		//nolint:errcheck // Callback returns no diagnostics; we don't use hclsyntax.Walk's aggregated diagnostics.
 		hclsyntax.Walk(attr.Expr, w)
 	}
@@ -446,6 +458,9 @@ func cloneIteratorsBulk(iterators, add map[string]struct{}) map[string]struct{} 
 // scoping rule described in walkExpressions. Extracted to keep the
 // main walker readable.
 func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
+	if block == nil || block.Body == nil {
+		return
+	}
 	iterName := dynamicIteratorName(block)
 
 	// Visit dynamic-level attributes (for_each, labels, iterator) with
@@ -456,12 +471,15 @@ func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, fn 
 	//
 	// Uses the same scoped Walker as walkExpressions so ForExpr scope
 	// (e.g. `for_each = [for x in var.list : x.id]`) is honoured inside
-	// the dynamic-block's own attribute expressions.
+	// the dynamic-block's own attribute expressions. One walker per
+	// invocation, reused across attributes (matches walkExpressions).
+	w := &scopedExprWalker{fn: fn}
 	for _, attr := range block.Body.Attributes {
 		if attr.Name == "iterator" {
 			continue
 		}
-		w := &scopedExprWalker{iterators: iterators, fn: fn}
+		w.iterators = iterators
+		w.stack = w.stack[:0]
 		//nolint:errcheck // Callback returns no diagnostics.
 		hclsyntax.Walk(attr.Expr, w)
 	}
