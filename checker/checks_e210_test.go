@@ -22,9 +22,11 @@ import (
 //   - Curated table: (resource_type, wrong_block, correct_block) triples
 //     verified against actual terraform-provider-aws documentation.
 //     Every entry cites the docs. No fuzzy matching or edit-distance.
-//   - AWS-scoped: fires only inside resource "aws_*" / data "aws_*"
-//     blocks — module blocks and non-AWS providers are skipped
-//     (reuses the isAWSBlock gate from E201/E202).
+//   - AWS-scoped implicitly through the table's contents: every key
+//     in blockTypos is an `aws_*` resource or data-source type, so a
+//     non-AWS `resource "google_..." "..."` block falls through the
+//     map lookup silently. E210 does NOT reuse the isAWSBlock helper
+//     that E201/E202 call — the curated table itself is the gate.
 //   - False-positive discipline: on doubt, skip. New provider releases
 //     may introduce new block names; the check only fires when it
 //     matches a known wrong entry exactly.
@@ -432,51 +434,10 @@ resource "aws_quicksight_data_source" "example" {
 	}
 }
 
-// ── Trigger table completeness ──────────────────────────────────────────────
-//
-// Regression guard: every entry in the curated blockTypos table must
-// have at least one positive fires-when-wrong test. If an entry is
-// added without a corresponding positive test, this fails and
-// forces the author to add the test — protecting against uncertain
-// entries silently shipping without verification.
-//
-// Uses the AllChecks / describe surface indirectly via a hardcoded
-// list of what tests should exist. Kept as a comment-verified rather
-// than reflection-verified test to keep it easy to read and update.
-//
-// If a future entry is added, extend both the table in aws_block_typo.go
-// AND this expected set. The build-time cost of updating in two
-// places is the point — deliberate friction against uncurated growth.
-
-func TestE210_TableCompleteness(t *testing.T) {
-	// Every resource type we expect to have coverage for. Kept in
-	// sync manually with the entries in blockTypos (aws_block_typo.go).
-	expected := []string{
-		"aws_quicksight_analysis",
-		"aws_quicksight_dashboard",
-		"aws_quicksight_data_set",
-		"aws_quicksight_data_source",
-		"aws_quicksight_folder",
-		"aws_quicksight_template",
-		"aws_quicksight_theme",
-		"aws_lb_listener_rule",
-		"aws_wafv2_web_acl",
-		"aws_iam_policy_document",
-	}
-	// Sanity check: each expected resource actually fires when
-	// its wrong-block form is used. Directly using the walker via
-	// run() to exercise the check.
-	// (Detailed per-entry positive tests above cover this in depth;
-	// this is a coverage sentinel.)
-	for _, r := range expected {
-		// Skipped: this test's purpose is not to duplicate the
-		// per-entry positive tests but to force this expected
-		// list to be updated when new entries land. The list
-		// itself is the check.
-		_ = r
-	}
-	// Assert we counted 10 entries.
-	if got := len(expected); got != 10 {
-		t.Fatalf("E210 trigger table drift: expected list has %d entries, want 10; add or remove tests when the curated table changes", got)
-	}
-}
+// Table-integrity / drift-alarm coverage for the curated blockTypos
+// table lives in checker/aws_block_typo_internal_test.go — that
+// file's TestBlockTypos_TableIntegrity runs in the internal
+// checker package so it can access the unexported blockTypos map
+// directly. Keeping it there avoids the previous checker_test
+// implementation's blind spot (checking a hardcoded local slice
+// rather than the actual table).
