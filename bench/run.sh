@@ -42,7 +42,7 @@ hyperfine -N \
 
 # ── 2. Full check: tfdry vs terraform validate ────────────────────────────────
 # terraform validate requires `terraform init` (already done at build time).
-# tfdry runs all checks (E001-E210, W001).
+# tfdry runs its default check set (whatever `tfdry describe` lists).
 # Note: terraform validate must run from inside the dir, so we use bash -c.
 echo
 echo "=== full validation (small) ==="
