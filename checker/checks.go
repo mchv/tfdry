@@ -4,7 +4,7 @@
 // Package checker implements tfdry's static analysis checks for Terraform
 // files. It parses .tf files via hashicorp/hcl, builds a per-directory map
 // of locals and module schemas, and runs a configurable set of checks
-// (E001-E009, E101, E201-E203, W001, W009) without requiring `terraform init` or
+// (E001-E009, E101, E201-E203, E210, W001, W009) without requiring `terraform init` or
 // any provider downloads.
 package checker
 
@@ -74,6 +74,7 @@ var allChecksList = []CheckInfo{
 	{Code: "E201", Severity: "error", Summary: "Invalid AWS region", Family: "E200"},
 	{Code: "E202", Severity: "error", Summary: "Invalid AWS account ID", Family: "E200"},
 	{Code: "E203", Severity: "error", Summary: "Malformed ARN structure", Family: "E200"},
+	{Code: "E210", Severity: "error", Summary: "AWS resource block-name typo (singular/plural)", Family: "E200"},
 }
 
 // AllChecks returns the canonical ordered list of all checks.
@@ -249,6 +250,9 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		}
 		if checks.Enabled("E203") {
 			violations = append(violations, checkARN(f)...)
+		}
+		if checks.Enabled("E210") {
+			violations = append(violations, checkBlockTypo(f)...)
 		}
 	}
 
