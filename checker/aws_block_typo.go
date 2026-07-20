@@ -24,9 +24,15 @@ import (
 //     edit-distance heuristics, no schema-fetch. Adding an entry is a
 //     deliberate act — cite the docs in the comment above it.
 //
-//   - AWS-scoped by shape (resource/data prefix). Fires only when the
-//     enclosing block is `resource "aws_*"` or `data "aws_*"`. Module
-//     blocks are opaque and skipped.
+//   - AWS-scoped implicitly through the curated table's contents.
+//     Every key in `blockTypos` is an `aws_*` resource or data-source
+//     type, so a non-AWS block (e.g. `resource "google_..." "..."`)
+//     falls through the map lookup silently. E210 does NOT reuse
+//     the isAWSBlock helper that E201/E202 call — the table itself
+//     is the gate. An outer filter also rejects top-level block
+//     types other than `resource` and `data` (locals, output,
+//     terraform, module, variable, provider, ...) which the check
+//     never has anything to say about.
 //
 //   - Direct children only in v1. `permissions { }` at resource top
 //     level on `aws_quicksight_data_source` fires; `permissions { }`
@@ -109,11 +115,14 @@ func checkBlockTypo(f ParsedFile) []Violation {
 	}
 	var violations []Violation
 	for _, block := range f.Body.Blocks {
-		// Both `resource "aws_*" "..."` and `data "aws_*" "..."`
-		// are in scope. Any other top-level block type (locals,
-		// output, terraform, module, variable, provider, ...) is
-		// skipped — the block-name-typo class this check targets
-		// is specific to provider-schema-shaped nested blocks.
+		// Only `resource` and `data` top-level blocks are examined.
+		// Any other top-level block type (locals, output, terraform,
+		// module, variable, provider, ...) is skipped — the
+		// block-name-typo class this check targets is specific to
+		// provider-schema-shaped nested blocks inside resource /
+		// data bodies. AWS-only scoping is enforced by the
+		// blockTypos lookup a few lines below (every key in the
+		// table is an `aws_*` type), not by a prefix check here.
 		if block.Type != "resource" && block.Type != "data" {
 			continue
 		}
