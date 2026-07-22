@@ -124,9 +124,14 @@ func checkS3BucketName(f ParsedFile) []Violation {
 // as literals. Interpolated / templated values also skip; every S3
 // rule is boundary-sensitive and a partial composed form gives no
 // useful signal.
+//
+// Empty literal strings (bucket = "") are NOT skipped: an empty
+// value violates the length rule (3-63) unambiguously and firing
+// E204 with a clear "must be at least 3 characters" message is
+// more useful than silence.
 func checkS3BucketAttr(file string, attr *hclsyntax.Attribute, violations *[]Violation) {
 	s, ok := TryLiteralString(attr.Expr)
-	if !ok || s == "" {
+	if !ok {
 		return
 	}
 	valid, reason := validateS3BucketName(s)

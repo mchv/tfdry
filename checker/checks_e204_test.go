@@ -34,10 +34,31 @@ import (
 // name (e.g. google_storage_bucket) are silently skipped.
 //
 // Interpolation-aware: interpolated / templated values are silently
-// skipped (matches E101/E201's policy — no useful signal from partial
-// composed forms when the rules are all boundary-sensitive).
+// skipped (matches E201's policy — every rule is pointwise or
+// boundary-sensitive, and partial composed forms give no useful
+// signal). Unlike E101 (which supports templates via placeholder
+// composition of numeric octets), S3 bucket-name rules apply to
+// every byte, so composition would just fabricate an arbitrary
+// value.
 
 // ── Rule 1: Length 3-63 ─────────────────────────────────────────────────────
+
+// TestE204_EmptyString_Fires verifies that an empty literal `bucket = ""`
+// fires E204 — the length rule (3-63) applies just as it does to any
+// other under-length name. The check must not skip empty literals as a
+// "no signal" case; empty is an unambiguous rule violation.
+func TestE204_EmptyString_Fires(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_s3_bucket" "example" {
+  bucket = ""
+}
+`,
+	})
+	if !hasCode(vs, "E204") {
+		t.Fatalf("empty bucket name must fire E204 (length rule), got: %v", codes(vs))
+	}
+}
 
 func TestE204_TooShort_TwoChars_Fires(t *testing.T) {
 	vs := run(t, map[string]string{
