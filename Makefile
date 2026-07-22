@@ -150,7 +150,7 @@ lint: ## Run golangci-lint with the project's config.
 # through until this target. `misspell -locale UK -error` flags US
 # spellings and exits non-zero, mirroring the Go-side convention.
 #
-# Files we scan: README.md, CHANGELOG.md, CONTRIBUTING.md, SECURITY.md,
+# Files we scan: README.md, PERFORMANCE.md, CHANGELOG.md, CONTRIBUTING.md, SECURITY.md,
 # SKILL.md, Makefile, the workflow YAMLs (except codeql.yml — see
 # below), .github/dependabot.yml, and .goreleaser.yaml.
 #
@@ -185,6 +185,7 @@ lint: ## Run golangci-lint with the project's config.
 # tech-focused prose that the false-negative risk is acceptable.
 PROSE_FILES := \
 	README.md \
+	PERFORMANCE.md \
 	CHANGELOG.md \
 	CONTRIBUTING.md \
 	SECURITY.md \
