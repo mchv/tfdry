@@ -143,7 +143,8 @@ func checkS3BucketAttr(file string, attr *hclsyntax.Attribute, violations *[]Vio
 
 // s3BucketByteTable is a precomputed 256-entry lookup for the S3
 // bucket-name character-set check. Trades a small init-time cost
-// (128 iterations) for a single indexed load per byte in the hot
+// (36 loop iterations for a-z and 0-9, plus 2 direct assignments
+// for '.' and '-') for a single indexed load per byte in the hot
 // path, replacing the two range comparisons and one equality that
 // a naive switch compiles to.
 var s3BucketByteTable = func() [256]bool {
