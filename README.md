@@ -30,7 +30,7 @@ pre-commit hooks, CI pipelines, and editor integrations.
   (more on smaller ones). The speedup persists with `terraform init`
   already warmed — it's the provider-load round-trip we skip, not just
   the network.
-- **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E203 + E210 + W001 + W009) — HCL
+- **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E204 + E210 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
   `terraform fmt`-parity formatting, CIDR block validation, and AWS
@@ -142,6 +142,7 @@ exit code).
 | E201  | error    | Invalid AWS region — attribute value is not a recognised region across aws, aws-us-gov, or aws-cn partitions. |
 | E202  | error    | Invalid AWS account ID — value is not a 12-digit string on an `account_id` attribute. |
 | E203  | error    | Malformed ARN structure — grammar violation on an `*_arn` or `*_arns` attribute (bad prefix, unknown partition, malformed structure, empty resource). Validates ARN structure rather than service-specific resource semantics. |
+| E204  | error    | Invalid AWS S3 bucket name — grammar violation on a `bucket` / `bucket_name` attribute inside an `aws_s3_*` resource or data source. Validates the general-purpose S3 naming rules: length (3–63), character set (`[a-z0-9.-]`), first/last-char letter-or-digit requirement, no consecutive dots, and no IP-address-shaped names. Skips referenced or interpolated values. |
 | E210  | error    | AWS resource block-name typo — a nested block name inside an `aws_*` resource or data source matches a known singular/plural typo (e.g. `permission` on `aws_quicksight_analysis` where the schema expects `permissions`). Curated table only; no schema fetch. |
 | W001  | warning  | Local defined but never referenced. |
 | W009  | warning  | Unfamiliar Terraform scope root — an identifier that isn't a known top-level root (`var`, `local`, `data`, ...), a scoped iterator variable, or a resource-type-shaped name. May be a typo of an unfamiliar root or a newer Terraform construct we don't track yet. Downgraded from E009 for uncertain cases per the "defaults must be highly certain" contract. |
