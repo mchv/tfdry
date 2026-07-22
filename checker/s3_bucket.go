@@ -141,15 +141,47 @@ func checkS3BucketAttr(file string, attr *hclsyntax.Attribute, violations *[]Vio
 	*violations = append(*violations, s3BucketViolation(file, attr.Expr.Range().Start.Line, attr.Name, s, reason))
 }
 
+// s3BucketByteTable is a precomputed 256-entry lookup for the S3
+// bucket-name character-set check. Trades a small init-time cost
+// (128 iterations) for a single indexed load per byte in the hot
+// path, replacing the two range comparisons and one equality that
+// a naive switch compiles to.
+var s3BucketByteTable = func() [256]bool {
+	var t [256]bool
+	for c := byte('a'); c <= 'z'; c++ {
+		t[c] = true
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		t[c] = true
+	}
+	t['.'] = true
+	t['-'] = true
+	return t
+}()
+
+// s3BucketBoundaryTable is the same idea for the first/last-char
+// check: only lowercase letters and digits (no '.' or '-').
+var s3BucketBoundaryTable = func() [256]bool {
+	var t [256]bool
+	for c := byte('a'); c <= 'z'; c++ {
+		t[c] = true
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		t[c] = true
+	}
+	return t
+}()
+
 // validateS3BucketName reports whether s is a well-formed AWS S3
 // general-purpose bucket name and, if not, returns a short reason
 // suitable for the diagnostic message. Zero-alloc.
 //
-// The rule order below is deliberate: cheap length filter first,
-// then boundary-character checks, then a single pass over the
-// interior for character-set + consecutive-dot validation, and
-// finally the IP-shape check (which walks the string once more but
-// only for names that pass all earlier checks).
+// Single-pass design: length filter → boundary checks → one byte
+// walk that fuses the character-set validation, the consecutive-dot
+// detection, and the IP-shape tracking. The IP-shape rule needs
+// "was every byte a digit or a dot AND were there exactly 3 dots?" —
+// both signals are already available in the main loop, so a second
+// pass over the string is unnecessary.
 func validateS3BucketName(s string) (valid bool, reason string) {
 	n := len(s)
 	if n < s3BucketNameMinLength {
@@ -158,80 +190,37 @@ func validateS3BucketName(s string) (valid bool, reason string) {
 	if n > s3BucketNameMaxLength {
 		return false, "must be at most 63 characters"
 	}
-	if !isS3BucketBoundaryByte(s[0]) {
+	if !s3BucketBoundaryTable[s[0]] {
 		return false, "must begin with a lowercase letter or digit"
 	}
-	if !isS3BucketBoundaryByte(s[n-1]) {
+	if !s3BucketBoundaryTable[s[n-1]] {
 		return false, "must end with a lowercase letter or digit"
 	}
-	// Single pass: character set + consecutive dot detection.
+	// Fused single pass: character set + consecutive dots + IP-shape
+	// tracking. seenNonDigitNonDot tells us whether any byte outside
+	// [0-9.] appeared; if not, the string is a candidate for the
+	// IP-shape rule and dotCount discriminates.
+	dotCount := 0
+	seenNonDigitNonDot := false
 	for i := 0; i < n; i++ {
 		c := s[i]
-		if !isS3BucketByte(c) {
+		if !s3BucketByteTable[c] {
 			return false, "must contain only lowercase letters, digits, periods, and hyphens"
 		}
-		if c == '.' && i+1 < n && s[i+1] == '.' {
-			return false, "must not contain consecutive periods"
+		if c == '.' {
+			if i+1 < n && s[i+1] == '.' {
+				return false, "must not contain consecutive periods"
+			}
+			dotCount++
+		} else if c < '0' || c > '9' {
+			// Anything other than digit or dot rules out IP-shape.
+			seenNonDigitNonDot = true
 		}
 	}
-	if isIPv4Shape(s) {
+	if !seenNonDigitNonDot && dotCount == 3 {
 		return false, "must not be formatted as an IP address"
 	}
 	return true, ""
-}
-
-// isS3BucketByte reports whether c is in the S3 bucket-name character
-// set: lowercase letter, digit, period, or hyphen.
-func isS3BucketByte(c byte) bool {
-	switch {
-	case c >= 'a' && c <= 'z':
-		return true
-	case c >= '0' && c <= '9':
-		return true
-	case c == '.' || c == '-':
-		return true
-	}
-	return false
-}
-
-// isS3BucketBoundaryByte reports whether c is valid as the first or
-// last character of an S3 bucket name (lowercase letter or digit —
-// not `.` or `-`, unlike the interior).
-func isS3BucketBoundaryByte(c byte) bool {
-	switch {
-	case c >= 'a' && c <= 'z':
-		return true
-	case c >= '0' && c <= '9':
-		return true
-	}
-	return false
-}
-
-// isIPv4Shape reports whether s is shaped like an IPv4 address: four
-// dot-separated runs of digits, no other characters. Intentionally
-// permissive on octet value (matches any digit run, not just 0-255)
-// — AWS forbids anything "formatted as" an IP address, not just
-// well-formed ones. A name like `256.256.256.256` still trips this
-// rule at deployment time.
-func isIPv4Shape(s string) bool {
-	dots := 0
-	digitsSinceDot := 0
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '.':
-			if digitsSinceDot == 0 {
-				return false // consecutive dots or leading dot — not IP-shape
-			}
-			dots++
-			digitsSinceDot = 0
-		case c >= '0' && c <= '9':
-			digitsSinceDot++
-		default:
-			return false // any non-digit non-dot rules out IP shape
-		}
-	}
-	return dots == 3 && digitsSinceDot > 0
 }
 
 // s3BucketViolation packages a Violation for E204. The message names
