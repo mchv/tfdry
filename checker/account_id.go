@@ -23,7 +23,9 @@ import (
 // like "1234${var.mid}9012" could compose to arbitrary digit
 // substrings; placeholder-composed validation would produce false
 // positives without adding signal. Interpolated / templated values are
-// silently skipped — matches the E101/E201 policy.
+// silently skipped. This matches E201's policy — unlike E101 (which
+// supports templates via placeholder composition of octets), account
+// IDs have no segments where substitution would be safe.
 //
 // Zero-alloc hot path: length check (exactly 12) + branchless digit
 // scan using unsigned byte wraparound. No map, no allocation.

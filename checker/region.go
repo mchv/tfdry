@@ -22,7 +22,10 @@ import (
 // segment-boundary characters (a region code is a single indivisible token
 // like `us-east-1`), so placeholder-composed validation of templated
 // regions would be guesswork. Interpolated / templated values are silently
-// skipped — matches E101's "no useful signal → skip" policy.
+// skipped. Unlike E101 (which supports templates via placeholder
+// composition of numeric octets), a region code has no segments where
+// substitution would be safe — composition would just fabricate an
+// arbitrary value.
 //
 // Zero-alloc hot path: length-filter fast rejection, then a single
 // `map[string]struct{}` lookup. The map is precomputed at package init
