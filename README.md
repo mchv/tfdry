@@ -25,11 +25,11 @@ pre-commit hooks, CI pipelines, and editor integrations.
 ## Why tfdry?
 
 - **Fast.** Pure-AST analysis — no provider gRPC, no schema lookup, no
-  init step. On the `bench/` fixtures: ~14× faster than `terraform validate`
-  and ~3.5× faster than `terraform fmt -check` on a 100-file module
-  (more on smaller ones). The speedup persists with `terraform init`
-  already warmed — it's the provider-load round-trip we skip, not just
-  the network.
+  init step. On the committed `bench/` fixtures: ~14× faster than the
+  reference validation command and ~3.5× faster than the reference
+  format check on a 100-file module (more on smaller ones). The speedup
+  persists with initialisation already warmed — it comes from avoiding
+  the provider-load round trip, not merely the network.
 - **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E204 + E210 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
@@ -38,10 +38,16 @@ pre-commit hooks, CI pipelines, and editor integrations.
   tool-error code for unreadable files, oversize input, and write
   failures (routed to exit `2`, not `--checks=`-toggleable). No
   opinionated style nags.
-- **Agent-friendly.** Ships with a [`SKILL.md`](SKILL.md) describing the
-  CLI surface, exit-code contract, and JSON schema in the convention AI
-  coding agents expect. `--json` output is the stable machine-consumption
-  contract.
+- **Agent-friendly.** Fast, local runs keep an agent's edit–lint–fix
+  feedback loop short: there are no provider downloads, remote calls,
+  or shared state to wait for. The process is memory-conscious too: it
+  does not start provider processes or retain provider schemas or state,
+  limits each source file to 10 MiB, and uses zero-allocation fast paths
+  for common literal grammar checks. [`SKILL.md`](SKILL.md) documents
+  the CLI surface, exit-code contract, and JSON schema in the convention
+  AI coding agents expect; `--json` is the stable machine-consumption
+  contract. See [`PERFORMANCE.md`](PERFORMANCE.md) for methodology,
+  measurements, and reproduction commands.
 
 ## Quick start
 
