@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-23T14:37:53Z",
+  "method": "GNU time 1.9 /usr/bin/time -v",
+  "metric": "maximum resident set size",
+  "unit": "KiB",
+  "summary": "median of per-run maxima",
+  "runs": 11,
+  "warmups": 3,
+  "tfdry_version": "tfdry v0.1.1-64-gedf88b9",
+  "platform": {
+    "os": "linux",
+    "architecture": "aarch64"
+  },
+  "results": [
+    {
+      "fixture": "small",
+      "terraform_files": 2,
+      "median_peak_rss_kib": 7888,
+      "min_peak_rss_kib": 7868,
+      "max_peak_rss_kib": 7956
+    },
+    {
+      "fixture": "medium",
+      "terraform_files": 22,
+      "median_peak_rss_kib": 10276,
+      "min_peak_rss_kib": 8312,
+      "max_peak_rss_kib": 10468
+    },
+    {
+      "fixture": "large",
+      "terraform_files": 102,
+      "median_peak_rss_kib": 13392,
+      "min_peak_rss_kib": 11388,
+      "max_peak_rss_kib": 15544
+    }
+  ]
+}

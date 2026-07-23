@@ -198,6 +198,7 @@ PROSE_FILES := \
 	Makefile \
 	bench/README.md \
 	bench/snapshots/README.md \
+	bench/snapshots/*/README.md \
 	bench/attr-corpus/README.md \
 	.github/workflows/ci.yml \
 	.github/workflows/govulncheck.yml \

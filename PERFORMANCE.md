@@ -36,12 +36,20 @@ processor, Go version, and concurrent host activity all affect a run.
 
 ## Current reviewed snapshot
 
-The latest reviewed measurements are published under
-[`bench/snapshots/`](bench/snapshots/). Each snapshot records the source
-commit, architecture, pinned tool versions, fixture shape, timing results,
-and peak RSS. Generated raw reports remain under the gitignored
-`bench/results/` directory; selected evidence is copied into a snapshot
-only after review.
+The latest reviewed measurements are
+[`23 July 2026 at edf88b9`](bench/snapshots/2026-07-23-edf88b9/README.md).
+On its recorded Apple M4 Pro host, inside the pinned Linux/arm64 container:
+
+| Workload | Fixture | Result |
+|---|---:|---:|
+| Full tfdry check | 102 files | 7.03 ± 1.28 ms |
+| Read-only tfdry format check | 102 files | 7.18 ± 1.56 ms |
+| Full-check median peak RSS | 102 files | 13.08 MiB |
+
+The snapshot records the source commit, architecture, pinned tool versions,
+fixture shape, complete timing samples, and peak-RSS range. Generated raw
+reports remain under the gitignored `bench/results/` directory; selected
+evidence is copied into a snapshot only after review.
 
 The full-check row is a workflow-level comparison, not an equal-scope
 validator comparison. Initialisation happens while the container image is

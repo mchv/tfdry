@@ -25,12 +25,13 @@ pre-commit hooks, CI pipelines, and editor integrations.
 ## Why tfdry?
 
 - **Fast.** Pure-AST analysis — no provider gRPC, no schema lookup, no
-  init step. The pinned benchmark harness measures fresh-command latency
-  on deterministic fixtures; reviewed timing and peak-RSS evidence is
-  published in [`PERFORMANCE.md`](PERFORMANCE.md). Its full-check comparison
-  is workflow-level rather than equal-scope validation: initialisation is
-  outside the timed window, while the reference command's normal provider
-  loading remains included.
+  init step. In the latest pinned-container snapshot, the 102-file fixture
+  completes a full tfdry check in 7.03 ms and a read-only format check in
+  7.18 ms on the recorded host. The full-check comparison is workflow-level
+  rather than equal-scope validation: initialisation is outside the timed
+  window, while the reference command's normal provider loading remains
+  included. See [`PERFORMANCE.md`](PERFORMANCE.md) for provenance and raw
+  reports.
 - **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E204 + E210 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
@@ -44,7 +45,10 @@ pre-commit hooks, CI pipelines, and editor integrations.
   or shared state to wait for. The process is memory-conscious too: it
   does not start provider processes or retain provider schemas or state,
   limits each source file to 10 MiB, and uses zero-allocation fast paths
-  for common literal grammar checks. [`SKILL.md`](SKILL.md) documents
+  for common literal grammar checks. The pinned Linux/arm64 snapshot
+  measured 13.08 MiB median peak RSS for the 102-file full check on its
+  recorded host; memory figures remain architecture- and workload-dependent.
+  [`SKILL.md`](SKILL.md) documents
   the CLI surface, exit-code contract, and JSON schema in the convention
   AI coding agents expect; `--json` is the stable machine-consumption
   contract. See [`PERFORMANCE.md`](PERFORMANCE.md) for methodology,
