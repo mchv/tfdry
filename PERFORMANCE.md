@@ -37,25 +37,35 @@ processor, Go version, and concurrent host activity all affect a run.
 ## Current reviewed snapshot
 
 The latest reviewed measurements are
-[`23 July 2026 at edf88b9`](bench/snapshots/2026-07-23-edf88b9/README.md).
+[`23 July 2026 at cbfed13`](bench/snapshots/2026-07-23-cbfed13/README.md).
 On its recorded Apple M4 Pro host, inside the pinned Linux/arm64 container:
 
 | Workload | Fixture | Result |
 |---|---:|---:|
-| Full tfdry check | 102 files | 7.03 ± 1.28 ms |
-| Read-only tfdry format check | 102 files | 7.18 ± 1.56 ms |
-| Full-check median peak RSS | 102 files | 13.08 MiB |
+| Full tfdry check | 102 files | 7.15 ± 1.08 ms |
+| Read-only tfdry format check | 102 files | 6.69 ± 0.96 ms |
+| Full-check median peak RSS | 102 files | 13.13 MiB |
 
-The snapshot records the source commit, architecture, pinned tool versions,
-fixture shape, complete timing samples, and peak-RSS range. Generated raw
-reports remain under the gitignored `bench/results/` directory; selected
-evidence is copied into a snapshot only after review.
+Agent-oriented fresh-process timings from the same run are:
+
+| Workload | Fixture | Result |
+|---|---:|---:|
+| JSON output, clean | 102 files | 7.06 ± 0.86 ms |
+| JSON output, one diagnostic | 1 file | 0.897 ± 0.152 ms |
+| JSON output, ten diagnostics | 1 file | 0.991 ± 0.118 ms |
+| JSON output, recursive clean check | 10 workspaces / 20 files | 2.75 ± 0.30 ms |
+
+The snapshot records the source commit, architecture, exact reference CLI and
+fixture-provider versions, fixture shape, complete timing samples, and
+peak-RSS range. Generated raw reports remain under the gitignored
+`bench/results/` directory; selected evidence is copied into a snapshot only
+after review.
 
 The full-check row is a workflow-level comparison, not an equal-scope
 validator comparison. Initialisation happens while the container image is
-built and is outside the timed window. The reference command's normal
-provider-loading work remains inside that window. The harness does not
-isolate provider loading as the sole cause of any difference.
+built and is outside the timed window. The reference CLI 1.15.8 provider,
+plugin, and schema path remains inside that window. The harness does not
+isolate any one part of that path as the sole cause of the difference.
 
 Absolute timings and RSS vary with hardware and host load. Treat a snapshot
 as evidence for that recorded environment, not as a cross-machine promise.
