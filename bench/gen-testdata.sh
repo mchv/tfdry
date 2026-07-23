@@ -15,25 +15,31 @@
 set -eu
 
 usage() {
-    echo "usage: gen-testdata.sh [--dirty] <output-dir> <num-files>" >&2
-    exit 2
+	echo "usage: gen-testdata.sh [--dirty] <output-dir> <num-files>" >&2
+	exit 2
 }
 
 dirty=0
 if [ "${1:-}" = "--dirty" ]; then
-    dirty=1
-    shift
+	dirty=1
+	shift
 fi
 
 [ "$#" -eq 2 ] || usage
-[ -n "$1" ]    || usage
+[ -n "$1" ] || usage
 
 dir="$1"
+case "$dir" in
+-*) dir="./$dir" ;;
+esac
 n="$2"
 
 # n must be a non-negative integer.
 case "$n" in
-    ''|*[!0-9]*) echo "gen-testdata.sh: <num-files> must be a non-negative integer (got: $n)" >&2; exit 2 ;;
+'' | *[!0-9]*)
+	echo "gen-testdata.sh: <num-files> must be a non-negative integer (got: $n)" >&2
+	exit 2
+	;;
 esac
 
 mkdir -p "$dir"
@@ -47,11 +53,11 @@ rm -f "$dir"/file_*.tf
 # emit reads stdin and writes to $1, optionally stripping leading whitespace
 # when --dirty was passed. The output is still valid HCL — just non-canonical.
 emit() {
-    if [ "$dirty" = "1" ]; then
-        sed -e 's/^[[:space:]]*//' > "$1"
-    else
-        cat > "$1"
-    fi
+	if [ "$dirty" = "1" ]; then
+		sed -e 's/^[[:space:]]*//' >"$1"
+	else
+		cat >"$1"
+	fi
 }
 
 emit "$dir/providers.tf" <<'EOF'
@@ -60,7 +66,7 @@ terraform {
   required_providers {
     null = {
       source  = "hashicorp/null"
-      version = "~> 3.2"
+      version = "3.3.0"
     }
   }
 }
@@ -83,7 +89,7 @@ EOF
 
 i=0
 while [ "$i" -lt "$n" ]; do
-  emit "$dir/file_$i.tf" <<EOF
+	emit "$dir/file_$i.tf" <<EOF
 locals {
   name_$i = "resource-$i-\${local.env}"
   port_$i = $((1000 + i))
@@ -101,5 +107,5 @@ output "id_$i" {
   value = null_resource.r_$i.id
 }
 EOF
-  i=$((i + 1))
+	i=$((i + 1))
 done

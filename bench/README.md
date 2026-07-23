@@ -118,6 +118,7 @@ Optional: `gum` (charm.sh) for styled output — `brew install gum`. Without it,
 | Tool | Version | Why pinned |
 |------|---------|------------|
 | Reference CLI | 1.15.8 | public comparisons use a current stable, exact pin |
+| Fixture provider | 3.3.0 | provider-loading work must not drift between snapshots |
 | hyperfine | 1.18.0 | output format / statistical methodology stability |
 | go | 1.26.3 | matches `go.mod` |
 
