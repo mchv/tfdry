@@ -41,9 +41,9 @@ hyperfine -N \
 	'terraform fmt -check -recursive /testdata/large'
 
 # ── 2. Full check: tfdry vs terraform validate ────────────────────────────────
-# terraform validate requires `terraform init` (already done at build time).
-# tfdry runs its default check set (whatever `tfdry describe` lists).
-# Note: terraform validate must run from inside the dir, so we use bash -c.
+# The reference validation command requires initialisation (already done at
+# build time). Both commands execute directly under Hyperfine's no-shell mode;
+# the reference CLI's global -chdir option avoids asymmetric shell startup.
 echo
 echo "=== full validation (small) ==="
 hyperfine -N \
@@ -53,8 +53,8 @@ hyperfine -N \
 	--export-json "$OUT/validate-small.json" \
 	--command-name 'tfdry' \
 	'tfdry /testdata/small' \
-	--command-name 'terraform validate' \
-	'bash -c "cd /testdata/small && terraform validate"'
+	--command-name 'reference validate' \
+	'terraform -chdir=/testdata/small validate'
 
 echo
 echo "=== full validation (large) ==="
@@ -65,8 +65,8 @@ hyperfine -N \
 	--export-json "$OUT/validate-large.json" \
 	--command-name 'tfdry' \
 	'tfdry /testdata/large' \
-	--command-name 'terraform validate' \
-	'bash -c "cd /testdata/large && terraform validate"'
+	--command-name 'reference validate' \
+	'terraform -chdir=/testdata/large validate'
 
 # ── 3. Scaling: format check across sizes, parameterised ─────────────────────
 echo
@@ -80,18 +80,36 @@ hyperfine -N \
 	'tfdry fmt -check /testdata/{size}' \
 	'terraform fmt -check -recursive /testdata/{size}'
 
-# ── 4. JSON output overhead ───────────────────────────────────────────────────
+# ── 4. Agent-oriented output workloads ──────────────────────────────────────
 echo
-echo "=== json output overhead ==="
+echo "=== clean agent-oriented output workloads ==="
 hyperfine -N \
 	--warmup 3 \
 	--runs 30 \
-	--export-markdown "$OUT/json-overhead.md" \
-	--export-json "$OUT/json-overhead.json" \
-	--command-name 'tfdry (human)' \
+	--export-markdown "$OUT/agent-clean.md" \
+	--export-json "$OUT/agent-clean.json" \
+	--command-name 'clean, human, 102 files' \
 	'tfdry /testdata/large' \
-	--command-name 'tfdry --json' \
-	'tfdry --json /testdata/large'
+	--command-name 'clean, JSON, 102 files' \
+	'tfdry --json /testdata/large' \
+	--command-name '10 workspaces, JSON, recursive' \
+	'tfdry --json --recursive /testdata/agent/recursive'
+
+# Diagnostic fixtures are build-time asserted to exit 1 with exactly the
+# named finding count. --ignore-failure accepts that expected product result
+# without wrapping the measured commands in a shell.
+echo
+echo "=== diagnostic agent-oriented output workloads ==="
+hyperfine -N \
+	--ignore-failure \
+	--warmup 3 \
+	--runs 30 \
+	--export-markdown "$OUT/agent-diagnostics.md" \
+	--export-json "$OUT/agent-diagnostics.json" \
+	--command-name '1 diagnostic, JSON' \
+	'tfdry --json /testdata/agent/broken-1' \
+	--command-name '10 diagnostics, JSON' \
+	'tfdry --json /testdata/agent/broken-10'
 
 # ── 5. Format write: tfdry fmt vs terraform fmt (DIRTY input) ────────────────
 # Apples-to-apples write-mode comparison. Each iteration starts from a fresh
