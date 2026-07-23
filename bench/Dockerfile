@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     unzip \
     jq \
+    time \
     && rm -rf /var/lib/apt/lists/*
 
 # Install terraform (pinned, SHA256-verified).
@@ -70,8 +71,9 @@ RUN tfdry version
 # Copy testdata + scripts.
 COPY bench/testdata /testdata
 COPY bench/gen-testdata.sh /usr/local/bin/gen-testdata.sh
+COPY bench/memory.sh /usr/local/bin/memory.sh
 COPY bench/run.sh /usr/local/bin/run.sh
-RUN chmod +x /usr/local/bin/gen-testdata.sh /usr/local/bin/run.sh
+RUN chmod +x /usr/local/bin/gen-testdata.sh /usr/local/bin/memory.sh /usr/local/bin/run.sh
 
 # Generate medium and large testdata at build time.
 RUN /usr/local/bin/gen-testdata.sh /testdata/medium 20
