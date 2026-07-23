@@ -34,22 +34,23 @@ These are engineering goals, not a fixed latency or resident-memory
 service-level objective. Input shape, file count, filesystem cache,
 processor, Go version, and concurrent host activity all affect a run.
 
-## Current end-to-end snapshot
+## Current reviewed snapshot
 
-The committed end-to-end results use the generated 100-file `large`
-fixture. They are useful evidence for the intended feedback-loop profile,
-but are snapshots rather than a cross-machine promise.
+The latest reviewed measurements are published under
+[`bench/snapshots/`](bench/snapshots/). Each snapshot records the source
+commit, architecture, pinned tool versions, fixture shape, timing results,
+and peak RSS. Generated raw reports remain under the gitignored
+`bench/results/` directory; selected evidence is copied into a snapshot
+only after review.
 
-| Workload | tfdry mean | Reference command mean | Relative result |
-|---|---:|---:|---:|
-| Full static validation | 7.3 ms | 101.6 ms | 14.0× faster |
-| Read-only format check | 6.8 ms | 23.6 ms | 3.5× faster |
+The full-check row is a workflow-level comparison, not an equal-scope
+validator comparison. Initialisation happens while the container image is
+built and is outside the timed window. The reference command's normal
+provider-loading work remains inside that window. The harness does not
+isolate provider loading as the sole cause of any difference.
 
-The same snapshots show that startup remains important for a small
-five-file module: the full run averaged 992 µs, and the format check
-averaged 1.1 ms. The exact reference commands, fixture construction, and
-raw Markdown/JSON reports are in [`bench/`](bench/README.md) and
-`bench/results/`.
+Absolute timings and RSS vary with hardware and host load. Treat a snapshot
+as evidence for that recorded environment, not as a cross-machine promise.
 
 ## Design approach
 
@@ -95,15 +96,16 @@ longer useful.
 
 ## What the benchmark suite measures
 
-The suite has four complementary layers. No single layer answers every
+The suite has five complementary layers. No single layer answers every
 performance question.
 
 | Layer | Command | Measures | Best use |
 |---|---|---|---|
 | Go microbenchmarks | `make bench` | Isolated functions, checker walks, pipeline stages, output, `ns/op`, `B/op`, and `allocs/op` | Detecting a local regression or validating an allocation contract |
 | Hermetic attribute corpus | `make bench` | Grammar-check workloads built from committed extracted values | Exercising validators with representative literal shapes |
-| End-to-end container runs | `make bench-e2e` | Fresh command execution over 5-, 20-, and 100-file fixtures | User-visible latency and scaling |
-| Same-host A/B runs | `make bench-baseline` | Current branch and a baseline binary in one paired invocation | Attributing a change to a branch or commit |
+| End-to-end container runs | `make bench-e2e` | Fresh command timing on 2-, 22-, and 102-file fixtures | User-visible latency and scaling |
+| Peak-RSS container runs | `make bench-memory` | Median/minimum/maximum process peak RSS on the same fixtures | Checking process-memory scaling without conflating RSS and heap allocation |
+| Same-host A/B runs | `make bench-baseline` | Current branch and baseline commands in one Hyperfine invocation | Attributing a command-level change to a branch or commit |
 
 `make bench-jsonv2` is an additional experiment target. It compares the
 default build with a Go runtime experiment for output paths; it is not part
@@ -165,17 +167,41 @@ harness:
 make bench-e2e
 ```
 
-The harness generates deterministic 5-file (`small`), 20-file (`medium`),
-and 100-file (`large`) directories. It performs warm-up runs, takes 20 or
-30 measured samples depending on the workload, and writes both human
-readable Markdown and machine-readable JSON reports to `bench/results/`.
-The container pins the tools used by the harness, making the fixture and
-method stable even when it is run on different hosts.
+The committed `small` fixture contains 2 Terraform files. The generator's
+numeric argument counts resource files, then adds `providers.tf` and
+`locals.tf`; therefore `medium` contains 22 files (20+2) and `large`
+contains 102 files (100+2). The harness performs warm-up runs, takes 20 or
+30 measured timing samples depending on the workload, and writes both
+human-readable Markdown and machine-readable JSON reports to the gitignored
+`bench/results/` directory.
+
+The container pins the harness toolchain and fixture construction. That
+makes the method repeatable, but it does not make absolute timings
+comparable across processors, container runtimes, or concurrently loaded
+hosts.
 
 The end-to-end measurements include process startup because interactive
 and CI use invoke a fresh command. They deliberately exclude network-bound
 work and do not claim to model every real repository or long-running watch
-mode.
+mode. The full-check comparison also has different validation scope, as
+noted in the reviewed-snapshot section.
+
+### Peak resident memory
+
+`make bench-memory` runs only the memory reporter. `make bench-e2e` runs it
+after the timing suite. For each fixture, the reporter performs three
+warm-ups followed by 11 fresh `tfdry` processes under GNU time 1.9. It
+publishes the median, minimum, and maximum of each process's maximum
+resident set size in KiB:
+
+```sh
+make bench-memory
+```
+
+The JSON and Markdown reports are written to `bench/results/memory.*`.
+Peak RSS includes the process image, Go runtime, stacks, parsed source, and
+heap retained at the measurement peak. It is intentionally reported
+separately from Go benchmark `B/op` and `allocs/op`.
 
 ### Same-host baseline comparison
 
@@ -190,9 +216,11 @@ make bench-baseline BASELINE=v0.1.0  # named ref
 ```
 
 The script builds the current and baseline binaries separately, stages
-small/medium/large input in a temporary directory, and uses paired runs.
-It removes its temporary worktree and binaries on exit. Results are written
-as Markdown and JSON under `bench/results/baseline-*`.
+small/medium/large input in a temporary directory, and runs both commands
+within one Hyperfine invocation. Samples are sequential command groups,
+not statistically paired or interleaved. The script removes temporary
+testdata, its worktree, and both temporary binaries on exit. Results are
+written as Markdown and JSON under `bench/results/baseline-*`.
 
 For formatting write-path changes, use dirty fixtures. The harness restores
 an unformatted copy before every measured run; setup-copy time is outside
@@ -203,12 +231,20 @@ ARGS=fmt DIRTY=1 make bench-baseline BASELINE=HEAD~1
 ```
 
 This A/B method is stronger evidence than comparing two independently
-recorded benchmark files because host load, thermal state, and filesystem
-cache are shared by both variants.
+recorded benchmark files because both commands use the same host and staged
+input in one invocation. Samples are still sequential, so load and thermal
+conditions can drift during the run.
 
 ## Comparing Go benchmarks
 
-Use repeated samples and `benchstat` for a code-level comparison:
+`benchstat` is pinned in the Makefile and installed by `make tools`. To
+install only that tool:
+
+```sh
+make tools-benchstat
+```
+
+Then use repeated samples for a code-level comparison:
 
 ```sh
 make bench-save FILE=before.txt
@@ -237,7 +273,8 @@ command-level performance rather than one Go function.
 | `ns/op` | Mean time per benchmark iteration | Lower is better; compare only equivalent benchmark workloads. |
 | `B/op` | Heap bytes allocated per iteration | Lower reduces garbage-collection pressure, but is not process RSS. |
 | `allocs/op` | Heap allocation count per iteration | A zero-allocation hot path is useful only when the measured input actually reaches it. |
-| Hyperfine mean/min/max | Fresh-command wall-clock timing | Includes startup and reflects host noise; use several runs and paired A/B comparisons. |
+| Hyperfine mean/min/max | Fresh-command wall-clock timing | Includes startup and reflects host noise; use several runs and same-invocation A/B comparisons. |
+| GNU time maximum RSS | Peak resident set size for one fresh process | Includes runtime and process image; compare only the same container architecture and fixture. |
 
 Allocation statistics are deliberately not presented as a resident-memory
 claim. `B/op` and `allocs/op` describe allocations performed during one

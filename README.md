@@ -25,11 +25,12 @@ pre-commit hooks, CI pipelines, and editor integrations.
 ## Why tfdry?
 
 - **Fast.** Pure-AST analysis — no provider gRPC, no schema lookup, no
-  init step. On the committed `bench/` fixtures: ~14× faster than the
-  reference validation command and ~3.5× faster than the reference
-  format check on a 100-file module (more on smaller ones). The speedup
-  persists with initialisation already warmed — it comes from avoiding
-  the provider-load round trip, not merely the network.
+  init step. The pinned benchmark harness measures fresh-command latency
+  on deterministic fixtures; reviewed timing and peak-RSS evidence is
+  published in [`PERFORMANCE.md`](PERFORMANCE.md). Its full-check comparison
+  is workflow-level rather than equal-scope validation: initialisation is
+  outside the timed window, while the reference command's normal provider
+  loading remains included.
 - **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E204 + E210 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
