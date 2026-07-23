@@ -1,6 +1,6 @@
 # bench/
 
-End-to-end benchmarks comparing `tfdry` against `terraform fmt --check` and `terraform validate`.
+End-to-end benchmarks for tfdry formatting and full-check workflows against a pinned reference CLI.
 
 The container pins tool versions and fixture construction so the environment
 is repeatable. Absolute timings and RSS remain hardware- and load-dependent;
@@ -14,7 +14,9 @@ compare numbers only with their recorded platform and source provenance.
 | `tfdry fmt` vs `terraform fmt -recursive` (write mode, dirty input) | Apples-to-apples for the rewrite path; refreshes input per run |
 | `tfdry` (all checks) vs `terraform validate` | Different scopes but both are "is this code OK?" tools |
 | Scaling across small/medium/large | How each tool scales with directory size |
-| `tfdry` human vs JSON output | Cost of JSON encoding |
+| `tfdry` human vs JSON output on a clean module | Cost of JSON encoding when there are no findings |
+| `tfdry --json` with 1 and 10 diagnostics | Cost of the temporary-broken-state edit–check–repair path |
+| `tfdry --json --recursive` over 10 workspaces | Agent feedback across a representative multi-workspace repository |
 | `tfdry` peak RSS | Fresh-process resident-memory scaling across fixtures |
 
 ## Layout
@@ -42,8 +44,10 @@ The committed `testdata/small/` fixture contains 2 Terraform files.
 `gen-testdata.sh` treats its numeric argument as the number of resource
 files, then adds `providers.tf` and `locals.tf`; the generated `medium`
 fixture therefore contains 22 files (20+2), and `large` contains 102 files
-(100+2). All test data uses only the `null` provider, so no network access
-is needed during measured commands.
+(100+2). The image also constructs two diagnostic fixtures with exactly 1
+and 10 undefined-local findings, plus a recursive fixture containing 10
+independent copies of the clean two-file workspace. All test data uses only
+the `null` provider, so no network access is needed during measured commands.
 
 `attr-corpus/values/` seeds microbenchmarks for the format-validation check family (CIDR, ARN, region, account-ID). Its `files/` sub-directory (gitignored) is populated by `make bench-corpus-fetch`. See `attr-corpus/README.md` for details.
 
@@ -113,7 +117,7 @@ Optional: `gum` (charm.sh) for styled output — `brew install gum`. Without it,
 
 | Tool | Version | Why pinned |
 |------|---------|------------|
-| terraform | 1.9.8 | comparison must use a stable terraform |
+| Reference CLI | 1.15.8 | public comparisons use a current stable, exact pin |
 | hyperfine | 1.18.0 | output format / statistical methodology stability |
 | go | 1.26.3 | matches `go.mod` |
 
@@ -124,7 +128,8 @@ Bump these in `bench/Dockerfile` when intentionally refreshing the baseline.
 - `--warmup 3` — fills OS page cache and reduces cold-start noise
 - `--runs 20–30` — timing sample count depends on workload
 - Peak RSS uses 3 warm-ups and 11 fresh-process measurements per fixture
-- `terraform init` runs once at image build time (not measured)
+- The reference validation command uses its native working-directory option and runs directly under Hyperfine `-N`; neither measured validation command pays shell-startup cost
+- Reference initialisation runs once at image build time (not measured)
 - All terraform commands use `-backend=false` to avoid state setup
 - Each container run is ephemeral — no cross-run state
 

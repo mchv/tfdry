@@ -252,7 +252,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 | `tfdry_version` | string | Semver of the binary that produced the output. |
 | `directory` | string | The directory tfdry analysed (sanitised — control characters, ANSI escapes, and Bidi-override codepoints are stripped). |
 | `violations[]` | array | One object per violation, ordered by `file` then `line`. |
-| `violations[].code` | string | E000–E008 or W001. |
+| `violations[].code` | string | Registered tfdry check code; use `tfdry describe --json` for the runtime catalogue. |
 | `violations[].severity` | string | `"error"` or `"warning"`. |
 | `violations[].file` | string | Filename relative to `directory` (sanitised). |
 | `violations[].line` | integer | 1-based line number. **Always present**; emitted as `0` for file-level violations (e.g. E000, E008) where no specific source line applies. Non-zero for violations tied to a specific source line. |
@@ -373,7 +373,7 @@ Agents that read [`SKILL.md`](SKILL.md) get the CLI surface, exit-code contract,
 
 ## Project status
 
-tfdry is at **v0.1.0** — the first public release. The API and CLI surface are stable enough for production use, but pre-1.0 means breaking changes can land in a minor version if the rationale is documented in [`CHANGELOG.md`](CHANGELOG.md).
+The latest release is **v0.1.1**. The API and CLI surface are stable enough for production use, but pre-1.0 means breaking changes can land in a minor version if the rationale is documented in [`CHANGELOG.md`](CHANGELOG.md).
 
 Supported platforms: `darwin-arm64`, `linux-amd64`, `linux-arm64`, `windows-amd64`.
 

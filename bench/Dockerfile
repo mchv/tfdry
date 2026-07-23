@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
 FROM debian:bookworm-slim
 
 # Pinned versions. Bump deliberately when refreshing baselines.
-ARG TERRAFORM_VERSION=1.9.8
+ARG TERRAFORM_VERSION=1.15.8
 ARG HYPERFINE_VERSION=1.18.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,8 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Hashes from https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
-        amd64) TF_SHA256="186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8" ;; \
-        arm64) TF_SHA256="f85868798834558239f6148834884008f2722548f84034c9b0f62934b2d73ebb" ;; \
+        amd64) TF_SHA256="d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d" ;; \
+        arm64) TF_SHA256="8891e9dcedc9e3b8950bc6af9d4d8af1f4cfade3062f53b9dc403a89f6ce8c9c" ;; \
         *) echo "unsupported arch for terraform: $ARCH" >&2; exit 1 ;; \
     esac && \
     curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${ARCH}.zip" -o /tmp/tf.zip && \
@@ -79,11 +79,35 @@ RUN chmod +x /usr/local/bin/gen-testdata.sh /usr/local/bin/memory.sh /usr/local/
 RUN /usr/local/bin/gen-testdata.sh /testdata/medium 20
 RUN /usr/local/bin/gen-testdata.sh /testdata/large 100
 
-# Generate dirty variants of every size for write-mode fmt benchmarks.
-# Same content as /testdata/<size> but with leading whitespace stripped, so
-# `hclwrite.Format` (and `terraform fmt`) have real work to do. The bench
-# script (run.sh) refreshes a working copy from these via hyperfine --prepare
-# so each iteration sees fresh dirty input.
+# Generate agent-oriented fixtures: expected diagnostic output and a clean
+# recursive repository containing ten independent two-file workspaces.
+RUN mkdir -p /testdata/agent/broken-1 /testdata/agent/broken-10 /testdata/agent/recursive && \
+    printf 'output "broken_01" {\n  value = local.missing_01\n}\n' > /testdata/agent/broken-1/main.tf && \
+    : > /testdata/agent/broken-10/main.tf && \
+    for n in 01 02 03 04 05 06 07 08 09 10; do \
+        printf 'output "broken_%s" {\n  value = local.missing_%s\n}\n\n' "$n" "$n" >> /testdata/agent/broken-10/main.tf; \
+    done && \
+    for n in 01 02 03 04 05 06 07 08 09 10; do \
+        workspace="/testdata/agent/recursive/workspace-$n"; \
+        mkdir -p "$workspace"; \
+        cp /testdata/small/*.tf "$workspace/"; \
+    done
+
+# Assert benchmark fixture semantics so expected failures cannot silently drift.
+RUN set +e; \
+    tfdry --json /testdata/agent/broken-1 > /tmp/broken-1.json; broken_1_status=$?; \
+    tfdry --json /testdata/agent/broken-10 > /tmp/broken-10.json; broken_10_status=$?; \
+    set -e; \
+    test "$broken_1_status" -eq 1 && \
+    test "$broken_10_status" -eq 1 && \
+    jq -e '.summary == {"errors":1,"warnings":0,"tool_errors":0} and (.violations | length) == 1' /tmp/broken-1.json > /dev/null && \
+    jq -e '.summary == {"errors":10,"warnings":0,"tool_errors":0} and (.violations | length) == 10' /tmp/broken-10.json > /dev/null && \
+    tfdry --json --recursive /testdata/agent/recursive | \
+        jq -e '.summary == {"errors":0,"warnings":0,"tool_errors":0} and (.violations | length) == 0' > /dev/null && \
+    rm /tmp/broken-1.json /tmp/broken-10.json
+
+# Generate dirty variants of every size for write-mode format benchmarks.
+# Each measured iteration starts from a fresh copy of this unformatted input.
 RUN mkdir -p /testdata/dirty/small /testdata/dirty/medium /testdata/dirty/large && \
     for size in small medium large; do \
         for f in /testdata/$size/*.tf; do \

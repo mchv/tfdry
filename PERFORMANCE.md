@@ -111,7 +111,7 @@ performance question.
 |---|---|---|---|
 | Go microbenchmarks | `make bench` | Isolated functions, checker walks, pipeline stages, output, `ns/op`, `B/op`, and `allocs/op` | Detecting a local regression or validating an allocation contract |
 | Hermetic attribute corpus | `make bench` | Grammar-check workloads built from committed extracted values | Exercising validators with representative literal shapes |
-| End-to-end container runs | `make bench-e2e` | Fresh command timing on 2-, 22-, and 102-file fixtures | User-visible latency and scaling |
+| End-to-end container runs | `make bench-e2e` | Fresh command timing on 2-, 22-, and 102-file fixtures, including clean, diagnostic JSON, and recursive workloads | User-visible latency, scaling, and agent edit–check–repair feedback |
 | Peak-RSS container runs | `make bench-memory` | Median/minimum/maximum process peak RSS on the same fixtures | Checking process-memory scaling without conflating RSS and heap allocation |
 | Same-host A/B runs | `make bench-baseline` | Current branch and baseline commands in one Hyperfine invocation | Attributing a command-level change to a branch or commit |
 
@@ -193,6 +193,19 @@ and CI use invoke a fresh command. They deliberately exclude network-bound
 work and do not claim to model every real repository or long-running watch
 mode. The full-check comparison also has different validation scope, as
 noted in the reviewed-snapshot section.
+
+### Agent-oriented output workloads
+
+The end-to-end suite separately times a clean 102-file check with human and
+JSON output, JSON checks that return exactly 1 and 10 diagnostics, and a
+recursive JSON check over 10 independent two-file workspaces. The diagnostic
+commands intentionally exit 1; Hyperfine accepts that expected result
+directly rather than measuring a shell wrapper.
+
+These cases model the edit–check–repair loop more closely than a clean-only
+run. They include diagnostic construction and JSON growth while keeping
+fixture shape and finding counts explicit. They remain representative cases,
+not a claim that every agent workload has the same size or diagnostic mix.
 
 ### Peak resident memory
 
