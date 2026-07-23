@@ -25,11 +25,14 @@ pre-commit hooks, CI pipelines, and editor integrations.
 ## Why tfdry?
 
 - **Fast.** Pure-AST analysis — no provider gRPC, no schema lookup, no
-  init step. On the `bench/` fixtures: ~14× faster than `terraform validate`
-  and ~3.5× faster than `terraform fmt -check` on a 100-file module
-  (more on smaller ones). The speedup persists with `terraform init`
-  already warmed — it's the provider-load round-trip we skip, not just
-  the network.
+  init step. In the latest pinned-container snapshot, the 102-file fixture
+  completes a full tfdry check in 7.15 ms and a read-only format check in
+  6.69 ms on the recorded host. The full-check comparison is workflow-level
+  rather than equal-scope validation: initialisation is outside the timed
+  window, while the reference CLI 1.15.8 provider, plugin, and schema path
+  remains included. The benchmark does not attribute the difference to any
+  one part of that path. See [`PERFORMANCE.md`](PERFORMANCE.md) for provenance
+  and raw reports.
 - **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E204 + E210 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
@@ -38,10 +41,22 @@ pre-commit hooks, CI pipelines, and editor integrations.
   tool-error code for unreadable files, oversize input, and write
   failures (routed to exit `2`, not `--checks=`-toggleable). No
   opinionated style nags.
-- **Agent-friendly.** Ships with a [`SKILL.md`](SKILL.md) describing the
-  CLI surface, exit-code contract, and JSON schema in the convention AI
-  coding agents expect. `--json` output is the stable machine-consumption
-  contract.
+- **Agent-friendly.** Fast, local runs keep an agent's edit–lint–fix
+  feedback loop short: there are no provider downloads, remote calls,
+  or shared state to wait for. The process is memory-conscious too: it
+  does not start provider processes or retain provider schemas or state,
+  limits each source file to 10 MiB, and uses zero-allocation fast paths
+  for common literal grammar checks. The pinned Linux/arm64 snapshot
+  measured 13.13 MiB median peak RSS for the 102-file full check on its
+  recorded host. Fresh JSON checks averaged 7.06 ms for the clean 102-file
+  fixture, 0.897 ms for one finding in one file, 0.991 ms for ten findings
+  in one file, and 2.75 ms for a clean recursive check of ten two-file
+  workspaces. Timing and memory figures remain architecture- and
+  workload-dependent. [`SKILL.md`](SKILL.md) documents
+  the CLI surface, exit-code contract, and JSON schema in the convention
+  AI coding agents expect; `--json` is the stable machine-consumption
+  contract. See [`PERFORMANCE.md`](PERFORMANCE.md) for methodology,
+  measurements, and reproduction commands.
 
 ## Quick start
 
@@ -241,7 +256,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 | `tfdry_version` | string | Semver of the binary that produced the output. |
 | `directory` | string | The directory tfdry analysed (sanitised — control characters, ANSI escapes, and Bidi-override codepoints are stripped). |
 | `violations[]` | array | One object per violation, ordered by `file` then `line`. |
-| `violations[].code` | string | E000–E008 or W001. |
+| `violations[].code` | string | Registered tfdry check code; use `tfdry describe --json` for the runtime catalogue. |
 | `violations[].severity` | string | `"error"` or `"warning"`. |
 | `violations[].file` | string | Filename relative to `directory` (sanitised). |
 | `violations[].line` | integer | 1-based line number. **Always present**; emitted as `0` for file-level violations (e.g. E000, E008) where no specific source line applies. Non-zero for violations tied to a specific source line. |
@@ -362,7 +377,7 @@ Agents that read [`SKILL.md`](SKILL.md) get the CLI surface, exit-code contract,
 
 ## Project status
 
-tfdry is at **v0.1.0** — the first public release. The API and CLI surface are stable enough for production use, but pre-1.0 means breaking changes can land in a minor version if the rationale is documented in [`CHANGELOG.md`](CHANGELOG.md).
+The latest release is **v0.1.1**. The API and CLI surface are stable enough for production use, but pre-1.0 means breaking changes can land in a minor version if the rationale is documented in [`CHANGELOG.md`](CHANGELOG.md).
 
 Supported platforms: `darwin-arm64`, `linux-amd64`, `linux-arm64`, `windows-amd64`.
 

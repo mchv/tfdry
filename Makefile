@@ -13,8 +13,9 @@ GOFUMPT_VERSION       := v0.10.0
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := v1.4.0
 MISSPELL_VERSION      := v0.7.0
+BENCHSTAT_VERSION     := v0.0.0-20260709024250-82a0b07e230d
 
-.PHONY: help build test test-race verify tools tools-fmt tools-lint tools-vuln tools-misspell fmt fmt-check tidy-check lint lint-prose vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-baseline bench-jsonv2 bench-corpus-fetch bench-corpus-extract bench-corpus-refresh bench-corpus-clean clean
+.PHONY: help build test test-race verify tools tools-fmt tools-lint tools-vuln tools-misspell tools-benchstat fmt fmt-check tidy-check lint lint-prose vet vuln check-no-markers cross-build bench bench-save bench-compare bench-pivot bench-e2e bench-memory bench-baseline bench-jsonv2 bench-corpus-fetch bench-corpus-extract bench-corpus-refresh bench-corpus-clean clean
 
 help: ## Show this help (list of available targets).
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -34,7 +35,7 @@ test: ## Run unit tests across all packages.
 
 verify: fmt-check tidy-check vet lint lint-prose check-no-markers test-race vuln cross-build ## Run the full pre-PR verification pipeline.
 
-tools: tools-fmt tools-lint tools-vuln tools-misspell ## Install every dev tool used by `make verify` (gofumpt, golangci-lint, govulncheck, misspell) into GOPATH/bin.
+tools: tools-fmt tools-lint tools-vuln tools-misspell tools-benchstat ## Install every pinned development and benchmark tool.
 
 tools-fmt: ## Install gofumpt only.
 	go install mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
@@ -47,6 +48,9 @@ tools-vuln: ## Install govulncheck only — used by the standalone scheduled vul
 
 tools-misspell: ## Install misspell only — used by the lint-prose target to lint .md / Makefile / workflow prose.
 	go install github.com/golangci/misspell/cmd/misspell@$(MISSPELL_VERSION)
+
+tools-benchstat: ## Install benchstat only — used by bench-compare and bench-pivot.
+	go install golang.org/x/perf/cmd/benchstat@$(BENCHSTAT_VERSION)
 
 fmt: ## Apply gofumpt formatting in place. Use this to fix `make fmt-check` failures.
 	@command -v gofumpt >/dev/null 2>&1 || { \
@@ -150,9 +154,10 @@ lint: ## Run golangci-lint with the project's config.
 # through until this target. `misspell -locale UK -error` flags US
 # spellings and exits non-zero, mirroring the Go-side convention.
 #
-# Files we scan: README.md, CHANGELOG.md, CONTRIBUTING.md, SECURITY.md,
-# SKILL.md, Makefile, the workflow YAMLs (except codeql.yml — see
-# below), .github/dependabot.yml, and .goreleaser.yaml.
+# Files we scan: README.md, PERFORMANCE.md, CHANGELOG.md, CONTRIBUTING.md, SECURITY.md,
+# SKILL.md, Makefile, benchmark documentation/snapshots, the workflow YAMLs
+# (except codeql.yml — see below), .github/dependabot.yml, and
+# .goreleaser.yaml.
 #
 # Files we deliberately skip, with rationale:
 #
@@ -185,12 +190,15 @@ lint: ## Run golangci-lint with the project's config.
 # tech-focused prose that the false-negative risk is acceptable.
 PROSE_FILES := \
 	README.md \
+	PERFORMANCE.md \
 	CHANGELOG.md \
 	CONTRIBUTING.md \
 	SECURITY.md \
 	SKILL.md \
 	Makefile \
 	bench/README.md \
+	bench/snapshots/README.md \
+	bench/snapshots/*/README.md \
 	bench/attr-corpus/README.md \
 	.github/workflows/ci.yml \
 	.github/workflows/govulncheck.yml \
@@ -270,15 +278,22 @@ bench-save: ## Save 6-run benchmarks to FILE for later comparison (FILE=before.t
 	go test ./... -bench=. -benchtime=5s -benchmem -count=6 -run='^$$' | tee $(FILE)
 
 bench-compare: ## Compare two saved benchmark files with benchstat (OLD=… NEW=…).
+	@command -v benchstat >/dev/null 2>&1 || { echo "benchstat not found in PATH. Run 'make tools-benchstat' first."; exit 1; }
 	benchstat $(OLD) $(NEW)
 
 bench-pivot: ## Pivot saved benchmarks across a sub-name dimension (FILE=… COL=files).
+	@command -v benchstat >/dev/null 2>&1 || { echo "benchstat not found in PATH. Run 'make tools-benchstat' first."; exit 1; }
 	benchstat -col /$(COL) $(FILE)
 
-bench-e2e: ## End-to-end benchmarks vs terraform fmt/validate, in a container.
+bench-e2e: ## Run timing and peak-RSS benchmarks in the pinned container.
 	mkdir -p bench/results
 	docker build -f bench/Dockerfile --build-arg TFDRY_VERSION=$(VERSION) -t tfdry-bench .
 	docker run --rm --user $(shell id -u):$(shell id -g) -v "$(PWD)/bench/results:/out" tfdry-bench
+
+bench-memory: ## Run only the peak-RSS benchmark in the pinned container.
+	mkdir -p bench/results
+	docker build -f bench/Dockerfile --build-arg TFDRY_VERSION=$(VERSION) -t tfdry-bench .
+	docker run --rm --user $(shell id -u):$(shell id -g) -v "$(PWD)/bench/results:/out" tfdry-bench /usr/local/bin/memory.sh
 
 bench-baseline: ## A/B compare HEAD against a baseline ref via hyperfine (BASELINE=ref, optional).
 	bench/baseline.sh $(BASELINE)
@@ -298,6 +313,6 @@ bench-corpus-refresh: bench-corpus-fetch bench-corpus-extract ## Fetch + extract
 bench-corpus-clean: ## Remove bench/attr-corpus/files/ (keeps committed values/).
 	rm -rf bench/attr-corpus/files
 
-clean: ## Remove the binary and bench/results.
-	rm -f $(BINARY)
+clean: ## Remove build and generated benchmark artefacts.
+	rm -f $(BINARY) .bench-current .bench-baseline
 	rm -rf bench/results
