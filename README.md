@@ -25,14 +25,15 @@ pre-commit hooks, CI pipelines, and editor integrations.
 ## Why tfdry?
 
 - **Fast.** Pure-AST analysis — no provider gRPC, no schema lookup, no
-  init step. In the latest pinned-container snapshot, the 102-file fixture
-  averaged 7.15 ± 1.08 ms for a full tfdry check and 6.69 ± 0.96 ms for a
-  read-only format check; the ± values are standard deviations. The full-check
-  comparison is workflow-level rather than equal-scope validation:
-  initialisation is outside the timed window, while the reference CLI 1.15.8 provider, plugin, and schema path
-  remains included. The benchmark does not attribute the difference to any
-  one part of that path. See [`PERFORMANCE.md`](PERFORMANCE.md) for provenance
-  and raw reports.
+  init step. In the latest pinned-container snapshot, on the 102-file fixture,
+  a full tfdry check ran about 14× faster than `terraform validate`, and its
+  read-only format check ran about 3× faster than `terraform fmt -check`.
+  The full-check comparison is workflow-level rather than equal-scope
+  validation: initialisation is outside the timed window, while the Terraform
+  1.15.8 provider, plugin, and schema path remains included. The benchmark
+  does not attribute the difference to any one part of that path. See
+  [`PERFORMANCE.md`](PERFORMANCE.md) for exact means, standard deviations,
+  version pins, provenance, and raw reports.
 - **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E204 + E210 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
   unused), relative-module input typing without `terraform init`,
