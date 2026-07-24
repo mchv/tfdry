@@ -26,10 +26,10 @@ pre-commit hooks, CI pipelines, and editor integrations.
 
 - **Fast.** Pure-AST analysis — no provider gRPC, no schema lookup, no
   init step. In the latest pinned-container snapshot, the 102-file fixture
-  completes a full tfdry check in 7.15 ms and a read-only format check in
-  6.69 ms on the recorded host. The full-check comparison is workflow-level
-  rather than equal-scope validation: initialisation is outside the timed
-  window, while the reference CLI 1.15.8 provider, plugin, and schema path
+  averaged 7.15 ± 1.08 ms for a full tfdry check and 6.69 ± 0.96 ms for a
+  read-only format check; the ± values are standard deviations. The full-check
+  comparison is workflow-level rather than equal-scope validation:
+  initialisation is outside the timed window, while the reference CLI 1.15.8 provider, plugin, and schema path
   remains included. The benchmark does not attribute the difference to any
   one part of that path. See [`PERFORMANCE.md`](PERFORMANCE.md) for provenance
   and raw reports.
@@ -48,11 +48,12 @@ pre-commit hooks, CI pipelines, and editor integrations.
   limits each source file to 10 MiB, and uses zero-allocation fast paths
   for common literal grammar checks. The pinned Linux/arm64 snapshot
   measured 13.13 MiB median peak RSS for the 102-file full check on its
-  recorded host. Fresh JSON checks averaged 7.06 ms for the clean 102-file
-  fixture, 0.897 ms for one finding in one file, 0.991 ms for ten findings
-  in one file, and 2.75 ms for a clean recursive check of ten two-file
-  workspaces. Timing and memory figures remain architecture- and
-  workload-dependent. [`SKILL.md`](SKILL.md) documents
+  recorded host. Fresh JSON check means ± standard deviations were 7.06 ±
+  0.86 ms for the clean 102-file fixture, 0.897 ± 0.152 ms for one finding in
+  one file, 0.991 ± 0.118 ms for ten findings in one file, and 2.75 ± 0.30 ms
+  for a clean recursive check of ten two-file workspaces. Timing and memory
+  figures remain architecture- and workload-dependent.
+  [`SKILL.md`](SKILL.md) documents
   the CLI surface, exit-code contract, and JSON schema in the convention
   AI coding agents expect; `--json` is the stable machine-consumption
   contract. See [`PERFORMANCE.md`](PERFORMANCE.md) for methodology,
