@@ -9,180 +9,192 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
-// ── E204: AWS S3 general-purpose bucket name grammar ────────────────────────
+// ── E204: AWS S3 bucket name grammar ────────────────────────────────────────
 //
-// E204 catches structural violations of AWS S3 general-purpose bucket
-// naming rules. Rules validated (verified against the AWS S3 User
-// Guide, docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html):
+// E204 validates literal bucket declarations only where the containing
+// Terraform block establishes the name's semantics. A provider-wide
+// `aws_s3_*` prefix is not sufficient: some `bucket` arguments accept access
+// point ARNs, existing buckets may use grandfathered pre-2018 names, and
+// directory buckets have their own required format.
+//
+// General-purpose names are checked for:
 //
 //  1. Length: 3-63 characters
 //  2. Character set: lowercase letters (a-z), digits (0-9), period
 //     (.), and hyphen (-) only
-//  3. Must begin AND end with a letter or digit (not `.` or `-`)
+//  3. Must begin and end with a letter or digit
 //  4. No consecutive periods (`..`)
-//  5. Must not be formatted as an IP address (four dot-separated
-//     digit runs — e.g. 192.168.5.4)
+//  5. Must not be formatted as an IP address
 //
-// Deferred (v2 or by real-world signal):
-//   - Reserved prefixes (`xn--`, `sthree-`, `amzn-s3-demo-`)
-//   - Reserved suffixes (`-s3alias`, `--ol-s3`, `.mrap`, `--x-s3`,
-//     `--table-s3`)
-//   - `-an` suffix reserved for the account-regional-namespace format
+// Directory-bucket names use the same length and boundary limits, allow only
+// lowercase letters, digits, and hyphens, and must have the documented
+// `<base-name>--<zone-id>--x-s3` format.
 //
-// Design principles:
-//
-//   - Trigger surface: enumerated attribute names (`bucket`,
-//     `bucket_name`) scoped to top-level `resource "aws_s3_*"` /
-//     `data "aws_s3_*"` blocks. Non-S3 AWS resources (e.g.
-//     aws_athena_workgroup.bucket) and non-AWS resources (e.g.
-//     google_storage_bucket) are silently skipped — different
-//     services have different naming rules.
-//
-//   - Direct attributes only in v1. `bucket` inside a nested block
-//     of an aws_s3_* resource is NOT scanned. `resource` and `data`
-//     appear only at top level in Terraform, so no recursion is
-//     needed.
-//
-//   - Interpolation-aware: values containing `${...}` template
-//     interpolation are skipped. Placeholder-composed validation
-//     isn't meaningful here because S3 rules are pointwise (every
-//     character must be valid), and the substituted content is
-//     unknown at author time.
-//
-//   - Zero-alloc fast path: pure-literal values go through
-//     TryLiteralString and validateS3BucketName without allocating
-//     any []TemplatePart slice.
+// Reserved general-purpose prefixes and suffixes remain deferred until the
+// semantic context is complete enough to add them without rejecting another
+// S3 bucket subtype.
 
-// s3BucketTriggers lists the attribute names that trigger E204 when
-// they appear inside an aws_s3_* resource or data source. Kept small
-// and enumerated (not a regex) to make additions a deliberate act
-// and to avoid false positives on lookalike names.
-//
-// Attribute names verified against terraform-provider-aws docs:
-//   - `bucket` — appears on aws_s3_bucket (creation), and all
-//     aws_s3_bucket_* companion resources (aws_s3_bucket_policy,
-//     aws_s3_bucket_versioning, ...) as a reference to the target
-//   - `bucket_name` — appears on some data-plane resources
-//     (aws_s3_bucket_object, aws_s3_object)
-//
-// Additions should cite the provider doc in the comment above.
-var s3BucketTriggers = map[string]struct{}{
-	"bucket":      {},
-	"bucket_name": {},
-}
+type s3ValueKind uint8
 
-// s3BucketPrefix is the resource-type prefix that triggers E204
-// applicability. Any top-level `resource` or `data` block whose
-// first label starts with this string is considered an S3 bucket
-// scope. Kept as a constant so adding future S3 subtypes (all
-// `aws_s3_*`) is automatic.
-const s3BucketPrefix = "aws_s3_"
-
-// S3 bucket name length bounds. Enforced up front by
-// validateS3BucketName so grossly out-of-range inputs (a full URL,
-// an accidentally-set long string) short-circuit before the byte
-// loops run.
 const (
-	s3BucketNameMinLength = 3
-	s3BucketNameMaxLength = 63
+	s3GeneralPurposeBucketName s3ValueKind = iota + 1
+	s3DirectoryBucketName
+	s3BucketNameOrAccessPointARN
+	s3ExistingBucketReference
 )
 
-// checkS3BucketName runs E204 over a single parsed file, returning
-// one Violation per finding. Called from Run() when E204 is enabled.
+// s3Context identifies one provider argument whose S3 value semantics have
+// been checked against current terraform-provider-aws documentation or source.
+// Contexts absent from s3Contexts fail closed: E204 stays silent rather than
+// applying general-purpose creation rules to a newly added provider subtype.
+type s3Context struct {
+	blockType    string
+	resourceType string
+	attribute    string
+}
+
+const s3BucketAttribute = "bucket"
+
+// s3Contexts is deliberately explicit. Each entry needs positive and negative
+// coverage in checks_e204_test.go and must be mirrored by the integrity test.
 //
-// Structure follows E210's flat top-level scan: `resource` and
-// `data` blocks appear only at top level in Terraform, and v1
-// examines only direct attributes of aws_s3_* blocks. No recursion.
+// The object resource, deprecated bucket-object resource, and object data
+// source document `bucket` as a bucket name or S3 access-point ARN. The bucket
+// data source implementation also handles ARNs. Those contexts are skipped by
+// E204 because a non-ARN literal may still be a grandfathered existing name.
+// Bucket policies can target either general-purpose or directory buckets and
+// are likewise reference-only.
+var s3Contexts = map[s3Context]s3ValueKind{
+	{blockType: "resource", resourceType: "aws_s3_bucket", attribute: s3BucketAttribute}:           s3GeneralPurposeBucketName,
+	{blockType: "resource", resourceType: "aws_s3_directory_bucket", attribute: s3BucketAttribute}: s3DirectoryBucketName,
+	{blockType: "resource", resourceType: "aws_s3_object", attribute: s3BucketAttribute}:           s3BucketNameOrAccessPointARN,
+	{blockType: "resource", resourceType: "aws_s3_bucket_object", attribute: s3BucketAttribute}:    s3BucketNameOrAccessPointARN,
+	{blockType: "data", resourceType: "aws_s3_object", attribute: s3BucketAttribute}:               s3BucketNameOrAccessPointARN,
+	{blockType: "data", resourceType: "aws_s3_bucket", attribute: s3BucketAttribute}:               s3BucketNameOrAccessPointARN,
+	{blockType: "resource", resourceType: "aws_s3_bucket_policy", attribute: s3BucketAttribute}:    s3ExistingBucketReference,
+}
+
+const (
+	s3ResourcePrefix      = "aws_s3_"
+	s3BucketNameMinLength = 3
+	s3BucketNameMaxLength = 63
+	s3DirectorySuffix     = "--x-s3"
+)
+
+// checkS3BucketName runs E204 over a single parsed file. The prefix test is
+// only a fast rejection for unrelated resources; s3Contexts remains the sole
+// source of applicability. Only direct `bucket` attributes in explicitly
+// classified top-level resource or data blocks are considered.
 func checkS3BucketName(f ParsedFile) []Violation {
 	if f.Body == nil {
 		return nil
 	}
+
 	var violations []Violation
 	for _, block := range f.Body.Blocks {
-		if block.Type != "resource" && block.Type != "data" {
+		if (block.Type != "resource" && block.Type != "data") || len(block.Labels) == 0 {
 			continue
 		}
-		if len(block.Labels) == 0 {
+		if !strings.HasPrefix(block.Labels[0], s3ResourcePrefix) {
 			continue
 		}
-		if !strings.HasPrefix(block.Labels[0], s3BucketPrefix) {
+
+		context := s3Context{
+			blockType:    block.Type,
+			resourceType: block.Labels[0],
+			attribute:    s3BucketAttribute,
+		}
+		kind, ok := s3Contexts[context]
+		if !ok {
 			continue
 		}
-		for _, attr := range block.Body.Attributes {
-			if _, ok := s3BucketTriggers[attr.Name]; !ok {
-				continue
-			}
-			checkS3BucketAttr(f.Name, attr, &violations)
+
+		attr, ok := block.Body.Attributes[context.attribute]
+		if !ok {
+			continue
 		}
+		checkS3BucketAttr(f.Name, attr, kind, &violations)
 	}
 	return violations
 }
 
-// checkS3BucketAttr validates a single bucket / bucket_name attribute.
-// Non-template expressions (bare traversals, function calls) skip
-// silently — statically-unresolvable references can't be validated
-// as literals. Interpolated / templated values also skip; every S3
-// rule is boundary-sensitive and a partial composed form gives no
-// useful signal.
-//
-// Empty literal strings (bucket = "") are NOT skipped: an empty
-// value violates the length rule (3-63) unambiguously and firing
-// E204 with a clear "must be at least 3 characters" message is
-// more useful than silence.
-func checkS3BucketAttr(file string, attr *hclsyntax.Attribute, violations *[]Violation) {
+// checkS3BucketAttr validates one classified bucket attribute. References and
+// interpolated values are statically unresolved and therefore skipped.
+// Existing-bucket and name-or-ARN contexts are also skipped: strict modern
+// naming rules would reject valid access-point ARNs and grandfathered names.
+func checkS3BucketAttr(file string, attr *hclsyntax.Attribute, kind s3ValueKind, violations *[]Violation) {
+	if kind == s3BucketNameOrAccessPointARN || kind == s3ExistingBucketReference {
+		return
+	}
+
 	s, ok := TryLiteralString(attr.Expr)
 	if !ok {
 		return
 	}
-	valid, reason := validateS3BucketName(s)
+
+	var valid bool
+	var reason string
+	switch kind {
+	case s3GeneralPurposeBucketName:
+		valid, reason = validateS3BucketName(s)
+	case s3DirectoryBucketName:
+		valid, reason = validateS3DirectoryBucketName(s)
+	case s3BucketNameOrAccessPointARN, s3ExistingBucketReference:
+		return
+	default:
+		return
+	}
 	if valid {
 		return
 	}
+
 	*violations = append(*violations, s3BucketViolation(file, attr.Expr.Range().Start.Line, attr.Name, s, reason))
 }
 
-// s3BucketByteTable is a precomputed 256-entry lookup for the S3
-// bucket-name character-set check. Trades a small init-time cost
-// (36 loop iterations for a-z and 0-9, plus 2 direct assignments
-// for '.' and '-') for a single indexed load per byte in the hot
-// path, replacing the two range comparisons and one equality that
-// a naive switch compiles to.
+// s3BucketByteTable is a precomputed lookup for the general-purpose
+// bucket-name character set.
 var s3BucketByteTable = func() [256]bool {
-	var t [256]bool
+	var table [256]bool
 	for c := byte('a'); c <= 'z'; c++ {
-		t[c] = true
+		table[c] = true
 	}
 	for c := byte('0'); c <= '9'; c++ {
-		t[c] = true
+		table[c] = true
 	}
-	t['.'] = true
-	t['-'] = true
-	return t
+	table['.'] = true
+	table['-'] = true
+	return table
 }()
 
-// s3BucketBoundaryTable is the same idea for the first/last-char
-// check: only lowercase letters and digits (no '.' or '-').
+// s3DirectoryBucketByteTable excludes periods, which directory-bucket names
+// do not permit.
+var s3DirectoryBucketByteTable = func() [256]bool {
+	var table [256]bool
+	for c := byte('a'); c <= 'z'; c++ {
+		table[c] = true
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		table[c] = true
+	}
+	table['-'] = true
+	return table
+}()
+
+// s3BucketBoundaryTable permits lowercase letters and digits at name
+// boundaries.
 var s3BucketBoundaryTable = func() [256]bool {
-	var t [256]bool
+	var table [256]bool
 	for c := byte('a'); c <= 'z'; c++ {
-		t[c] = true
+		table[c] = true
 	}
 	for c := byte('0'); c <= '9'; c++ {
-		t[c] = true
+		table[c] = true
 	}
-	return t
+	return table
 }()
 
-// validateS3BucketName reports whether s is a well-formed AWS S3
-// general-purpose bucket name and, if not, returns a short reason
-// suitable for the diagnostic message. Zero-alloc.
-//
-// Single-pass design: length filter → boundary checks → one byte
-// walk that fuses the character-set validation, the consecutive-dot
-// detection, and the IP-shape tracking. The IP-shape rule needs
-// "was every byte a digit or a dot AND were there exactly 3 dots?" —
-// both signals are already available in the main loop, so a second
-// pass over the string is unnecessary.
+// validateS3BucketName reports whether s follows the selected
+// general-purpose S3 bucket-name rules. Zero-allocation.
 func validateS3BucketName(s string) (valid bool, reason string) {
 	n := len(s)
 	if n < s3BucketNameMinLength {
@@ -197,10 +209,7 @@ func validateS3BucketName(s string) (valid bool, reason string) {
 	if !s3BucketBoundaryTable[s[n-1]] {
 		return false, "must end with a lowercase letter or digit"
 	}
-	// Fused single pass: character set + consecutive dots + IP-shape
-	// tracking. seenNonDigitNonDot tells us whether any byte outside
-	// [0-9.] appeared; if not, the string is a candidate for the
-	// IP-shape rule and dotCount discriminates.
+
 	dotCount := 0
 	seenNonDigitNonDot := false
 	for i := 0; i < n; i++ {
@@ -214,7 +223,6 @@ func validateS3BucketName(s string) (valid bool, reason string) {
 			}
 			dotCount++
 		} else if c < '0' || c > '9' {
-			// Anything other than digit or dot rules out IP-shape.
 			seenNonDigitNonDot = true
 		}
 	}
@@ -224,9 +232,45 @@ func validateS3BucketName(s string) (valid bool, reason string) {
 	return true, ""
 }
 
-// s3BucketViolation packages a Violation for E204. The message names
-// the attribute, the offending literal, and the specific rule that
-// was violated so the diagnostic doubles as the fix.
+// validateS3DirectoryBucketName reports whether s follows the documented
+// directory-bucket character and `<base-name>--<zone-id>--x-s3` rules.
+// Zone IDs are not enumerated because their availability is account- and
+// region-dependent; this check validates the stable structural contract.
+func validateS3DirectoryBucketName(s string) (valid bool, reason string) {
+	n := len(s)
+	if n < s3BucketNameMinLength {
+		return false, "must be at least 3 characters"
+	}
+	if n > s3BucketNameMaxLength {
+		return false, "must be at most 63 characters"
+	}
+	if !s3BucketBoundaryTable[s[0]] {
+		return false, "must begin with a lowercase letter or digit"
+	}
+	if !s3BucketBoundaryTable[s[n-1]] {
+		return false, "must end with a lowercase letter or digit"
+	}
+
+	for i := 0; i < n; i++ {
+		if !s3DirectoryBucketByteTable[s[i]] {
+			return false, "must contain only lowercase letters, digits, and hyphens"
+		}
+	}
+
+	if !strings.HasSuffix(s, s3DirectorySuffix) {
+		return false, "must use the format <base-name>--<zone-id>--x-s3"
+	}
+	withoutSuffix := s[:n-len(s3DirectorySuffix)]
+	separator := strings.LastIndex(withoutSuffix, "--")
+	if separator <= 0 || separator+2 == len(withoutSuffix) {
+		return false, "must use the format <base-name>--<zone-id>--x-s3"
+	}
+
+	return true, ""
+}
+
+// s3BucketViolation packages an E204 violation with the offending literal and
+// the rule it violated.
 func s3BucketViolation(file string, line int, attrName, value, reason string) Violation {
 	return Violation{
 		Code:     "E204",

@@ -5,54 +5,77 @@ package checker
 
 import "testing"
 
-// TestS3BucketTriggers_TableIntegrity is a drift alarm for the
-// s3BucketTriggers set in s3_bucket.go. Runs in the internal checker
-// package so it can access the unexported set directly. Follows
-// the same pattern as TestBlockTypos_TableIntegrity for E210:
-//
-// When adding a new trigger attribute name:
-//
-//  1. Add it to s3BucketTriggers in s3_bucket.go, citing the
-//     terraform-provider-aws doc that uses the name.
-//  2. Add positive + negative tests in checker/checks_e204_test.go
-//     confirming E204 fires for the wrong form and stays silent for
-//     the correct form.
-//  3. Add it to expectedTriggers below.
-//
-// The three-way sync (set, per-entry tests, this sentinel) is
-// deliberate friction against uncurated growth.
-func TestS3BucketTriggers_TableIntegrity(t *testing.T) {
-	expectedTriggers := map[string]struct{}{
-		"bucket":      {},
-		"bucket_name": {},
+// TestS3Contexts_TableIntegrity keeps every evidence-backed context, its value
+// kind, and its regression coverage in deliberate three-way sync.
+func TestS3Contexts_TableIntegrity(t *testing.T) {
+	t.Parallel()
+
+	expected := map[s3Context]s3ValueKind{
+		{blockType: "resource", resourceType: "aws_s3_bucket", attribute: s3BucketAttribute}:           s3GeneralPurposeBucketName,
+		{blockType: "resource", resourceType: "aws_s3_directory_bucket", attribute: s3BucketAttribute}: s3DirectoryBucketName,
+		{blockType: "resource", resourceType: "aws_s3_object", attribute: s3BucketAttribute}:           s3BucketNameOrAccessPointARN,
+		{blockType: "resource", resourceType: "aws_s3_bucket_object", attribute: s3BucketAttribute}:    s3BucketNameOrAccessPointARN,
+		{blockType: "data", resourceType: "aws_s3_object", attribute: s3BucketAttribute}:               s3BucketNameOrAccessPointARN,
+		{blockType: "data", resourceType: "aws_s3_bucket", attribute: s3BucketAttribute}:               s3BucketNameOrAccessPointARN,
+		{blockType: "resource", resourceType: "aws_s3_bucket_policy", attribute: s3BucketAttribute}:    s3ExistingBucketReference,
 	}
 
-	if got, want := len(s3BucketTriggers), len(expectedTriggers); got != want {
-		t.Errorf("s3BucketTriggers has %d entries, want %d — update expectedTriggers to match (or update the trigger set if the count is wrong)", got, want)
+	if got, want := len(s3Contexts), len(expected); got != want {
+		t.Errorf("s3Contexts has %d entries, want %d", got, want)
 	}
-
-	for name := range expectedTriggers {
-		if _, ok := s3BucketTriggers[name]; !ok {
-			t.Errorf("expected trigger %q missing from s3BucketTriggers — add it back to the set or remove it from expectedTriggers", name)
+	for context, wantKind := range expected {
+		gotKind, ok := s3Contexts[context]
+		if !ok {
+			t.Errorf("expected S3 context missing: %+v", context)
+			continue
+		}
+		if gotKind != wantKind {
+			t.Errorf("S3 context %+v has kind %d, want %d", context, gotKind, wantKind)
 		}
 	}
-	for name := range s3BucketTriggers {
-		if _, ok := expectedTriggers[name]; !ok {
-			t.Errorf("unexpected trigger %q in s3BucketTriggers — add positive+negative tests in checks_e204_test.go AND add it to expectedTriggers here", name)
+	for context := range s3Contexts {
+		if _, ok := expected[context]; !ok {
+			t.Errorf("unexpected S3 context: %+v — add evidence and regression coverage before updating this sentinel", context)
 		}
 	}
 }
 
-// TestS3BucketNameLength_Bounds locks the min/max length constants
-// against silent drift. AWS S3 general-purpose bucket names are
-// documented as 3-63 characters — changing this without a matching
-// doc update would silently accept or reject names that AWS accepts
-// or rejects.
-func TestS3BucketNameLength_Bounds(t *testing.T) {
+func TestS3BucketNameConstants(t *testing.T) {
+	t.Parallel()
+
 	if s3BucketNameMinLength != 3 {
-		t.Errorf("s3BucketNameMinLength = %d, want 3 (AWS S3 rule)", s3BucketNameMinLength)
+		t.Errorf("s3BucketNameMinLength = %d, want 3", s3BucketNameMinLength)
 	}
 	if s3BucketNameMaxLength != 63 {
-		t.Errorf("s3BucketNameMaxLength = %d, want 63 (AWS S3 rule)", s3BucketNameMaxLength)
+		t.Errorf("s3BucketNameMaxLength = %d, want 63", s3BucketNameMaxLength)
+	}
+	if s3DirectorySuffix != "--x-s3" {
+		t.Errorf("s3DirectorySuffix = %q, want %q", s3DirectorySuffix, "--x-s3")
+	}
+}
+
+func TestValidateS3DirectoryBucketName(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		name string
+		want bool
+	}{
+		"availability zone": {name: "example--usw2-az1--x-s3", want: true},
+		"local zone":        {name: "example--usw2-xxx-lz1--x-s3", want: true},
+		"missing suffix":    {name: "plain-directory-bucket", want: false},
+		"empty zone":        {name: "example----x-s3", want: false},
+		"period":            {name: "example.logs--usw2-az1--x-s3", want: false},
+		"uppercase":         {name: "Example--usw2-az1--x-s3", want: false},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			t.Parallel()
+			got, _ := validateS3DirectoryBucketName(test.name)
+			if got != test.want {
+				t.Errorf("validateS3DirectoryBucketName(%q) = %t, want %t", test.name, got, test.want)
+			}
+		})
 	}
 }
