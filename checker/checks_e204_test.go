@@ -13,33 +13,27 @@ import (
 
 // ── E204: AWS S3 bucket name grammar ────────────────────────────────────────
 //
-// E204 catches structural violations of AWS S3 general-purpose bucket
-// naming rules. Rules covered (verified against
+// E204 validates S3 bucket literals only when an explicit Terraform context
+// establishes the value kind. General-purpose declarations and directory
+// bucket declarations have separate validators. Existing-bucket references
+// and arguments that also accept access-point ARNs are skipped because strict
+// modern naming rules would reject legal values.
+//
+// General-purpose rules covered (verified against
 // docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html):
 //
 //  1. Length: 3-63 characters
 //  2. Character set: lowercase letters (a-z), digits (0-9), period,
 //     hyphen only
-//  3. Must begin AND end with letter or digit (not `.` or `-`)
+//  3. Must begin and end with a letter or digit
 //  4. No consecutive periods (`..`)
-//  5. Must not be formatted as an IP address (e.g. 192.168.5.4)
+//  5. Must not be formatted as an IP address
 //
-// Not covered in v1 (deferred):
-//   - Reserved prefixes (xn--, sthree-, amzn-s3-demo-)
-//   - Reserved suffixes (-s3alias, --ol-s3, .mrap, --x-s3, --table-s3)
-//   - Account-regional-namespace -an suffix pattern
+// Directory-bucket declarations additionally require the documented
+// `<base-name>--<zone-id>--x-s3` shape and disallow periods.
 //
-// Triggers: `bucket` and `bucket_name` attributes inside any `aws_s3_*`
-// resource or data source. Non-AWS resources with a matching attribute
-// name (e.g. google_storage_bucket) are silently skipped.
-//
-// Interpolation-aware: interpolated / templated values are silently
-// skipped (matches E201's policy — every rule is pointwise or
-// boundary-sensitive, and partial composed forms give no useful
-// signal). Unlike E101 (which supports templates via placeholder
-// composition of numeric octets), S3 bucket-name rules apply to
-// every byte, so composition would just fabricate an arbitrary
-// value.
+// Interpolated values and references are silently skipped because their final
+// strings cannot be resolved without provider evaluation.
 
 // ── Rule 1: Length 3-63 ─────────────────────────────────────────────────────
 
@@ -314,7 +308,7 @@ resource "aws_s3_bucket" "example" {
 	}
 }
 
-// ── AWS-scope discipline: only aws_s3_* triggers ────────────────────────────
+// ── AWS scope discipline ───────────────────────────────────────────────────
 
 // TestE204_NonS3AWSResource_NoFire verifies E204 doesn't fire on a
 // `bucket` attribute inside a non-S3 AWS resource. The rules only
@@ -350,48 +344,136 @@ resource "google_storage_bucket" "example" {
 	}
 }
 
-// TestE204_S3BucketDataSource_Fires verifies E204 fires on `bucket`
-// inside an `aws_s3_bucket` data source too — a bucket name that
-// can't exist can't be referenced either.
-func TestE204_S3BucketDataSource_Fires(t *testing.T) {
+// ── Semantic contexts: creation, references, and ARN alternatives ──────────
+
+func TestE204_AccessPointARNContexts_NoFire(t *testing.T) {
+	t.Parallel()
+
+	const accessPointARN = "arn:aws:s3:eu-west-1:123456789012:accesspoint/build-artefacts"
+	tests := map[string]string{
+		"object resource": `
+resource "aws_s3_object" "artifact" {
+  bucket  = "` + accessPointARN + `"
+  key     = "release.zip"
+  content = "payload"
+}
+`,
+		"deprecated bucket object resource": `
+resource "aws_s3_bucket_object" "artifact" {
+  bucket  = "` + accessPointARN + `"
+  key     = "release.zip"
+  content = "payload"
+}
+`,
+		"object data source": `
+data "aws_s3_object" "artifact" {
+  bucket = "` + accessPointARN + `"
+  key    = "release.zip"
+}
+`,
+		"bucket data source": `
+data "aws_s3_bucket" "artifact" {
+  bucket = "` + accessPointARN + `"
+}
+`,
+	}
+
+	for name, tf := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tf": tf})
+			if hasCode(vs, "E204") {
+				t.Fatalf("documented access-point ARN must not be classified as a bucket name, got: %v", codes(vs))
+			}
+		})
+	}
+}
+
+func TestE204_LegacyExistingBucketReferences_NoFire(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"bucket data source": `
+data "aws_s3_bucket" "legacy" {
+  bucket = "Legacy_Bucket"
+}
+`,
+		"bucket policy": `
+resource "aws_s3_bucket_policy" "legacy" {
+  bucket = "Legacy_Bucket"
+  policy = "{}"
+}
+`,
+		"bucket versioning": `
+resource "aws_s3_bucket_versioning" "legacy" {
+  bucket = "Legacy_Bucket"
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+`,
+	}
+
+	for name, tf := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tf": tf})
+			if hasCode(vs, "E204") {
+				t.Fatalf("grandfathered existing bucket reference must not fire E204, got: %v", codes(vs))
+			}
+		})
+	}
+}
+
+func TestE204_DirectoryBucketName_Valid_NoFire(t *testing.T) {
+	t.Parallel()
+
 	vs := run(t, map[string]string{
 		"main.tf": `
-data "aws_s3_bucket" "example" {
-  bucket = "INVALID"
+resource "aws_s3_directory_bucket" "example" {
+  bucket = "example--usw2-az1--x-s3"
+}
+`,
+	})
+	if hasCode(vs, "E204") {
+		t.Fatalf("valid directory-bucket name must not fire E204, got: %v", codes(vs))
+	}
+}
+
+func TestE204_DirectoryBucketName_MissingSuffix_Fires(t *testing.T) {
+	t.Parallel()
+
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_s3_directory_bucket" "example" {
+  bucket = "plain-directory-bucket"
 }
 `,
 	})
 	if !hasCode(vs, "E204") {
-		t.Fatalf("data source aws_s3_bucket with invalid bucket name must fire E204, got: %v", codes(vs))
+		t.Fatalf("directory-bucket name without --<zone-id>--x-s3 must fire E204, got: %v", codes(vs))
 	}
 }
 
-// TestE204_S3BucketPolicyBucket_Fires verifies E204 fires on the
-// referenced `bucket` attribute in an aws_s3_bucket_policy resource.
-// Names must still be valid to be referenced.
-func TestE204_S3BucketPolicyBucket_Fires(t *testing.T) {
+func TestE204_DirectoryBucketPolicyReference_NoFire(t *testing.T) {
+	t.Parallel()
+
 	vs := run(t, map[string]string{
 		"main.tf": `
 resource "aws_s3_bucket_policy" "example" {
-  bucket = "INVALID_UPPER"
+  bucket = "example--usw2-az1--x-s3"
   policy = "{}"
 }
 `,
 	})
-	if !hasCode(vs, "E204") {
-		t.Fatalf("aws_s3_bucket_policy.bucket with invalid name must fire E204, got: %v", codes(vs))
+	if hasCode(vs, "E204") {
+		t.Fatalf("directory-bucket policy reference must not fire E204, got: %v", codes(vs))
 	}
 }
 
-// ── bucket_name attribute alias ─────────────────────────────────────────────
+func TestE204_UnsupportedBucketNameAttribute_NoFire(t *testing.T) {
+	t.Parallel()
 
-// TestE204_BucketName_Attribute_Fires verifies E204 also fires on
-// `bucket_name` (some resources use this alternative attribute name).
-func TestE204_BucketName_Attribute_Fires(t *testing.T) {
-	// aws_s3control_bucket doesn't exist as a real resource type,
-	// but if there were one that used bucket_name inside aws_s3_*,
-	// this shape captures the intent. Real example: some data-plane
-	// resources use bucket_name.
 	vs := run(t, map[string]string{
 		"main.tf": `
 resource "aws_s3_bucket_object" "example" {
@@ -400,8 +482,8 @@ resource "aws_s3_bucket_object" "example" {
 }
 `,
 	})
-	if !hasCode(vs, "E204") {
-		t.Fatalf("bucket_name attribute in aws_s3_* resource must fire E204, got: %v", codes(vs))
+	if hasCode(vs, "E204") {
+		t.Fatalf("unsupported bucket_name attribute is outside E204's evidence-backed surface, got: %v", codes(vs))
 	}
 }
 
