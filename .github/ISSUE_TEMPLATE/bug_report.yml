@@ -18,7 +18,7 @@ body:
     attributes:
       label: tfdry version
       description: Output of `tfdry version`.
-      placeholder: "tfdry 0.1.1"
+      placeholder: "tfdry 0.2.0"
     validations:
       required: true
 

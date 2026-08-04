@@ -16,6 +16,8 @@ Each release entry groups changes under the following headings (omitted if empty
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-04
+
 ### Added
 
 - **`--recursive` on the lint command.** `tfdry --recursive <dir>`
@@ -27,13 +29,66 @@ Each release entry groups changes under the following headings (omitted if empty
   `"file": "staging/main.tf"`), so consumers can attribute each
   violation to a specific workspace. Available as `-recursive`,
   `--recursive`, and `-r` — the same three spellings as `tfdry fmt`.
-  Simplifies pre-commit / CI integration for repos with multiple
-  Terraform workspaces. Each recursed directory is still linted
-  under the single-workspace contract; cross-directory scope merging
-  (parent-directory locals resolved from a child directory) is a
-  separate design conversation tracked in
-  [#32](https://github.com/mchv/tfdry/issues/32).
+  Cross-directory scope merging remains out of scope and is tracked
+  in [#32](https://github.com/mchv/tfdry/issues/32).
   ([#21](https://github.com/mchv/tfdry/issues/21))
+- **Check-family taxonomy and richer discovery output.** Checks now
+  belong to explicit language (`E000`), network (`E100`), or AWS
+  (`E200`) families. Human `tfdry describe` output is grouped by
+  family; `tfdry describe --json` adds a top-level `families` array
+  and a `family` field on every check without removing existing
+  fields. Family headers are reserved metadata rather than selectable
+  check codes. ([#38](https://github.com/mchv/tfdry/pull/38))
+- **Terraform scope-root diagnostics (`E009` / `W009`).** Known root
+  typos such as `vars.foo` and `locals.bar` are errors with corrective
+  hints. Unfamiliar roots without a high-confidence correction are
+  warnings, preserving the no-false-positives default. For-expression
+  iterators, dynamic-block iterators, resource roots, and Terraform's
+  `ephemeral` root are scope-aware.
+  ([#47](https://github.com/mchv/tfdry/pull/47),
+  [#51](https://github.com/mchv/tfdry/pull/51))
+- **CIDR validation (`E101`).** Invalid literal IPv4 and IPv6 CIDR
+  blocks are reported across a curated attribute surface. Lists are
+  checked element by element, and interpolation-aware placeholder
+  composition validates statically knowable portions without guessing
+  unresolved values. ([#38](https://github.com/mchv/tfdry/pull/38),
+  [#47](https://github.com/mchv/tfdry/pull/47))
+- **AWS grammar checks (`E201`–`E204`).** New checks validate recognised
+  AWS regions across the `aws`, `aws-us-gov`, and `aws-cn` partitions,
+  12-digit account IDs, ARN structure, and S3 bucket declarations. Region and account checks are AWS-context
+  scoped; ARN checks validate structure rather than service-specific
+  semantics. S3 validation distinguishes general-purpose and directory
+  bucket declarations while skipping existing-bucket references and
+  contexts that also accept access-point ARNs.
+  ([#48](https://github.com/mchv/tfdry/pull/48),
+  [#54](https://github.com/mchv/tfdry/pull/54),
+  [#56](https://github.com/mchv/tfdry/pull/56))
+- **AWS resource block-name typo detection (`E210`).** A curated,
+  provider-documented table catches high-confidence singular/plural
+  nested-block mistakes in selected AWS resources without fetching
+  provider schemas. ([#53](https://github.com/mchv/tfdry/pull/53))
+- **Reproducible performance evidence.** The new `PERFORMANCE.md`,
+  pinned benchmark corpus, raw snapshots, agent-focused workloads, and
+  peak-RSS measurements document both absolute results and methodology
+  limits. The reviewed 102-file snapshot measured tfdry's full check at
+  roughly 14× the speed of the pinned reference validation workflow and
+  its read-only format check at roughly 3× the speed of the reference
+  formatter on the recorded host.
+  ([#55](https://github.com/mchv/tfdry/pull/55))
+
+### Changed
+
+- **The default lint surface now includes the new error checks.** Runs
+  that were clean under v0.1.1 can exit `1` when E009, E101, E201–E204,
+  or E210 finds a violation. Explicit `--checks=` allow-lists remain
+  opt-in and run only the named checks. W009 remains non-failing.
+
+### Security
+
+- Upgraded `golang.org/x/text` to remediate GO-2026-5970, an
+  infinite-loop vulnerability in the dependency. The release remains
+  clean under `govulncheck` for vulnerabilities reachable from tfdry's
+  call graph. ([#54](https://github.com/mchv/tfdry/pull/54))
 
 ## [0.1.1] — 2026-07-03
 
@@ -220,6 +275,7 @@ shipped; for the per-PR breakdown see the merged PRs in the
   degrades to "post-open IsRegular check" because Windows doesn't
   honour POSIX `O_NOFOLLOW`. See `checker/nofollow_windows.go`.
 
-[Unreleased]: https://github.com/mchv/tfdry/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/mchv/tfdry/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mchv/tfdry/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/mchv/tfdry/releases/tag/v0.1.1
 [0.1.0]: https://github.com/mchv/tfdry/releases/tag/v0.1.0

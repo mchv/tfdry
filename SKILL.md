@@ -19,7 +19,7 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
   - `3` — `tfdry fmt -check` found unformatted files
   - `130` — interrupted by SIGINT / SIGTERM, or a context deadline expired
 - **Always use `--json` for machine consumption.** Human output format is not stable.
-- **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`.
+- **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`. `describe --json` also returns check-family metadata for integrations.
 - **`--checks` filters are additive.** Passing `--checks=E003,E004` runs only those two checks.
 - **Warnings (W001, W009) do not affect exit code.** Only errors (E001-E210) cause exit 1; E000 maps to exit 2 (tool error).
 
@@ -35,6 +35,13 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
 | E006 | error    | Local module input type mismatch |
 | E007 | error    | Unknown local module input key |
 | E008 | error    | File not formatted (equivalent to `terraform fmt --check`) |
+| E009 | error    | Invalid Terraform scope root with a high-confidence correction |
+| E101 | error    | Invalid IPv4 or IPv6 CIDR block literal |
+| E201 | error    | Unrecognised AWS region in an AWS provider/resource/data context |
+| E202 | error    | Invalid 12-digit AWS account ID in an AWS context |
+| E203 | error    | Malformed ARN structure on an `*_arn` or `*_arns` attribute |
+| E204 | error    | Invalid S3 general-purpose or directory bucket declaration |
+| E210 | error    | Curated AWS nested block-name singular/plural typo |
 | W001 | warning  | Local defined but never used |
 | W009 | warning  | Unfamiliar Terraform scope root (may be typo or unrecognised construct) |
 
@@ -47,11 +54,16 @@ tfdry only resolves `local.*` values defined in the same directory. It does **no
 
 When a value's type cannot be resolved statically, the check is **skipped** (no false positives).
 
+With `--recursive`, every directory containing `.tf` files is linted as an
+independent workspace. Hidden directories and `node_modules` are skipped, and
+reported filenames are relative to the recursion root. Locals are not merged
+across workspace directories.
+
 ## JSON output shape
 
 ```json
 {
-  "tfdry_version": "0.1.0",
+  "tfdry_version": "0.2.0",
   "directory": "/path/to/tf",
   "violations": [
     {
@@ -74,6 +86,9 @@ tfdry
 
 # Check specific directory, JSON output
 tfdry --json ./infra/prod
+
+# Check multiple independent Terraform workspaces recursively
+tfdry --json --recursive ./terraform
 
 # Run only type-mismatch and undefined-local checks
 tfdry --checks=E003,E004 ./infra

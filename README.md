@@ -121,7 +121,7 @@ Same input with `--json`:
 
 ```json
 {
-  "tfdry_version": "0.1.1",
+  "tfdry_version": "0.2.0",
   "directory": "./infra",
   "violations": [
     {
@@ -234,7 +234,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 
 ```json
 {
-  "tfdry_version": "0.1.1",
+  "tfdry_version": "0.2.0",
   "directory": "./infra",
   "violations": [
     {
@@ -379,7 +379,7 @@ Agents that read [`SKILL.md`](SKILL.md) get the CLI surface, exit-code contract,
 
 ## Project status
 
-The latest release is **v0.1.1**. The API and CLI surface are stable enough for production use, but pre-1.0 means breaking changes can land in a minor version if the rationale is documented in [`CHANGELOG.md`](CHANGELOG.md).
+The latest release is **v0.2.0**. The API and CLI surface are stable enough for production use, but pre-1.0 means breaking changes can land in a minor version if the rationale is documented in [`CHANGELOG.md`](CHANGELOG.md).
 
 Supported platforms: `darwin-arm64`, `linux-amd64`, `linux-arm64`, `windows-amd64`.
 

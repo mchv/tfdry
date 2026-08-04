@@ -36,8 +36,8 @@ builds:
     goarch:
       - amd64
       - arm64
-    # macOS is arm64-only (Apple Silicon); Windows is amd64-only for
-    # v0.1.0. Drop the unsupported cross-products.
+    # macOS is arm64-only (Apple Silicon); Windows is amd64-only.
+    # Drop the unsupported cross-products.
     ignore:
       - goos: darwin
         goarch: amd64
@@ -96,6 +96,7 @@ sboms:
 changelog:
   use: github
   sort: asc
+  abbrev: 7
   # Attribution policy for per-commit lines. GoReleaser's default
   # format is `{sha}: {message} ({author name} <{author email}>)`,
   # which is more verbose than the GitHub convention of `(@handle)`
@@ -118,18 +119,20 @@ changelog:
   #
   # `.Author.Username` is the modern GoReleaser v2.14+ nested field;
   # the older top-level `.AuthorUsername` was deprecated in v2.14.
-  format: '* {{ .SHA }}: {{ .Message }}{{ with (index . "Author") }}{{ with .Username }}{{ if ne . "mchv" }} (@{{ . }}){{ end }}{{ end }}{{ end }}'
-  # Conventional-commit grouping. Patterns are RE2 (Go's stdlib regexp
-  # engine) — no lazy quantifiers like .*? or ??. Each group matches
-  # the prefix at the start of the subject with an optional scope and
-  # optional `!` for breaking changes (e.g. `feat:`, `feat(api):`,
-  # `feat!:`, `feat(api)!:` all match the "Added" group). Use
-  # `[^)]+` rather than `.+` for the scope body so a stray parenthesis
-  # later in the subject (`feat(api): add helper (fixes #12)`) can't
+  # GoReleaser adds the Markdown list marker; starting at the SHA avoids
+  # the doubled `* *` bullets emitted in the v0.1.1 release.
+  format: '{{ .SHA }}: {{ .Message }}{{ with (index . "Author") }}{{ with .Username }}{{ if ne . "mchv" }} (@{{ . }}){{ end }}{{ end }}{{ end }}'
+  # Release-note grouping. Patterns are RE2 (Go's stdlib regexp engine) —
+  # no lazy quantifiers like .*? or ??. The Added group accepts both the
+  # conventional `feat:` prefix and this repository's user-facing `checker:`
+  # prefix. Each group matches an optional scope and optional `!` for breaking
+  # changes (e.g. `feat:`, `feat(api):`, `feat!:`, `feat(api)!:` all match the
+  # "Added" group). Use `[^)]+` rather than `.+` for the scope body so a stray
+  # parenthesis later in the subject (`feat(api): add helper (fixes #12)`) can't
   # be swallowed greedily into the scope match.
   groups:
     - title: "Added"
-      regexp: '^feat(\([^)]+\))?!?:'
+      regexp: '^(feat|checker)(\([^)]+\))?!?:'
       order: 0
     - title: "Fixed"
       regexp: '^fix(\([^)]+\))?!?:'
@@ -147,16 +150,18 @@ changelog:
   # `Merge pull request` filters merge commits from the changelog —
   # the underlying PR content is already surfaced via the individual
   # commit lines it introduced, so the merge line is redundant noise.
-  # `lint`, `perf`, `todo`, and `tfdry` are non-Conventional-Commits
-  # prefixes used during pre-release development that fell into the
-  # "Other" bucket in v0.1.0; excluding them keeps future release
-  # notes focused on user-facing changes.
+  # `bench`, `lint`, `perf`, `todo`, and `tfdry` are project-specific
+  # development prefixes that do not belong in user-facing release notes.
+  # Four exact `checker:` subjects below introduced internal helpers or
+  # mechanical fixups for the v0.2.0 checks; the higher-level check commits
+  # retain the complete user-visible story.
   filters:
     exclude:
       - '^docs(\([^)]+\))?:'
       - '^test(\([^)]+\))?:'
       - '^chore(\([^)]+\))?:'
       - '^build(\([^)]+\))?:'
+      - '^bench(\([^)]+\))?:'
       - '^ci(\([^)]+\))?:'
       - '^refactor(\([^)]+\))?:'
       - '^style(\([^)]+\))?:'
@@ -166,6 +171,10 @@ changelog:
       - '^perf(\([^)]+\))?:'
       - '^todo(\([^)]+\))?:'
       - '^tfdry(\([^)]+\))?:'
+      - '^checker: add HCL template AST splitter'
+      - '^checker: add Terraform scope-root grammar validator'
+      - '^checker: combined trigger map \+ hot-path benchmarks'
+      - '^checker: fixup — exhaustive switch case \+ gofumpt'
 
 homebrew_casks:
   - name: tfdry
@@ -181,9 +190,8 @@ homebrew_casks:
       name: goreleaserbot
       email: goreleaserbot@users.noreply.github.com
     commit_msg_template: "Cask formula update for {{ .ProjectName }} version {{ .Tag }}"
-    # tfdry's macOS binary isn't notarised for v0.1.0 (notarisation is
-    # a Phase C+ follow-up — would need a paid Apple Developer
-    # account). Without notarisation, macOS quarantines downloaded
+    # tfdry's macOS binary isn't notarised (notarisation would need a paid
+    # Apple Developer account). Without notarisation, macOS quarantines downloaded
     # binaries with the com.apple.quarantine extended attribute, which
     # triggers Gatekeeper's "untrusted developer" dialog on first run.
     # Strip the attribute as a post-install hook so `brew install`
@@ -209,6 +217,12 @@ release:
     Fast, focused Terraform linting — no `terraform init`, no state, no network.
 
     See the [CHANGELOG](https://github.com/mchv/tfdry/blob/main/CHANGELOG.md) for the full release notes.
+
+    {{ if eq .Tag "v0.2.0" -}}
+    ### Security
+
+    This release upgrades `golang.org/x/text` to remediate GO-2026-5970.
+    {{ end -}}
   footer: |
     ---
 
