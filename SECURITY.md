@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-tfdry is at v0.1.0 (first public release). Only the most recent
-minor-version line receives security updates while the project is
-pre-1.0.
+tfdry is at v0.2.0. Only the most recent minor-version line receives
+security updates while the project is pre-1.0.
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.1.x   | :white_check_mark: |
+| 0.2.x   | :white_check_mark: |
+| 0.1.x   | :x:                |
 
 Once a v1.0.0 ships, this policy will be updated to cover at least the
 last two minor lines.
@@ -61,7 +61,7 @@ In scope:
 
 - The tfdry CLI binary and Go library API (`checker/...`, `output/...`).
 - Build artifacts shipped via official channels (GitHub Releases,
-  Homebrew tap once PR B1 lands).
+  Homebrew tap).
 - Documentation that, if followed, would lead to a security weakness
   (e.g. a CI recipe that disables verification).
 
