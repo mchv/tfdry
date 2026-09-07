@@ -69,8 +69,9 @@ Out of scope:
 
 - Third-party Go module dependencies in `go.mod`. Report those
   upstream; `govulncheck` will surface them in `make verify`.
-- Misconfiguration of Terraform files that tfdry merely lints. If
-  there's a Terraform CVE, report it to HashiCorp.
+- Misconfiguration of Terraform or OpenTofu files that tfdry merely
+  lints. Report vulnerabilities in the underlying tools to HashiCorp
+  or the OpenTofu project as appropriate.
 - The tfdry GitHub repository's branch-protection settings, secrets
   management, or CI configuration. Report those to the repository
   owner via the same email channel.
@@ -81,11 +82,14 @@ For context — these are the security-shaped properties that the
 test suite already exercises, so a security report should ideally
 demonstrate that one of these is bypassed:
 
-- **Symlink rejection** on `.tf` reads and writes. Both `--fix` and
-  `tfdry fmt` reject symlinked input paths before opening them
-  (atomic via `O_NOFOLLOW` on Unix, `Lstat`-then-check on Windows
-  where `O_NOFOLLOW` isn't available).
-- **TOCTOU defence-in-depth** on the atomic `--fix` rewrite path: a
+- **Symlink handling** on native `.tf` / `.tofu` reads and writes.
+  Explicit `tfdry fmt` path arguments reject symlinks with `Lstat` on
+  all supported platforms. Unix directory scans skip symlinked files
+  atomically with `O_NOFOLLOW`. **Windows scan-time handling is
+  best-effort**: without `O_NOFOLLOW`, a symlink to a regular file can
+  be followed silently, while symlinks to directories or devices are
+  rejected by the post-open `IsRegular` check.
+- **TOCTOU defence-in-depth** on the atomic formatting rewrite path: a
   final `Lstat` immediately before `Rename` fails the operation if
   the target was swapped to a symlink between the initial check and
   the rename.
@@ -94,13 +98,18 @@ demonstrate that one of these is bypassed:
   isolate-control characters (Unicode Cf category), and embedded
   newlines / tabs before reaching stdout, stderr, or the JSON
   output's `directory` field. Mitigates CVE-2021-42574-class
-  attacks via malicious `.tf` file names or content.
-- **File-size cap** at 10 MiB per `.tf` file to prevent unbounded
-  reads from amplifying a malicious or accidental large input into
-  excessive memory or CPU.
-- **Module containment** for relative-path module references:
-  `EvalSymlinks` + parent-prefix check rejects module sources that
-  would escape the directory tree being linted.
+  attacks via malicious `.tf` / `.tofu` file names or content.
+- **Directory-scan file-size cap** at 10 MiB per `.tf` / `.tofu` file
+  to prevent unbounded reads from amplifying malicious or accidental
+  large input into excessive memory or CPU. Explicit single-file
+  `tfdry fmt <path>` preserves its existing unrestricted read
+  behaviour.
+- **Explicit module path semantics** for relative local-module
+  references. Parent-relative sources such as `../shared/module` are
+  intentionally accepted, matching normal monorepo use; tfdry is not
+  a filesystem sandbox. `EvalSymlinks` prevents self-reference, and
+  module files retain the same regular-file / symlink checks as root
+  configuration files.
 
 If your report bypasses one of these, please mention which one in
 the advisory body — it speeds triage.

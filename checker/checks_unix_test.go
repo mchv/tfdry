@@ -123,6 +123,40 @@ func TestParseDir_SymlinkSkipped(t *testing.T) {
 	}
 }
 
+// A skipped .tofu symlink must not become authoritative for OpenTofu
+// precedence and hide a regular same-basename .tf file.
+func TestParseDir_OpenTofuSymlinkDoesNotShadowTerraform(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
+		[]byte(`output "x" { value = local.missing }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "main.tofu")
+	if err := os.WriteFile(target, []byte(`locals { selected = "symlink" }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "main.tofu")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	if len(files) != 1 || files[0].Name != "main.tf" {
+		t.Fatalf("parsed files = %+v, want regular main.tf", files)
+	}
+	vs := mustRun(context.Background(), files, nil, dir)
+	if !hasCode(vs, "E003") {
+		t.Fatalf("regular main.tf was hidden by skipped symlink, got %v", codes(vs))
+	}
+}
+
 // --fix must keep E008 in output when the file could not be
 // written. Once the --fix path skips E008 in the initial Run pass for
 // performance, FixFormat itself becomes the only emitter of E008 for

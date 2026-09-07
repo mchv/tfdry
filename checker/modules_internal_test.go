@@ -517,10 +517,46 @@ func TestParseModuleVarSchemas_MalformedVariableLabels_Skipped(t *testing.T) {
 	}
 }
 
-// Non-.tf files in the module dir must be skipped silently — the
-// loop's filepath.Ext filter is the gate. A file named "README" or
-// "vars.tf.json" must not be opened.
-func TestParseModuleVarSchemas_NonTFFiles_Skipped(t *testing.T) {
+func TestParseModuleVarSchemas_LoadsTerraformAndOpenTofuFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"terraform.tf":  `variable "from_tf" { type = string }`,
+		"opentofu.tofu": `variable "from_tofu" { type = number }`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := parseModuleVarSchemas(dir, nil)
+	if got["from_tf"].Kind != schemaString || got["from_tofu"].Kind != schemaNumber {
+		t.Fatalf("mixed Terraform/OpenTofu schemas not loaded correctly: %v", got)
+	}
+}
+
+func TestParseModuleVarSchemas_OpenTofuTakesPrecedence(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "variables.tf"),
+		[]byte(`variable "terraform_only" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "variables.tofu"),
+		[]byte(`variable "opentofu_only" { type = bool }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := parseModuleVarSchemas(dir, nil)
+	if _, ok := got["terraform_only"]; ok {
+		t.Fatalf("same-basename variables.tf must be ignored: %v", got)
+	}
+	if got["opentofu_only"].Kind != schemaBool {
+		t.Fatalf("variables.tofu schema missing or wrong: %v", got)
+	}
+}
+
+// Non-native-HCL files in the module dir must be skipped silently. JSON
+// syntax remains unsupported for both Terraform and OpenTofu configurations.
+func TestParseModuleVarSchemas_NonNativeHCLFiles_Skipped(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "vars.tf"),
@@ -528,7 +564,7 @@ func TestParseModuleVarSchemas_NonTFFiles_Skipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	// These must NOT be parsed:
-	for _, name := range []string{"README.md", "vars.tf.json", "config.yaml", ".hidden"} {
+	for _, name := range []string{"README.md", "vars.tf.json", "vars.tofu.json", "config.yaml", ".hidden"} {
 		if err := os.WriteFile(filepath.Join(dir, name),
 			[]byte(`variable "should_not_appear" { type = bool }`), 0o644); err != nil {
 			t.Fatal(err)
@@ -536,7 +572,7 @@ func TestParseModuleVarSchemas_NonTFFiles_Skipped(t *testing.T) {
 	}
 	got := parseModuleVarSchemas(dir, nil)
 	if _, ok := got["should_not_appear"]; ok {
-		t.Errorf("non-.tf files must not contribute to schemas: got %v", got)
+		t.Errorf("non-native-HCL files must not contribute to schemas: got %v", got)
 	}
 	if len(got) != 1 {
 		t.Errorf("expected exactly 1 entry (from vars.tf), got %d: %v", len(got), got)

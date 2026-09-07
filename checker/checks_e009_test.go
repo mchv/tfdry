@@ -339,6 +339,67 @@ locals {
 	assertNoScopeRootDiag(t, vs, "nested for-expression iterators")
 }
 
+// ── OpenTofu language edition keyword ──────────────────────────────────────
+
+func TestE009_OpenTofuEditionKeyword_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"versions.tf": `
+language {
+  compatible_with {
+    opentofu = ">= 1.12"
+  }
+  edition = tofu2024
+}
+`,
+	})
+	assertNoScopeRootDiag(t, vs, "OpenTofu tofu2024 edition keyword")
+
+	invalidContexts := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "bare outside declaration",
+			src:  `output "x" { value = tofu2024 }`,
+		},
+		{
+			name: "dotted outside declaration",
+			src:  `output "x" { value = tofu2024.value }`,
+		},
+		{
+			name: "labelled language block",
+			src:  `language "label" { edition = tofu2024 }`,
+		},
+		{
+			name: "nested language block",
+			src: `wrapper {
+  language {
+    edition = tofu2024
+  }
+}`,
+		},
+		{
+			name: "different language attribute",
+			src:  `language { custom = tofu2024 }`,
+		},
+		{
+			name: "dotted edition value",
+			src:  `language { edition = tofu2024.value }`,
+		},
+	}
+	for _, tc := range invalidContexts {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := run(t, map[string]string{"main.tf": tc.src})
+			if !hasCode(got, "W009") {
+				t.Fatalf("tofu2024 outside exact language.edition declaration must remain scope-checked, got %v", codes(got))
+			}
+		})
+	}
+}
+
 // ── ephemeral root (Terraform 1.10+) ────────────────────────────────────────
 
 // TestE009_EphemeralRoot_NoFalsePositive verifies that the

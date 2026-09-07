@@ -586,7 +586,7 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(&b, "       tfdry version")
 	fmt.Fprintln(&b, "       tfdry help")
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, "Fast, focused Terraform linting — no init, no state, no network.")
+	fmt.Fprintln(&b, "Fast, focused Terraform and OpenTofu linting — no init, no state, no network.")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "Flags:")
 	fmt.Fprintln(&b, "  --checks=CODES                 Comma-separated allow-list of check codes (e.g. E003,E004).")
@@ -608,8 +608,8 @@ func printUsage(w io.Writer) error {
 	return err
 }
 
-// runFmt implements `tfdry fmt`, modelled on `terraform fmt`:
-//   - default: rewrite unformatted .tf files in dir, print filenames changed
+// runFmt implements `tfdry fmt`, modelled on `terraform fmt` / `tofu fmt`:
+//   - default: rewrite every unformatted .tf / .tofu file in dir, print filenames changed
 //   - -check: don't rewrite, print filenames that would change, exit 3 if any
 //   - -recursive: walk subdirs (skip hidden ones, e.g. .terraform/.git)
 //
@@ -683,7 +683,7 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 		if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
 			return code
 		}
-		files, parseViolations, err := checker.ParseDir(ctx, d)
+		files, parseViolations, err := checker.ParseDirForFormat(ctx, d)
 		if code, ok := handleFatalErr(err, stderr, "tfdry fmt"); ok {
 			return code
 		}

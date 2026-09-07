@@ -66,10 +66,10 @@ var allChecksList = []CheckInfo{
 	{Code: "E005", Severity: "error", Summary: "count and for_each used together on same resource/data/module block", Family: "E000"},
 	{Code: "E006", Severity: "error", Summary: "Local module input type mismatch", Family: "E000"},
 	{Code: "E007", Severity: "error", Summary: "Unknown local module input key", Family: "E000"},
-	{Code: "E008", Severity: "error", Summary: "File not formatted (run tfdry --fix or terraform fmt)", Family: "E000"},
-	{Code: "E009", Severity: "error", Summary: "Invalid Terraform scope root in expression", Family: "E000"},
+	{Code: "E008", Severity: "error", Summary: "File not formatted (run tfdry --fix, terraform fmt, or tofu fmt)", Family: "E000"},
+	{Code: "E009", Severity: "error", Summary: "Invalid Terraform/OpenTofu scope root in expression", Family: "E000"},
 	{Code: "W001", Severity: "warning", Summary: "Local defined but never used", Family: "E000"},
-	{Code: "W009", Severity: "warning", Summary: "Unfamiliar Terraform scope root (may be typo or unrecognised construct)", Family: "E000"},
+	{Code: "W009", Severity: "warning", Summary: "Unfamiliar Terraform/OpenTofu scope root (may be typo or unrecognised construct)", Family: "E000"},
 	{Code: "E101", Severity: "error", Summary: "Invalid CIDR block literal", Family: "E100"},
 	{Code: "E201", Severity: "error", Summary: "Invalid AWS region", Family: "E200"},
 	{Code: "E202", Severity: "error", Summary: "Invalid AWS account ID", Family: "E200"},
@@ -379,6 +379,15 @@ func checkCountForEach(f ParsedFile) []Violation {
 // iterator map is cloned rather than mutated, and the scope stack is
 // saved on push and restored on pop.
 func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
+	walkExpressionsAt(body, iterators, true, false, fn)
+}
+
+// walkExpressionsAt is the recursive implementation behind walkExpressions.
+// topLevel is true only for the file body. inOpenTofuLanguage is true only for
+// the direct body of a top-level, unlabelled `language` block, allowing the
+// edition declaration keyword to be distinguished from an ordinary bare
+// traversal with the same spelling.
+func walkExpressionsAt(body *hclsyntax.Body, iterators map[string]struct{}, topLevel, inOpenTofuLanguage bool, fn func(hclsyntax.Expression, map[string]struct{})) {
 	if body == nil {
 		return
 	}
@@ -386,11 +395,18 @@ func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn fun
 	// to avoid a heap allocation per attribute. Safe because
 	// hclsyntax.Walk guarantees symmetric Enter/Exit calls, so the
 	// stack is empty when Walk returns; the `[:0]` reset is defensive.
-	// Recursive walkExpressions and walkDynamicBlock calls still
+	// Recursive walkExpressionsAt and walkDynamicBlock calls still
 	// allocate their own walker (they're bounded by nesting depth,
 	// not attribute count).
 	w := &scopedExprWalker{fn: fn}
 	for _, attr := range body.Attributes {
+		// OpenTofu 1.12 represents `language { edition = tofu2024 }` as a
+		// bare ScopeTraversalExpr even though tofu2024 is a declaration
+		// keyword, not a reference. Skip only that exact declaration;
+		// bare or dotted tofu2024 expressions elsewhere remain checked.
+		if inOpenTofuLanguage && attr.Name == "edition" && isOpenTofuEditionKeyword(attr.Expr) {
+			continue
+		}
 		w.iterators = iterators
 		w.stack = w.stack[:0]
 		//nolint:errcheck // Callback returns no diagnostics; we don't use hclsyntax.Walk's aggregated diagnostics.
@@ -401,8 +417,14 @@ func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn fun
 			walkDynamicBlock(block, iterators, fn)
 			continue
 		}
-		walkExpressions(block.Body, iterators, fn)
+		isOpenTofuLanguage := topLevel && block.Type == "language" && len(block.Labels) == 0
+		walkExpressionsAt(block.Body, iterators, false, isOpenTofuLanguage, fn)
 	}
+}
+
+func isOpenTofuEditionKeyword(expr hclsyntax.Expression) bool {
+	trav, ok := expr.(*hclsyntax.ScopeTraversalExpr)
+	return ok && len(trav.Traversal) == 1 && trav.Traversal.RootName() == "tofu2024"
 }
 
 // scopedExprWalker is an hclsyntax.Walker that tracks iterator-variable
@@ -506,9 +528,9 @@ func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, fn 
 	augmented := cloneIterators(iterators, iterName)
 	for _, sub := range block.Body.Blocks {
 		if sub.Type == "content" {
-			walkExpressions(sub.Body, augmented, fn)
+			walkExpressionsAt(sub.Body, augmented, false, false, fn)
 		} else {
-			walkExpressions(sub.Body, iterators, fn)
+			walkExpressionsAt(sub.Body, iterators, false, false, fn)
 		}
 	}
 }
