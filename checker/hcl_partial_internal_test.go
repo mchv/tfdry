@@ -108,38 +108,56 @@ func (i nativeConfigTestFileInfo) Sys() any           { return nil }
 
 func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
 	t.Parallel()
+	regularTerraform := nativeConfigTestDirEntry{name: "main.tf", mode: 0o644}
 	tests := []struct {
-		name        string
-		tofuMode    os.FileMode
-		tofuInfoErr error
-		wantNames   []string
+		name      string
+		entries   []os.DirEntry
+		wantNames []string
 	}{
 		{
-			name:      "regular tofu shadows terraform",
-			tofuMode:  0o644,
+			name: "regular tofu shadows terraform",
+			entries: []os.DirEntry{
+				regularTerraform,
+				nativeConfigTestDirEntry{name: "main.tofu", mode: 0o644},
+			},
 			wantNames: []string{"main.tofu"},
 		},
 		{
-			name:      "symlink tofu does not shadow terraform",
-			tofuMode:  os.ModeSymlink | 0o777,
-			wantNames: []string{"main.tf", "main.tofu"},
+			name: "symlink tofu is excluded and does not shadow terraform",
+			entries: []os.DirEntry{
+				regularTerraform,
+				nativeConfigTestDirEntry{name: "main.tofu", mode: os.ModeSymlink | 0o777},
+			},
+			wantNames: []string{"main.tf"},
 		},
 		{
-			name:        "unreadable tofu metadata does not shadow terraform",
-			tofuMode:    0o644,
-			tofuInfoErr: errors.New("metadata unavailable"),
-			wantNames:   []string{"main.tf", "main.tofu"},
+			name: "unreadable tofu metadata is excluded when terraform peer exists",
+			entries: []os.DirEntry{
+				regularTerraform,
+				nativeConfigTestDirEntry{name: "main.tofu", mode: 0o644, infoErr: errors.New("metadata unavailable")},
+			},
+			wantNames: []string{"main.tf"},
+		},
+		{
+			name: "standalone tofu with unreadable metadata remains a parse candidate",
+			entries: []os.DirEntry{
+				nativeConfigTestDirEntry{name: "main.tofu", mode: 0o644, infoErr: errors.New("metadata unavailable")},
+			},
+			wantNames: []string{"main.tofu"},
+		},
+		{
+			name: "standalone tofu symlink is excluded",
+			entries: []os.DirEntry{
+				nativeConfigTestDirEntry{name: "main.tofu", mode: os.ModeSymlink | 0o777},
+			},
+			wantNames: nil,
 		},
 	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			entries := []os.DirEntry{
-				nativeConfigTestDirEntry{name: "main.tf", mode: 0o644},
-				nativeConfigTestDirEntry{name: "main.tofu", mode: tc.tofuMode, infoErr: tc.tofuInfoErr},
-			}
-			selected := nativeConfigEntries(entries)
+			selected := nativeConfigEntries(tc.entries)
 			got := make([]string, len(selected))
 			for i, entry := range selected {
 				got[i] = entry.Name()

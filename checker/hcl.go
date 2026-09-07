@@ -42,16 +42,33 @@ type ParsedFile struct {
 // .tf and .tofu files are both part of the module. JSON variants are excluded
 // because this parser intentionally supports native HCL only.
 //
+// A known symlink or non-regular .tofu entry is excluded before parsing so
+// Windows cannot follow it and merge it with a same-basename .tf file. If .tofu
+// metadata cannot be read, the .tf peer wins conservatively; a standalone .tofu
+// remains a candidate so the normal parser can surface an E000 if opening it
+// also fails.
+//
 // os.ReadDir returns entries sorted by filename, and this function preserves
 // their order so parsing and diagnostics remain deterministic.
 func nativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
+	tfBases := make(map[string]struct{})
 	tofuBases := make(map[string]struct{})
+	tofuKinds := make(map[string]tofuEntryKind)
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".tofu" || !isAuthoritativeTofuEntry(e) {
+		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		tofuBases[name[:len(name)-len(".tofu")]] = struct{}{}
+		switch filepath.Ext(name) {
+		case ".tf":
+			tfBases[name[:len(name)-len(".tf")]] = struct{}{}
+		case ".tofu":
+			kind := classifyTofuEntry(e)
+			tofuKinds[name] = kind
+			if kind == tofuEntryRegular {
+				tofuBases[name[:len(name)-len(".tofu")]] = struct{}{}
+			}
+		}
 	}
 
 	selected := make([]os.DirEntry, 0, len(entries))
@@ -62,7 +79,17 @@ func nativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
 		name := e.Name()
 		switch filepath.Ext(name) {
 		case ".tofu":
-			selected = append(selected, e)
+			base := name[:len(name)-len(".tofu")]
+			switch tofuKinds[name] {
+			case tofuEntryRegular:
+				selected = append(selected, e)
+			case tofuEntryMetadataUnknown:
+				if _, hasTerraformPeer := tfBases[base]; !hasTerraformPeer {
+					selected = append(selected, e)
+				}
+			case tofuEntryExcluded:
+				continue
+			}
 		case ".tf":
 			base := name[:len(name)-len(".tf")]
 			if _, shadowed := tofuBases[base]; !shadowed {
@@ -90,16 +117,27 @@ func allNativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
 	return selected
 }
 
-// isAuthoritativeTofuEntry reports whether a .tofu directory entry is a
-// regular file and may therefore shadow a same-basename .tf file. Calling Info
-// is intentional even when DirEntry.Type reports no symlink bit: filesystems
-// such as FUSE and network mounts may return Type()==0 for every entry,
-// including symlinks. If metadata cannot be read, precedence stays
-// conservative and both entries remain candidates; the normal parser/open path
-// then surfaces or skips each one according to its existing error policy.
-func isAuthoritativeTofuEntry(e os.DirEntry) bool {
+type tofuEntryKind uint8
+
+const (
+	tofuEntryMetadataUnknown tofuEntryKind = iota
+	tofuEntryRegular
+	tofuEntryExcluded
+)
+
+// classifyTofuEntry determines whether a .tofu entry can authoritatively
+// shadow a same-basename .tf file. Calling Info is intentional even when
+// DirEntry.Type reports no symlink bit: filesystems such as FUSE and network
+// mounts may return Type()==0 for every entry, including symlinks.
+func classifyTofuEntry(e os.DirEntry) tofuEntryKind {
 	info, err := e.Info()
-	return err == nil && info.Mode().IsRegular()
+	if err != nil {
+		return tofuEntryMetadataUnknown
+	}
+	if info.Mode().IsRegular() {
+		return tofuEntryRegular
+	}
+	return tofuEntryExcluded
 }
 
 // parseResult is the result of parsing a single file.
