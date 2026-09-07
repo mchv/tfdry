@@ -144,6 +144,31 @@ resource "aws_security_group" "x" {
 	}
 }
 
+// TestW009_DynamicBlockNonContentSubBlockDoesNotInheritIterator verifies the
+// defensive path for malformed dynamic blocks. Only content{} introduces the
+// dynamic iterator; an unexpected sibling sub-block must retain the outer
+// scope rather than silently accepting the iterator reference.
+func TestW009_DynamicBlockNonContentSubBlockDoesNotInheritIterator(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_security_group" "x" {
+  dynamic "ingress" {
+    for_each = var.cidrs
+    metadata {
+      value = ingress.value
+    }
+  }
+}
+`,
+	})
+	if !hasCode(vs, "W009") {
+		t.Fatalf("expected W009 when a non-content dynamic sub-block uses the iterator, got: %v", codes(vs))
+	}
+	if hasCode(vs, "E009") {
+		t.Fatalf("dynamic iterator name is unfamiliar rather than a known typo; expected W009 only, got: %v", codes(vs))
+	}
+}
+
 // TestE009_DynamicBlockNested_BothIteratorsInScope verifies that nested
 // dynamic blocks stack their iterators — the inner content{} sees both
 // the inner and outer iterator names.
