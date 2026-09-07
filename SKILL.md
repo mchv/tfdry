@@ -4,7 +4,17 @@ Agent-specific invariants for using tfdry correctly.
 
 ## What tfdry does
 
-tfdry validates and optionally formats Terraform `.tf` files in a directory without running `terraform init` or `terraform validate`. It catches a focused set of errors that are statically resolvable from the source files alone.
+tfdry validates and optionally formats native-HCL Terraform and OpenTofu
+configuration files (`.tf` and `.tofu`) without running `terraform init`,
+`tofu init`, or either tool's validation command. It catches a focused set of
+errors that are statically resolvable from the source files alone.
+
+When linting a directory, or applying `--fix`, `name.tofu` takes precedence
+over a same-basename `name.tf`, matching OpenTofu's module-loading rule.
+Distinct `.tf` and `.tofu` files are analysed together as one module. The
+standalone `fmt` subcommand instead formats every native file independently,
+including same-basename pairs, matching `tofu fmt`. JSON configurations
+(`.tf.json` and `.tofu.json`) are not supported.
 
 ## Invariants
 
@@ -34,8 +44,8 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
 | E005 | error    | `count` and `for_each` used together on same resource/data/module block |
 | E006 | error    | Local module input type mismatch |
 | E007 | error    | Unknown local module input key |
-| E008 | error    | File not formatted (equivalent to `terraform fmt --check`) |
-| E009 | error    | Invalid Terraform scope root with a high-confidence correction |
+| E008 | error    | File not formatted (`terraform fmt` / `tofu fmt` compatible) |
+| E009 | error    | Invalid Terraform/OpenTofu scope root with a high-confidence correction |
 | E101 | error    | Invalid IPv4 or IPv6 CIDR block literal |
 | E201 | error    | Unrecognised AWS region in an AWS provider/resource/data context |
 | E202 | error    | Invalid 12-digit AWS account ID in an AWS context |
@@ -43,7 +53,7 @@ tfdry validates and optionally formats Terraform `.tf` files in a directory with
 | E204 | error    | Invalid S3 general-purpose or directory bucket declaration |
 | E210 | error    | Curated AWS nested block-name singular/plural typo |
 | W001 | warning  | Local defined but never used |
-| W009 | warning  | Unfamiliar Terraform scope root (may be typo or unrecognised construct) |
+| W009 | warning  | Unfamiliar Terraform/OpenTofu scope root (may be typo or unrecognised construct) |
 
 ## Scope limitations
 
@@ -54,10 +64,10 @@ tfdry only resolves `local.*` values defined in the same directory. It does **no
 
 When a value's type cannot be resolved statically, the check is **skipped** (no false positives).
 
-With `--recursive`, every directory containing `.tf` files is linted as an
-independent workspace. Hidden directories and `node_modules` are skipped, and
-reported filenames are relative to the recursion root. Locals are not merged
-across workspace directories.
+With `--recursive`, every directory containing `.tf` or `.tofu` files is
+linted as an independent workspace. Hidden directories and `node_modules` are
+skipped, and reported filenames are relative to the recursion root. Locals are
+not merged across workspace directories.
 
 ## JSON output shape
 
@@ -87,7 +97,7 @@ tfdry
 # Check specific directory, JSON output
 tfdry --json ./infra/prod
 
-# Check multiple independent Terraform workspaces recursively
+# Check multiple independent Terraform/OpenTofu workspaces recursively
 tfdry --json --recursive ./terraform
 
 # Run only type-mismatch and undefined-local checks
@@ -108,9 +118,9 @@ tfdry describe --json
 
 ## Security
 
-- tfdry does not execute Terraform code. It parses `.tf` files with hclsyntax/hclwrite — no `terraform validate`, no plan/apply, no module install.
+- tfdry does not execute Terraform or OpenTofu code. It parses native `.tf` and `.tofu` files with hclsyntax/hclwrite — no validation, plan/apply, or module install.
 - tfdry makes no network requests.
-- Symlinked path arguments to `tfdry fmt` are rejected. On Unix-like systems, symlinked `.tf` files inside a scanned directory are also skipped via `O_NOFOLLOW`. **Windows is best-effort**: without `O_NOFOLLOW` the symlink-to-regular-file case is silently followed (symlinks pointing to directories or devices are still rejected by a post-open `IsRegular` check). Both behaviours aim to prevent surprising file rewrites through symlinks.
-- Output fields (filenames, local names, error messages) are sanitized for ANSI escape sequences and Unicode bidi-override / isolate-control characters before writing to stdout/JSON, mitigating terminal-injection attacks via crafted `.tf` content.
-- File reads are capped at 10 MiB per `.tf` file; oversized files are skipped with an `E000` violation.
-- tfdry does **not** sandbox path arguments. Relative paths (`./infra`, `../shared`), absolute paths, and module `source = "../foo"` references are accepted as given (matching terraform's behaviour). Run tfdry inside the directory or container scope you intend to validate.
+- Symlinked path arguments to `tfdry fmt` are rejected. On Unix-like systems, symlinked `.tf` / `.tofu` files inside a scanned directory are also skipped via `O_NOFOLLOW`. **Windows is best-effort**: without `O_NOFOLLOW` the symlink-to-regular-file case is silently followed (symlinks pointing to directories or devices are still rejected by a post-open `IsRegular` check). Both behaviours aim to prevent surprising file rewrites through symlinks.
+- Output fields (filenames, local names, error messages) are sanitized for ANSI escape sequences and Unicode bidi-override / isolate-control characters before writing to stdout/JSON, mitigating terminal-injection attacks via crafted `.tf` / `.tofu` content.
+- Directory-based lint and format reads are capped at 10 MiB per `.tf` / `.tofu` file; oversized files are skipped with an `E000` violation. Explicit single-file `tfdry fmt <path>` preserves its existing unrestricted read behaviour.
+- tfdry does **not** sandbox path arguments. Relative paths (`./infra`, `../shared`), absolute paths, and module `source = "../foo"` references are accepted as given (matching Terraform/OpenTofu behaviour). Run tfdry inside the directory or container scope you intend to validate.

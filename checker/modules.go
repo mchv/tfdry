@@ -82,9 +82,11 @@ func (s typeSchema) label() string {
 	}
 }
 
-// parseModuleVarSchemas reads all *.tf files in moduleDir and returns a map of
-// variable name → typeSchema. Returns nil if the directory can't be read.
-// Results are cached in the provided cache map (keyed by moduleDir).
+// parseModuleVarSchemas reads native .tf and .tofu files in moduleDir and
+// returns a map of variable name → typeSchema. OpenTofu same-basename
+// precedence is applied by nativeConfigEntries. Returns nil if the directory
+// can't be read. Results are cached in the provided cache map (keyed by
+// moduleDir).
 func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSchema) map[string]typeSchema {
 	// Tolerate a nil cache. Later code writes to cache[moduleDir]
 	// (both early-out paths and the success path), which would panic on
@@ -111,10 +113,7 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSch
 	}
 
 	schemas := make(map[string]typeSchema)
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".tf" {
-			continue
-		}
+	for _, e := range nativeConfigEntries(entries) {
 		path := filepath.Join(moduleDir, e.Name())
 		// Open with O_NOFOLLOW to atomically reject symlinks (matches parseOne).
 		// On Windows oNoFollow = 0; the IsRegular check below provides a
@@ -331,9 +330,9 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]localInfo, ch
 		// `../shared/<module>` are the standard monorepo pattern and must
 		// be checked. tfdry runs with the user's permissions on the user's
 		// own files, so a project-root boundary doesn't add a real security
-		// property — symlink rejection on file open (O_NOFOLLOW) is the
-		// actual defence (see the EvalSymlinks-based root containment
-		// check below).
+		// property — symlink rejection on each file open (O_NOFOLLOW) is
+		// the actual defence. EvalSymlinks here is used only to detect the
+		// self-reference case below.
 		moduleDir := filepath.Join(dir, filepath.FromSlash(source))
 		realModule, err1 := filepath.EvalSymlinks(moduleDir)
 		realDir, err2 := filepath.EvalSymlinks(dir)

@@ -16,12 +16,12 @@ A fast result is useful only when it remains predictable and meaningful.
 The project therefore optimises for the following properties:
 
 - **Fast local feedback.** A normal lint run reads and statically analyses
-  local `.tf` files. It does not download providers, fetch schemas, read
-  state, or make network requests.
+  local `.tf` and `.tofu` files. It does not download providers, fetch
+  schemas, read state, or make network requests.
 - **Memory-conscious execution.** The process does not start provider
-  processes or maintain provider schemas or state. Source input is capped
-  at 10 MiB per file, and common literal-validation paths are designed to
-  avoid per-value heap allocation.
+  processes or maintain provider schemas or state. Source input in directory
+  scans is capped at 10 MiB per file, and common literal-validation paths are
+  designed to avoid per-value heap allocation.
 - **Proportional work.** Files are parsed once, then checks operate on the
   resulting syntax trees. Individual checks use narrow trigger surfaces
   and skip blocks or attributes outside their scope before doing deeper
@@ -106,11 +106,12 @@ of ordinary source.
 
 ### Bound input and work
 
-`tfdry` reports E000 rather than attempting to parse source files larger
-than 10 MiB. This protects the tool from accidental or hostile oversized
-input and keeps memory demand bounded per file. Context cancellation is
-propagated through the pipeline so callers can stop a run that is no
-longer useful.
+Directory-based lint and format scans report E000 rather than attempting to
+parse source files larger than 10 MiB. This protects the tool from accidental
+or hostile oversized input and keeps memory demand bounded per scanned file.
+Explicit single-file `tfdry fmt <path>` retains its existing unrestricted read
+behaviour. Context cancellation is propagated through the pipeline so callers
+can stop a run that is no longer useful.
 
 ## What the benchmark suite measures
 

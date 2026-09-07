@@ -1,6 +1,6 @@
 # tfdry
 
-> Fast, focused Terraform linting — no `terraform init`, no state, no network.
+> Fast, focused Terraform and OpenTofu linting — no init, no state, no network.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/mchv/tfdry.svg)](https://pkg.go.dev/github.com/mchv/tfdry)
 [![Go Report Card](https://goreportcard.com/badge/github.com/mchv/tfdry)](https://goreportcard.com/report/github.com/mchv/tfdry)
@@ -13,12 +13,13 @@
 [![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-orange)](https://www.conventionalcommits.org)
 [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-2.1-blueviolet)](CODE_OF_CONDUCT.md)
 [![Terraform 1.x](https://img.shields.io/badge/terraform-1.x-purple)](https://www.terraform.io)
+[![OpenTofu 1.x](https://img.shields.io/badge/opentofu-1.x-yellow)](https://opentofu.org)
 [![Skill](https://img.shields.io/badge/skill-SKILL.md-darkgreen)](SKILL.md)
 
-`tfdry` catches a focused set of errors by statically analysing `.tf` files
-in a directory. No provider downloads, no state, no network — runs in
-milliseconds on a typical Terraform module and integrates cleanly into
-pre-commit hooks, CI pipelines, and editor integrations.
+`tfdry` catches a focused set of errors by statically analysing native-HCL
+Terraform and OpenTofu files (`.tf` and `.tofu`) in a directory. No provider
+downloads, no state, no network — runs in milliseconds on a typical module and
+integrates cleanly into pre-commit hooks, CI pipelines, and editor integrations.
 
 ---
 
@@ -36,9 +37,10 @@ pre-commit hooks, CI pipelines, and editor integrations.
   version pins, provenance, and raw reports.
 - **Focused.** A curated set of deterministic lint checks (E001–E009 + E101 + E201–E204 + E210 + W001 + W009) — HCL
   syntax, local-value resolution (undefined, duplicated, typed,
-  unused), relative-module input typing without `terraform init`,
-  `terraform fmt`-parity formatting, CIDR block validation, and AWS
-  region / account ID / ARN grammar. Plus the special `E000`
+  unused), relative-module input typing without `terraform init` or
+  `tofu init`, native-HCL formatting compatible with `terraform fmt` and
+  `tofu fmt`, CIDR block validation, and AWS region / account ID / ARN
+  grammar. Plus the special `E000`
   tool-error code for unreadable files, oversize input, and write
   failures (routed to exit `2`, not `--checks=`-toggleable). No
   opinionated style nags.
@@ -46,7 +48,8 @@ pre-commit hooks, CI pipelines, and editor integrations.
   feedback loop short: there are no provider downloads, remote calls,
   or shared state to wait for. The process is memory-conscious too: it
   does not start provider processes or retain provider schemas or state,
-  limits each source file to 10 MiB, and uses zero-allocation fast paths
+  limits each source file in directory scans to 10 MiB, and uses
+  zero-allocation fast paths
   for common literal grammar checks. The pinned Linux/arm64 snapshot
   measured 13.13 MiB median peak RSS for the 102-file full check on its
   recorded host. Fresh JSON check means ± standard deviations were 7.06 ±
@@ -90,7 +93,7 @@ tfdry .
 # Auto-fix formatting violations (E008 only — every other check stays read-only)
 tfdry --fix .
 
-# Format like `terraform fmt`
+# Format like `terraform fmt` / `tofu fmt`
 tfdry fmt .
 
 # Machine-readable output for CI / agents
@@ -140,7 +143,7 @@ Same input with `--json`:
 
 ### Lint checks
 
-The codes below lint Terraform code itself. All are toggleable via
+The codes below lint Terraform and OpenTofu code. All are toggleable via
 `--checks=` and route to exit `1` on violation (warnings don't affect
 exit code).
 
@@ -153,8 +156,8 @@ exit code).
 | E005  | error    | `count` and `for_each` used together on the same `resource` / `data` / `module` block. |
 | E006  | error    | Module input type mismatch (relative-path modules only — remote modules aren't fetched). |
 | E007  | error    | Unknown input key for a relative-path module. |
-| E008  | error    | File is not formatted (`terraform fmt` parity, auto-fixable with `--fix`). |
-| E009  | error    | Invalid Terraform scope root in expression (e.g. `${vars.foo}` — did you mean `${var.foo}`?). |
+| E008  | error    | File is not formatted (`terraform fmt` / `tofu fmt` compatible, auto-fixable with `--fix`). |
+| E009  | error    | Invalid Terraform/OpenTofu scope root in expression (e.g. `${vars.foo}` — did you mean `${var.foo}`?). |
 | E101  | error    | Invalid CIDR block literal (IPv4 / IPv6, with interpolation-aware placeholder composition). |
 | E201  | error    | Invalid AWS region — attribute value is not a recognised region across aws, aws-us-gov, or aws-cn partitions. |
 | E202  | error    | Invalid AWS account ID — value is not a 12-digit string on an `account_id` attribute. |
@@ -162,7 +165,7 @@ exit code).
 | E204  | error    | Invalid AWS S3 bucket name — validates literal `bucket` declarations in `aws_s3_bucket` and `aws_s3_directory_bucket` resources using their distinct naming rules. General-purpose names enforce length (3–63), character set (`[a-z0-9.-]`), alphanumeric boundaries, no consecutive dots, and no IP-address-shaped names. Directory buckets additionally require `<base-name>--<zone-id>--x-s3`. Existing-bucket references and contexts that also accept access-point ARNs are skipped. |
 | E210  | error    | AWS resource block-name typo — a nested block name inside an `aws_*` resource or data source matches a known singular/plural typo (e.g. `permission` on `aws_quicksight_analysis` where the schema expects `permissions`). Curated table only; no schema fetch. |
 | W001  | warning  | Local defined but never referenced. |
-| W009  | warning  | Unfamiliar Terraform scope root — an identifier that isn't a known top-level root (`var`, `local`, `data`, ...), a scoped iterator variable, or a resource-type-shaped name. May be a typo of an unfamiliar root or a newer Terraform construct we don't track yet. Downgraded from E009 for uncertain cases per the "defaults must be highly certain" contract. |
+| W009  | warning  | Unfamiliar Terraform/OpenTofu scope root — an identifier that isn't a known top-level root (`var`, `local`, `data`, ...), a scoped iterator variable, or a resource-type-shaped name. May be a typo or a newer construct we don't track yet. Downgraded from E009 for uncertain cases per the "defaults must be highly certain" contract. |
 
 ### Tool-error code
 
@@ -202,7 +205,17 @@ Flags:
                                  `node_modules`. Also accepted by `fmt`.
 ```
 
-The `fmt` subcommand is a drop-in `terraform fmt` replacement:
+### Configuration files
+
+Directory-based linting and `--fix` load native-HCL `.tf` and `.tofu`
+files. If both `name.tf` and `name.tofu` exist, only `name.tofu` is loaded,
+matching OpenTofu's module-loading precedence rule. Files with different
+basenames are combined into the same module regardless of extension. JSON
+configurations (`.tf.json` and `.tofu.json`) are not currently supported.
+
+The `fmt` subcommand is a native-HCL replacement for `terraform fmt` and
+`tofu fmt`. Like those formatters, directory and recursive runs format every
+`.tf` and `.tofu` file independently, including same-basename pairs:
 - Takes either a directory or a single file path.
 - `-check` reads only; exits 3 if any file would be rewritten.
 - `-recursive` walks subdirectories, skipping hidden dirs (`.terraform`, `.git`, …) and `node_modules`.
@@ -210,7 +223,7 @@ The `fmt` subcommand is a drop-in `terraform fmt` replacement:
 With `--recursive` on the lint path, each recursed directory is
 linted independently under the same single-workspace contract as the
 non-recursive case — no cross-directory scope merging. `local.foo` in
-`subdir/main.tf` still won't resolve to a `local.foo` defined in a
+`subdir/main.tofu` still won't resolve to a `local.foo` defined in a
 parent directory's `locals.tf`. That's a separate design question
 tracked in [#32](https://github.com/mchv/tfdry/issues/32).
 
@@ -271,8 +284,8 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 
 ### Pre-commit hook
 
-For repos with a single Terraform workspace, point `entry:` at the
-directory containing your `.tf` files and scope `files:` to that
+For repos with a single Terraform or OpenTofu workspace, point `entry:` at the
+directory containing your `.tf` / `.tofu` files and scope `files:` to that
 directory so the hook only fires on relevant changes:
 
 ```yaml
@@ -284,13 +297,13 @@ repos:
         name: tfdry
         entry: tfdry --json terraform/
         language: system
-        files: ^terraform/[^/]+\.tf$
+        files: ^terraform/[^/]+\.(tf|tofu)$
         pass_filenames: false
 ```
 
 Adjust `entry:` and `files:` to match your workspace path
 (`infra/`, `deployments/`, etc.). The `[^/]+` (rather than `.*`)
-restricts the regex to direct-child `.tf` files — `.*` would
+restricts the regex to direct-child `.tf` / `.tofu` files — `.*` would
 over-match subdirectory files that `tfdry --json terraform/` doesn't
 actually lint.
 
@@ -308,7 +321,7 @@ repos:
         name: tfdry
         entry: tfdry --json --recursive terraform/
         language: system
-        files: ^terraform/.*\.tf$
+        files: ^terraform/.*\.(tf|tofu)$
         pass_filenames: false
 ```
 
@@ -319,8 +332,8 @@ their path relative to the recursion root (e.g.
 
 ### GitHub Actions
 
-`tfdry` lints one Terraform workspace directory at a time — point the
-argument at your workspace path. For repos with multiple workspaces,
+`tfdry` lints one Terraform or OpenTofu workspace directory at a time — point
+the argument at your workspace path. For repos with multiple workspaces,
 use `--recursive` to walk the whole tree in one step.
 
 The minimal recipe fails the build on lint violations:

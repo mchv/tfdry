@@ -4,7 +4,10 @@
 package checker
 
 import (
+	"os"
+	"slices"
 	"testing"
+	"time"
 )
 
 // TestCollectResults_PartialAndNilFiles pins the partial-collection
@@ -74,5 +77,64 @@ func TestCollectResults_EmptyInput(t *testing.T) {
 	empty := make([]parseResult, 4)
 	if files, vs := collectResults(empty); len(files) != 0 || len(vs) != 0 {
 		t.Errorf("collectResults(empty×4) = (%v, %v), want empty", files, vs)
+	}
+}
+
+type nativeConfigTestDirEntry struct {
+	name string
+	mode os.FileMode
+}
+
+func (e nativeConfigTestDirEntry) Name() string      { return e.name }
+func (e nativeConfigTestDirEntry) IsDir() bool       { return false }
+func (e nativeConfigTestDirEntry) Type() os.FileMode { return 0 }
+func (e nativeConfigTestDirEntry) Info() (os.FileInfo, error) {
+	return nativeConfigTestFileInfo(e), nil
+}
+
+type nativeConfigTestFileInfo nativeConfigTestDirEntry
+
+func (i nativeConfigTestFileInfo) Name() string       { return i.name }
+func (i nativeConfigTestFileInfo) Size() int64        { return 0 }
+func (i nativeConfigTestFileInfo) Mode() os.FileMode  { return i.mode }
+func (i nativeConfigTestFileInfo) ModTime() time.Time { return time.Time{} }
+func (i nativeConfigTestFileInfo) IsDir() bool        { return false }
+func (i nativeConfigTestFileInfo) Sys() any           { return nil }
+
+func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		tofuMode  os.FileMode
+		wantNames []string
+	}{
+		{
+			name:      "regular tofu shadows terraform",
+			tofuMode:  0o644,
+			wantNames: []string{"main.tofu"},
+		},
+		{
+			name:      "symlink tofu does not shadow terraform",
+			tofuMode:  os.ModeSymlink | 0o777,
+			wantNames: []string{"main.tf", "main.tofu"},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			entries := []os.DirEntry{
+				nativeConfigTestDirEntry{name: "main.tf", mode: 0o644},
+				nativeConfigTestDirEntry{name: "main.tofu", mode: tc.tofuMode},
+			}
+			selected := nativeConfigEntries(entries)
+			got := make([]string, len(selected))
+			for i, entry := range selected {
+				got[i] = entry.Name()
+			}
+			if !slices.Equal(got, tc.wantNames) {
+				t.Fatalf("nativeConfigEntries() = %v, want %v", got, tc.wantNames)
+			}
+		})
 	}
 }

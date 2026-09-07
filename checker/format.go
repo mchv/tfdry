@@ -33,7 +33,7 @@ func CheckFormat(ctx context.Context, files []ParsedFile) ([]Violation, error) {
 				Code:     "E008",
 				Severity: "error",
 				File:     f.Name,
-				Message:  "file is not formatted (run tfdry --fix or terraform fmt)",
+				Message:  "file is not formatted (run tfdry --fix, terraform fmt, or tofu fmt)",
 			})
 		}
 	}
@@ -127,7 +127,7 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 					Code:     "E008",
 					Severity: "error",
 					File:     f.Name,
-					Message:  "file is not formatted (run tfdry --fix or terraform fmt)",
+					Message:  "file is not formatted (run tfdry --fix, terraform fmt, or tofu fmt)",
 				},
 			)
 		} else if ok {

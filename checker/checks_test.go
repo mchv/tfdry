@@ -486,18 +486,81 @@ output "o" { value = "prefix-${local.env}" }
 	}
 }
 
-// Non-.tf files in the directory must be ignored.
-func TestParseDir_IgnoresNonTfFiles(t *testing.T) {
+func TestParseDir_OpenTofuFileLinted(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tofu": `output "x" { value = local.missing }`,
+	})
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	if len(files) != 1 || files[0].Name != "main.tofu" {
+		t.Fatalf("parsed files = %+v, want only main.tofu", files)
+	}
+	vs := mustRun(context.Background(), files, nil, dir)
+	if !hasCode(vs, "E003") {
+		t.Fatalf("expected E003 from main.tofu, got %v", codes(vs))
+	}
+}
+
+func TestParseDir_OpenTofuTakesPrecedenceOverSameBasenameTerraform(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":   `locals { broken = `,
+		"main.tofu": "locals {\n  selected = \"tofu\"\n}\n",
+	})
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("same-basename main.tf must be ignored, got %+v", parseViolations)
+	}
+	if len(files) != 1 || files[0].Name != "main.tofu" {
+		t.Fatalf("parsed files = %+v, want only main.tofu", files)
+	}
+}
+
+func TestParseDir_MergesDistinctTerraformAndOpenTofuFiles(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"locals.tofu": "locals {\n  shared = \"value\"\n}\n",
+		"output.tf":   "output \"shared\" {\n  value = local.shared\n}\n",
+	})
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	if len(files) != 2 {
+		t.Fatalf("parsed %d files, want both distinct .tf and .tofu files", len(files))
+	}
+	vs := mustRun(context.Background(), files, nil, dir)
+	if hasCode(vs, "E003") || hasCode(vs, "W001") {
+		t.Fatalf("cross-extension local must resolve and count as used, got %v", codes(vs))
+	}
+}
+
+// Non-native-HCL files in the directory must be ignored. JSON syntax remains
+// unsupported consistently for both Terraform and OpenTofu file extensions.
+func TestParseDir_IgnoresNonNativeHCLFiles(t *testing.T) {
 	t.Parallel()
 	vs := run(t, map[string]string{
-		"main.tf":   `locals { x = "y" }`,
-		"README.md": `# not terraform`,
-		"vars.json": `{"key": "value"}`,
+		"main.tf":           `locals { x = "y" }`,
+		"README.md":         `# not terraform`,
+		"vars.json":         `{"key": "value"}`,
+		"ignored.tf.json":   `this is not native HCL`,
+		"ignored.tofu.json": `this is not native HCL`,
 	})
-	// No violations expected — non-.tf files should be silently skipped.
 	for _, v := range vs {
 		if v.Code == "E001" {
-			t.Fatalf("E001 fired on non-.tf file: %+v", v)
+			t.Fatalf("E001 fired on non-native-HCL file: %+v", v)
 		}
 	}
 }
@@ -651,24 +714,41 @@ func TestParseDir_DotDotSegment_Allowed(t *testing.T) {
 	}
 }
 
-// ParseDir rejects files over 10MB.
-func TestParseDir_FileTooLarge_EmitsE000(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "big.tf")
-	// Write 10MB + 1 byte.
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
+// ParseDir accepts files exactly at the 10 MiB limit and emits E000 for
+// larger files, consistently across Terraform and OpenTofu extensions.
+func TestParseDir_FileSizeBoundary(t *testing.T) {
+	const limit = 10 * 1024 * 1024
+	tests := []struct {
+		name     string
+		ext      string
+		size     int64
+		wantE000 bool
+	}{
+		{name: "terraform exact limit", ext: ".tf", size: limit},
+		{name: "terraform over limit", ext: ".tf", size: limit + 1, wantE000: true},
+		{name: "opentofu exact limit", ext: ".tofu", size: limit},
+		{name: "opentofu over limit", ext: ".tofu", size: limit + 1, wantE000: true},
 	}
-	if err := f.Truncate(10*1024*1024 + 1); err != nil {
-		f.Close()
-		t.Fatal(err)
-	}
-	f.Close()
-	_, vs, _ := checker.ParseDir(context.Background(), dir)
-	if !hasCode(vs, "E000") {
-		t.Fatalf("expected E000 for oversized file, got %v", codes(vs))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "big"+tc.ext)
+			f, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Truncate(tc.size); err != nil {
+				_ = f.Close()
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			_, vs, _ := checker.ParseDir(context.Background(), dir)
+			if got := hasCode(vs, "E000"); got != tc.wantE000 {
+				t.Fatalf("E000 presence = %v, want %v; violations=%v", got, tc.wantE000, codes(vs))
+			}
+		})
 	}
 }
 

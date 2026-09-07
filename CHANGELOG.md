@@ -16,6 +16,19 @@ Each release entry groups changes under the following headings (omitted if empty
 
 ## [Unreleased]
 
+### Added
+
+- **OpenTofu native configuration support.** Linting, formatting, and
+  relative-module input checks now recognise both `.tf` and `.tofu`
+  files. For linting, `--fix`, and module loading, a same-basename
+  `.tofu` file takes precedence over its `.tf` counterpart, matching
+  OpenTofu's module-loading rules; distinct files of both types are
+  analysed together. The standalone `fmt` subcommand formats every
+  native file independently, including same-basename pairs, matching
+  `tofu fmt`. OpenTofu 1.12's bare `tofu2024` language-edition keyword
+  is also recognised without a spurious W009 diagnostic. JSON
+  configurations (`.tf.json` and `.tofu.json`) remain unsupported.
+
 ## [0.2.0] — 2026-08-04
 
 ### Added

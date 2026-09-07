@@ -635,6 +635,49 @@ func TestRun_Fmt_AlreadyFormatted_NoOutput_ExitZero(t *testing.T) {
 	}
 }
 
+func TestRun_Fmt_RewritesOpenTofuFile(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{"dirty.tofu": fmtDirtyTF})
+	code, stdout, stderr := runCLI("fmt", dir)
+	if code != 0 {
+		t.Fatalf("fmt on .tofu file should exit 0, got %d; stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "dirty.tofu") {
+		t.Fatalf("expected dirty.tofu in output, got %q", stdout)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "dirty.tofu"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != fmtCleanTF {
+		t.Fatalf(".tofu file not formatted:\nexpected: %q\ngot:      %q", fmtCleanTF, string(got))
+	}
+}
+
+func TestRun_Fmt_FormatsBothSameBasenameTerraformAndOpenTofu(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":   fmtDirtyTF,
+		"main.tofu": fmtDirtyTF,
+	})
+	code, stdout, stderr := runCLI("fmt", dir)
+	if code != 0 {
+		t.Fatalf("fmt should format both native files, got %d; stderr=%q", code, stderr)
+	}
+	for _, name := range []string{"main.tf", "main.tofu"} {
+		if !strings.Contains(stdout, name) {
+			t.Errorf("expected %s in stdout, got %q", name, stdout)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != fmtCleanTF {
+			t.Errorf("%s was not formatted: %q", name, string(got))
+		}
+	}
+}
+
 func TestRun_FmtCheck_PrintsButDoesntRewrite_ExitThree(t *testing.T) {
 	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"dirty.tf": fmtDirtyTF})

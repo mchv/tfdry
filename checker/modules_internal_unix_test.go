@@ -54,3 +54,31 @@ func TestParseModuleVarSchemas_UnreadableFile_SkippedSilently(t *testing.T) {
 		t.Errorf("bad.tf (unreadable) must NOT appear in schemas: got %v", got)
 	}
 }
+
+// A skipped .tofu symlink must not shadow a regular same-basename .tf file
+// when loading relative-module variable schemas.
+func TestParseModuleVarSchemas_OpenTofuSymlinkDoesNotShadowTerraform(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "variables.tf"),
+		[]byte(`variable "from_tf" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "variables.tofu")
+	if err := os.WriteFile(target,
+		[]byte(`variable "from_tofu" { type = number }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "variables.tofu")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	got := parseModuleVarSchemas(dir, nil)
+	if got["from_tf"].Kind != schemaString {
+		t.Fatalf("regular variables.tf was hidden by skipped symlink: %v", got)
+	}
+	if _, ok := got["from_tofu"]; ok {
+		t.Fatalf("symlinked variables.tofu must not contribute a schema: %v", got)
+	}
+}

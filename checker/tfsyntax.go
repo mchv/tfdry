@@ -199,11 +199,11 @@ func ValidateScopeRoot(expr hclsyntax.Expression, iterators map[string]struct{})
 func scopeRootViolation(file string, diag *ScopeRootDiag) Violation {
 	code := "W009"
 	severity := "warning"
-	msg := "unfamiliar Terraform scope root \"" + diag.Root + "\" (may be a typo or an unrecognised construct)"
+	msg := "unfamiliar Terraform/OpenTofu scope root \"" + diag.Root + "\" (may be a typo or an unrecognised construct)"
 	if diag.IsTypo {
 		code = "E009"
 		severity = "error"
-		msg = "invalid Terraform scope root \"" + diag.Root + "\""
+		msg = "invalid Terraform/OpenTofu scope root \"" + diag.Root + "\""
 		if diag.Hint != "" {
 			msg += " (did you mean \"" + diag.Hint + "\"?)"
 		}
