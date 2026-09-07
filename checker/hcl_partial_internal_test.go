@@ -4,6 +4,7 @@
 package checker
 
 import (
+	"errors"
 	"os"
 	"slices"
 	"testing"
@@ -81,14 +82,18 @@ func TestCollectResults_EmptyInput(t *testing.T) {
 }
 
 type nativeConfigTestDirEntry struct {
-	name string
-	mode os.FileMode
+	name    string
+	mode    os.FileMode
+	infoErr error
 }
 
 func (e nativeConfigTestDirEntry) Name() string      { return e.name }
 func (e nativeConfigTestDirEntry) IsDir() bool       { return false }
 func (e nativeConfigTestDirEntry) Type() os.FileMode { return 0 }
 func (e nativeConfigTestDirEntry) Info() (os.FileInfo, error) {
+	if e.infoErr != nil {
+		return nil, e.infoErr
+	}
 	return nativeConfigTestFileInfo(e), nil
 }
 
@@ -104,9 +109,10 @@ func (i nativeConfigTestFileInfo) Sys() any           { return nil }
 func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		tofuMode  os.FileMode
-		wantNames []string
+		name        string
+		tofuMode    os.FileMode
+		tofuInfoErr error
+		wantNames   []string
 	}{
 		{
 			name:      "regular tofu shadows terraform",
@@ -118,6 +124,12 @@ func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
 			tofuMode:  os.ModeSymlink | 0o777,
 			wantNames: []string{"main.tf", "main.tofu"},
 		},
+		{
+			name:        "unreadable tofu metadata does not shadow terraform",
+			tofuMode:    0o644,
+			tofuInfoErr: errors.New("metadata unavailable"),
+			wantNames:   []string{"main.tf", "main.tofu"},
+		},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -125,7 +137,7 @@ func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
 			t.Parallel()
 			entries := []os.DirEntry{
 				nativeConfigTestDirEntry{name: "main.tf", mode: 0o644},
-				nativeConfigTestDirEntry{name: "main.tofu", mode: tc.tofuMode},
+				nativeConfigTestDirEntry{name: "main.tofu", mode: tc.tofuMode, infoErr: tc.tofuInfoErr},
 			}
 			selected := nativeConfigEntries(entries)
 			got := make([]string, len(selected))

@@ -525,6 +525,33 @@ func TestParseDir_OpenTofuTakesPrecedenceOverSameBasenameTerraform(t *testing.T)
 	}
 }
 
+func TestParseDirForFormat_ParsesEveryNativeFileIndependently(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":           "locals {\n  terraform = true\n}\n",
+		"main.tofu":         "locals {\n  opentofu = true\n}\n",
+		"ignored.tf.json":   `{"locals":{"ignored":true}}`,
+		"ignored.tofu.json": `{"locals":{"ignored":true}}`,
+		"nested/child.tf":   "locals {\n  nested = true\n}\n",
+	})
+
+	files, parseViolations, err := checker.ParseDirForFormat(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	gotNames := make([]string, len(files))
+	for i, file := range files {
+		gotNames[i] = file.Name
+	}
+	wantNames := []string{"main.tf", "main.tofu"}
+	if !slices.Equal(gotNames, wantNames) {
+		t.Fatalf("parsed files = %v, want %v", gotNames, wantNames)
+	}
+}
+
 func TestParseDir_MergesDistinctTerraformAndOpenTofuFiles(t *testing.T) {
 	t.Parallel()
 	dir := writeTFDir(t, map[string]string{
