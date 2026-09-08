@@ -1159,14 +1159,14 @@ module "m" {
 		map[string]string{
 			"variables.tf": `
 variable "v" {
-  type = string
+  type = bool
 }
 `,
 		},
 	)
 	vs := runDir(t, dir)
 	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 (number transitively passed as string), got %v", codes(vs))
+		t.Fatalf("expected E006 (number transitively passed as bool), got %v", codes(vs))
 	}
 }
 
@@ -1220,17 +1220,17 @@ func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
 			"main.tf": `module "m" {
   source = "./modules/m"
   names = [
-    "alpha",
-    "beta",
+    true,
+    false,
     42,
-    "delta",
+    true,
   ]
 }
 `,
 		},
 		"modules/m",
 		map[string]string{
-			"variables.tf": `variable "names" { type = list(string) }`,
+			"variables.tf": `variable "names" { type = list(bool) }`,
 		},
 	)
 	vs := runDir(t, dir)
@@ -1244,9 +1244,10 @@ func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
 	if got == nil {
 		t.Fatalf("expected E006 for list element mismatch, got %v", codes(vs))
 	}
-	// The `42` literal is on line 6 of main.tf (1-indexed: blank/module/source/names/alpha/beta/42).
-	// The attribute `names = [...]` starts on line 4. Anything reporting
-	// line 4 is the bug; line 6 is the fix.
+	// The `42` literal is on line 6 of main.tf
+	// (1-indexed: module/source/names/true/false/42). The attribute
+	// `names = [...]` starts on line 3. Anything reporting line 3 is the bug;
+	// line 6 is the fix.
 	if got.Line != 6 {
 		t.Errorf("expected violation Line=6 (the `42` literal), got %d — full violation: %+v",
 			got.Line, *got)
@@ -1753,8 +1754,8 @@ func TestFixFormat_SkipsFormattedFiles(t *testing.T) {
 	}
 }
 
-// E006: number literal passed where string expected.
-func TestE006_NumberPassedWhereStringExpected(t *testing.T) {
+// E006: number literals automatically convert to strings.
+func TestE006_NumberPassedWhereStringExpected_NoViolation(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -1772,8 +1773,8 @@ module "m" {
 		},
 	)
 	vs := runDir(t, dir)
-	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 for number passed where string expected, got %v", codes(vs))
+	if hasCode(vs, "E006") {
+		t.Fatalf("number passed where string expected is convertible, got %v", codes(vs))
 	}
 }
 
@@ -1803,8 +1804,8 @@ module "m" {
 
 // ── Recursive element type checking for list/set/map ─────────────────────
 
-// list(string) with a non-string element must fire E006.
-func TestE006_ListOfString_WithNumberElement(t *testing.T) {
+// list(string) accepts number elements through recursive primitive conversion.
+func TestE006_ListOfString_WithNumberElement_NoViolation(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -1822,13 +1823,13 @@ module "m" {
 		},
 	)
 	vs := runDir(t, dir)
-	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 for number element in list(string), got %v", codes(vs))
+	if hasCode(vs, "E006") {
+		t.Fatalf("number element in list(string) is convertible, got %v", codes(vs))
 	}
 }
 
-// set(string) with a non-string element must fire E006.
-func TestE006_SetOfString_WithBoolElement(t *testing.T) {
+// set(string) accepts bool elements through recursive primitive conversion.
+func TestE006_SetOfString_WithBoolElement_NoViolation(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -1846,8 +1847,8 @@ module "m" {
 		},
 	)
 	vs := runDir(t, dir)
-	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 for bool element in set(string), got %v", codes(vs))
+	if hasCode(vs, "E006") {
+		t.Fatalf("bool element in set(string) is convertible, got %v", codes(vs))
 	}
 }
 
@@ -2389,5 +2390,120 @@ variable "config" {
 	// The dynamic key is skipped from the schema, so 'name' is unknown → E007.
 	if !hasCode(vs, "E007") {
 		t.Fatalf("expected E007 because parenthesised schema key is dynamic and excluded from field map, got %v", codes(vs))
+	}
+}
+
+// TestE006_OpenTofuPrimitiveConversions_NoViolation covers the automatic
+// primitive conversions defined by Terraform/OpenTofu type constraints.
+// These are valid module calls, so strict scalar enum equality must not emit
+// E006. The local bool case reproduces the real-world Motorway findings.
+func TestE006_OpenTofuPrimitiveConversions_NoViolation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		locals     string
+		expression string
+		targetType string
+	}{
+		{
+			name:       "local bool to string",
+			locals:     `locals { value = true }`,
+			expression: "local.value",
+			targetType: "string",
+		},
+		{
+			name:       "number to string",
+			expression: "42",
+			targetType: "string",
+		},
+		{
+			name:       "valid string to bool",
+			expression: `"true"`,
+			targetType: "bool",
+		},
+		{
+			name:       "valid string to number",
+			expression: `"42.5"`,
+			targetType: "number",
+		},
+		{
+			name:       "runtime string potentially convertible to number",
+			locals:     `locals { value = var.choose_first ? "1" : "2" }`,
+			expression: "local.value",
+			targetType: "number",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeModuleFiles(
+				t,
+				map[string]string{
+					"main.tf": tc.locals + `
+module "m" {
+  source = "./modules/m"
+  value  = ` + tc.expression + `
+}
+`,
+				},
+				"modules/m",
+				map[string]string{
+					"variables.tf": `variable "value" { type = ` + tc.targetType + ` }`,
+				},
+			)
+			vs := runDir(t, dir)
+			if hasCode(vs, "E006") {
+				t.Fatalf("%s conversion must not emit E006, got %v", tc.name, codes(vs))
+			}
+		})
+	}
+}
+
+// TestE006_ImpossibleOrInvalidPrimitiveConversions_StillViolate ensures the
+// conversion-aware logic does not hide scalar pairs OpenTofu cannot convert,
+// or literal strings whose value proves the requested conversion will fail.
+func TestE006_ImpossibleOrInvalidPrimitiveConversions_StillViolate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		locals     string
+		expression string
+		targetType string
+	}{
+		{name: "number to bool", expression: "1", targetType: "bool"},
+		{name: "bool to number", expression: "true", targetType: "number"},
+		{name: "invalid string to bool", expression: `"yes"`, targetType: "bool"},
+		{name: "invalid string to number", expression: `"forty-two"`, targetType: "number"},
+		{
+			name:       "invalid local string to number",
+			locals:     `locals { value = "forty-two" }`,
+			expression: "local.value",
+			targetType: "number",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeModuleFiles(
+				t,
+				map[string]string{
+					"main.tf": tc.locals + `
+module "m" {
+  source = "./modules/m"
+  value  = ` + tc.expression + `
+}`,
+				},
+				"modules/m",
+				map[string]string{
+					"variables.tf": `variable "value" { type = ` + tc.targetType + ` }`,
+				},
+			)
+			vs := runDir(t, dir)
+			if !hasCode(vs, "E006") {
+				t.Fatalf("invalid %s conversion must emit E006, got %v", tc.name, codes(vs))
+			}
+		})
 	}
 }
