@@ -648,6 +648,236 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
 			wantCode: "E009",
 		},
 		{
+			name: "invalid state encryption method reference",
+			src: `terraform {
+  encryption {
+    state {
+      method = vars.bad
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid plan encryption method reference",
+			src: `terraform {
+  encryption {
+    plan {
+      method = vars.bad
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid state encryption fallback reference",
+			src: `terraform {
+  encryption {
+    state {
+      fallback {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid plan encryption fallback reference",
+			src: `terraform {
+  encryption {
+    plan {
+      fallback {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid remote-state encryption reference",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      default {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid named remote-state encryption reference",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      remote_state_data_source "archive" {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "state encryption lookalike without terraform",
+			src: `encryption {
+  state {
+    method = method.aes_gcm.main
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "fallback lookalike without terraform",
+			src: `encryption {
+  state {
+    fallback {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "remote-state lookalike without terraform",
+			src: `encryption {
+  remote_state_data_sources {
+    default {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "nested terraform lookalike",
+			src: `resource "example" "bad" {
+  terraform {
+    encryption {
+      state {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled terraform lookalike",
+			src: `terraform "bad" {
+  encryption {
+    state {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled encryption lookalike",
+			src: `terraform {
+  encryption "bad" {
+    state {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled state lookalike",
+			src: `terraform {
+  encryption {
+    state "bad" {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled plan lookalike",
+			src: `terraform {
+  encryption {
+    plan "bad" {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled fallback lookalike",
+			src: `terraform {
+  encryption {
+    state {
+      fallback "bad" {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled remote-state collection lookalike",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources "bad" {
+      default {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled remote-state default lookalike",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      default "bad" {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "unlabelled named remote-state lookalike",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      remote_state_data_source {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "indexed method traversal",
+			src: `terraform {
+  encryption {
+    state {
+      method = method[0].main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name:     "method outside state encryption",
+			src:      `output "x" { value = method.aes_gcm.main }`,
+			wantCode: "W009",
+		},
+		{
 			name:     "continue outside provisioner",
 			src:      `output "x" { value = continue }`,
 			wantCode: "W009",
