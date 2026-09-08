@@ -545,3 +545,122 @@ resource "aws_s3_bucket" "b" {
 	}
 	t.Fatalf("expected at least one W009 violation, got codes: %v", codes(vs))
 }
+
+// TestE009_ContextualReferences_NoFalsePositive covers Terraform/OpenTofu
+// expression positions whose bare traversals are declarations, relative
+// paths, provider references, or keywords rather than ordinary scope-root
+// references. Real-world validation found that treating these like normal
+// expressions produced thousands of W009 false positives.
+func TestE009_ContextualReferences_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "variable type constraints",
+			src: `variable "settings" {
+  type = object({
+    name     = string
+    enabled  = bool
+    attempts = number
+    payload  = any
+  })
+}`,
+		},
+		{
+			name: "module provider mapping",
+			src: `module "child" {
+  source = "./child"
+  providers = {
+    aws = aws.secondary
+  }
+}`,
+		},
+		{
+			name: "provider meta argument",
+			src: `resource "aws_s3_bucket" "example" {
+  provider = aws.secondary
+}`,
+		},
+		{
+			name: "lifecycle ignore changes",
+			src: `resource "aws_s3_bucket" "example" {
+  lifecycle {
+    ignore_changes = [tags, bucket]
+  }
+}`,
+		},
+		{
+			name: "required provider aliases",
+			src: `terraform {
+  required_providers {
+    aws = {
+      source                = "hashicorp/aws"
+      configuration_aliases = [aws.secondary]
+    }
+  }
+}`,
+		},
+		{
+			name: "provisioner on failure keyword",
+			src: `resource "null_resource" "example" {
+  provisioner "local-exec" {
+    command    = "exit 1"
+    on_failure = continue
+  }
+}`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tf": tc.src})
+			assertNoScopeRootDiag(t, vs, tc.name)
+		})
+	}
+}
+
+// TestE009_ContextualReferences_ExemptionsRemainNarrow ensures contextual
+// handling does not globally add declaration keywords to the scope-root
+// allow-list or suppress clear typos in otherwise-special attributes.
+func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		src      string
+		wantCode string
+	}{
+		{
+			name:     "invalid variable type traversal",
+			src:      `variable "x" { type = vars.bad }`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid provisioner keyword traversal",
+			src: `resource "null_resource" "example" {
+  provisioner "local-exec" {
+    command    = "true"
+    on_failure = vars.bad
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name:     "continue outside provisioner",
+			src:      `output "x" { value = continue }`,
+			wantCode: "W009",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tf": tc.src})
+			if !hasCode(vs, tc.wantCode) {
+				t.Fatalf("expected %s, got %v", tc.wantCode, codes(vs))
+			}
+		})
+	}
+}

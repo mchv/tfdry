@@ -11,6 +11,8 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
 )
 
 // schemaKind is the kind of a typeSchema node.
@@ -457,10 +459,13 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 		})
 		return
 	}
-	// Both scalar: check specific scalar type (string vs number vs bool).
+	// Both scalar: apply Terraform/OpenTofu primitive conversion semantics.
+	// bool and number always convert to string. Strings convert to bool or
+	// number when their value has a valid representation; when the value is
+	// runtime-unknown, E006 cannot prove the conversion will fail and skips it.
 	if schema.isScalar() && exprType.IsScalar() {
 		schemaVarType := schemaKindToVarType(schema.Kind)
-		if schemaVarType != TypeUnknown && schemaVarType != exprType {
+		if schemaVarType != TypeUnknown && !scalarTypesCompatible(expr, exprType, schemaVarType, locals) {
 			*out = append(*out, Violation{
 				Code:     "E006",
 				Severity: "error",
@@ -482,6 +487,67 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 			Message:  context + ": declared " + schema.label() + ", got " + schemaKindLabel(exprKind),
 		})
 	}
+}
+
+// scalarTypesCompatible reports whether a caller-side primitive can satisfy a
+// declared primitive type under Terraform/OpenTofu's automatic conversions.
+// It returns true for runtime-unknown strings targeting bool/number because a
+// static checker cannot prove those conversions invalid; known constants are
+// converted with cty so invalid representations still produce E006.
+func scalarTypesCompatible(expr hclsyntax.Expression, source, target VarType, locals map[string]localInfo) bool {
+	if source == target {
+		return true
+	}
+	if target == TypeString && (source == TypeBool || source == TypeNumber) {
+		return true
+	}
+	if source != TypeString || (target != TypeBool && target != TypeNumber) {
+		return false
+	}
+
+	value, known := resolveConstantScalarValue(expr, locals, nil)
+	if !known {
+		return true
+	}
+	targetType := cty.Bool
+	if target == TypeNumber {
+		targetType = cty.Number
+	}
+	_, err := convert.Convert(value, targetType)
+	return err == nil
+}
+
+// resolveConstantScalarValue evaluates literal/template expressions and
+// follows local-only reference chains. Expressions depending on variables,
+// resources, functions without an evaluation context, or cycles are runtime
+// unknown for this check.
+func resolveConstantScalarValue(expr hclsyntax.Expression, locals map[string]localInfo, seen map[string]struct{}) (cty.Value, bool) {
+	expr = unwrapExpr(expr)
+	if ref, ok := expr.(*hclsyntax.ScopeTraversalExpr); ok &&
+		len(ref.Traversal) == 2 && ref.Traversal.RootName() == "local" {
+		attr, ok := ref.Traversal[1].(hcl.TraverseAttr)
+		if !ok {
+			return cty.NilVal, false
+		}
+		if seen == nil {
+			seen = make(map[string]struct{})
+		}
+		if _, cycle := seen[attr.Name]; cycle {
+			return cty.NilVal, false
+		}
+		seen[attr.Name] = struct{}{}
+		local, exists := locals[attr.Name]
+		if !exists || local.Expr == nil {
+			return cty.NilVal, false
+		}
+		return resolveConstantScalarValue(local.Expr, locals, seen)
+	}
+
+	value, diags := expr.Value(nil)
+	if diags.HasErrors() || !value.IsKnown() || value.IsNull() {
+		return cty.NilVal, false
+	}
+	return value, true
 }
 
 // schemaKindToVarType maps a scalar schemaKind to its VarType equivalent.

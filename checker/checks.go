@@ -173,13 +173,15 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		walkExpressions(f.Body, nil, func(expr hclsyntax.Expression, iterators map[string]struct{}) {
 			switch e := expr.(type) {
 			case *hclsyntax.ScopeTraversalExpr:
-				// E009 / W009: scope-root validation. Runs on every
-				// ScopeTraversalExpr — bare traversals (`bucket =
+				// E009 / W009: scope-root validation. Runs on ordinary
+				// ScopeTraversalExpr nodes — bare traversals (`bucket =
 				// vars.name`) as well as interpolated ones
-				// (`"prefix-${vars.env}"`) — so scope-root issues
-				// are caught in any attribute, not just CIDR-triggering
-				// ones. Iterators map carries dynamic-block-content and
-				// for-expression scope from the enclosing walker.
+				// (`"prefix-${vars.env}"`) — so scope-root issues are
+				// caught in any ordinary expression. The enclosing walker
+				// omits traversal nodes only in classified language positions
+				// where they represent declarations, relative paths, provider
+				// references, or keywords instead. Iterators carries
+				// dynamic-block-content and for-expression scope.
 				//
 				// Severity split (see scopeRootViolation): known typos
 				// (`vars`, `locals`, ...) fire E009 error; genuinely
@@ -347,14 +349,15 @@ func checkCountForEach(f ParsedFile) []Violation {
 	return violations
 }
 
-// walkExpressions calls fn for every expression in a body, recursively,
-// with iterators giving the set of iterator-variable names in scope at
-// that point.
+// scopeTraversalContext identifies Terraform/OpenTofu language positions where
+// bare traversals have special semantics rather than denoting ordinary scope
+// references.
 //
-// The iterators parameter is passed to fn on every callback so
-// scope-aware checks (E009 / W009) can consult it. Callers that don't
-// do scope-aware work can pass nil at the top-level call and ignore
-// the parameter in their callback.
+// Expression walking recursively invokes fn for ordinary expression nodes while
+// omitting only those special bare traversals. The iterators parameter is passed
+// to fn on every callback so scope-aware checks (E009 / W009) can consult it.
+// Callers that don't do scope-aware work can pass nil at the top-level call and
+// ignore the parameter in their callback.
 //
 // Two scope-introducing constructs are handled:
 //
@@ -378,16 +381,29 @@ func checkCountForEach(f ParsedFile) []Violation {
 // The walker is re-entrant and side-effect free: each augmented
 // iterator map is cloned rather than mutated, and the scope stack is
 // saved on push and restored on pop.
+type scopeTraversalContext uint8
+
+const (
+	scopeTraversalDefault scopeTraversalContext = iota
+	scopeTraversalTypeConstraint
+	scopeTraversalRelativePath
+	scopeTraversalProviderReference
+	scopeTraversalProvisionerOnFailure
+)
+
+// walkExpressions recursively visits expressions in a body while preserving
+// enough attribute/block context to avoid treating special Terraform/OpenTofu
+// traversals as ordinary scope references.
 func walkExpressions(body *hclsyntax.Body, iterators map[string]struct{}, fn func(hclsyntax.Expression, map[string]struct{})) {
-	walkExpressionsAt(body, iterators, true, false, fn)
+	walkExpressionsAt(body, iterators, true, false, "", "", fn)
 }
 
 // walkExpressionsAt is the recursive implementation behind walkExpressions.
-// topLevel is true only for the file body. inOpenTofuLanguage is true only for
-// the direct body of a top-level, unlabelled `language` block, allowing the
-// edition declaration keyword to be distinguished from an ordinary bare
-// traversal with the same spelling.
-func walkExpressionsAt(body *hclsyntax.Body, iterators map[string]struct{}, topLevel, inOpenTofuLanguage bool, fn func(hclsyntax.Expression, map[string]struct{})) {
+// parentBlockType and grandparentBlockType identify the body containing each
+// attribute. They are used only to classify language positions whose bare
+// traversals have special meaning; ordinary expressions retain the default
+// scope-root validation behaviour.
+func walkExpressionsAt(body *hclsyntax.Body, iterators map[string]struct{}, topLevel, inOpenTofuLanguage bool, parentBlockType, grandparentBlockType string, fn func(hclsyntax.Expression, map[string]struct{})) {
 	if body == nil {
 		return
 	}
@@ -409,6 +425,7 @@ func walkExpressionsAt(body *hclsyntax.Body, iterators map[string]struct{}, topL
 		}
 		w.iterators = iterators
 		w.stack = w.stack[:0]
+		w.scopeContext = classifyScopeTraversalContext(parentBlockType, grandparentBlockType, attr.Name)
 		//nolint:errcheck // Callback returns no diagnostics; we don't use hclsyntax.Walk's aggregated diagnostics.
 		hclsyntax.Walk(attr.Expr, w)
 	}
@@ -418,8 +435,50 @@ func walkExpressionsAt(body *hclsyntax.Body, iterators map[string]struct{}, topL
 			continue
 		}
 		isOpenTofuLanguage := topLevel && block.Type == "language" && len(block.Labels) == 0
-		walkExpressionsAt(block.Body, iterators, false, isOpenTofuLanguage, fn)
+		walkExpressionsAt(block.Body, iterators, false, isOpenTofuLanguage, block.Type, parentBlockType, fn)
 	}
+}
+
+func classifyScopeTraversalContext(parentBlockType, grandparentBlockType, attrName string) scopeTraversalContext {
+	switch {
+	case parentBlockType == "variable" && attrName == "type":
+		return scopeTraversalTypeConstraint
+	case parentBlockType == "lifecycle" && attrName == "ignore_changes":
+		return scopeTraversalRelativePath
+	case parentBlockType == "module" && attrName == "providers":
+		return scopeTraversalProviderReference
+	case (parentBlockType == "resource" || parentBlockType == "data" || parentBlockType == "ephemeral") && attrName == "provider":
+		return scopeTraversalProviderReference
+	case parentBlockType == "terraform" && attrName == "required_providers":
+		return scopeTraversalProviderReference
+	case parentBlockType == "required_providers" && grandparentBlockType == "terraform":
+		return scopeTraversalProviderReference
+	case parentBlockType == "provisioner" && attrName == "on_failure":
+		return scopeTraversalProvisionerOnFailure
+	default:
+		return scopeTraversalDefault
+	}
+}
+
+func skipScopeTraversalForContext(expr *hclsyntax.ScopeTraversalExpr, scopeContext scopeTraversalContext) bool {
+	if len(expr.Traversal) == 0 {
+		return false
+	}
+	root := expr.Traversal.RootName()
+	switch scopeContext {
+	case scopeTraversalTypeConstraint:
+		switch root {
+		case "string", "number", "bool", "any":
+			return true
+		}
+	case scopeTraversalRelativePath, scopeTraversalProviderReference:
+		return true
+	case scopeTraversalProvisionerOnFailure:
+		return len(expr.Traversal) == 1 && (root == "continue" || root == "fail")
+	case scopeTraversalDefault:
+		return false
+	}
+	return false
 }
 
 func isOpenTofuEditionKeyword(expr hclsyntax.Expression) bool {
@@ -434,9 +493,10 @@ func isOpenTofuEditionKeyword(expr hclsyntax.Expression) bool {
 // wrappers by pushing the local names onto its stack. Non-wrapper
 // expression nodes just forward to fn with the current scope.
 type scopedExprWalker struct {
-	iterators map[string]struct{}   // current in-scope iterator names
-	stack     []map[string]struct{} // saved states, one per active ChildScope frame
-	fn        func(hclsyntax.Expression, map[string]struct{})
+	iterators    map[string]struct{}   // current in-scope iterator names
+	stack        []map[string]struct{} // saved states, one per active ChildScope frame
+	scopeContext scopeTraversalContext
+	fn           func(hclsyntax.Expression, map[string]struct{})
 }
 
 // Enter implements hclsyntax.Walker. Pushes iterator names on
@@ -451,6 +511,10 @@ func (w *scopedExprWalker) Enter(n hclsyntax.Node) hcl.Diagnostics {
 		// with the ForExpr's KeyVar and ValVar added.
 		w.stack = append(w.stack, w.iterators)
 		w.iterators = cloneIteratorsBulk(w.iterators, tn.LocalNames)
+	case *hclsyntax.ScopeTraversalExpr:
+		if !skipScopeTraversalForContext(tn, w.scopeContext) {
+			w.fn(tn, w.iterators)
+		}
 	case hclsyntax.Expression:
 		w.fn(tn, w.iterators)
 	}
@@ -528,9 +592,9 @@ func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, fn 
 	augmented := cloneIterators(iterators, iterName)
 	for _, sub := range block.Body.Blocks {
 		if sub.Type == "content" {
-			walkExpressionsAt(sub.Body, augmented, false, false, fn)
+			walkExpressionsAt(sub.Body, augmented, false, false, sub.Type, "dynamic", fn)
 		} else {
-			walkExpressionsAt(sub.Body, iterators, false, false, fn)
+			walkExpressionsAt(sub.Body, iterators, false, false, sub.Type, "dynamic", fn)
 		}
 	}
 }
