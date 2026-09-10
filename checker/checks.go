@@ -504,6 +504,9 @@ func skipScopeTraversalForContext(expr *hclsyntax.ScopeTraversalExpr, scopeConte
 	root := expr.Traversal.RootName()
 	switch scopeContext {
 	case scopeTraversalTypeConstraint:
+		if len(expr.Traversal) != 1 {
+			return false
+		}
 		switch root {
 		case "string", "number", "bool", "any":
 			return true
