@@ -1,0 +1,3 @@
+locals {
+  selected = "OpenTofu"
+}

@@ -28,11 +28,116 @@ func readAll(r io.Reader, _ int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, maxFileSize+1))
 }
 
-// ParsedFile holds the parsed AST and original source for one .tf file.
+// ParsedFile holds the parsed AST and original source for one native HCL
+// configuration file (.tf or .tofu).
 type ParsedFile struct {
 	Name string
 	Body *hclsyntax.Body
 	Src  []byte // original file bytes, used for format checking
+}
+
+// nativeConfigEntries selects the native-HCL Terraform/OpenTofu files from a
+// directory listing. OpenTofu's loading contract gives a .tofu file precedence
+// over a same-basename .tf file (main.tofu shadows main.tf); otherwise distinct
+// .tf and .tofu files are both part of the module. JSON variants are excluded
+// because this parser intentionally supports native HCL only.
+//
+// A known symlink or non-regular .tofu entry is excluded before parsing so
+// Windows cannot follow it and merge it with a same-basename .tf file. If .tofu
+// metadata cannot be read, the .tf peer wins conservatively; a standalone .tofu
+// remains a candidate so the normal parser can surface an E000 if opening it
+// also fails.
+//
+// os.ReadDir returns entries sorted by filename, and this function preserves
+// their order so parsing and diagnostics remain deterministic.
+func nativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
+	tfBases := make(map[string]struct{})
+	tofuBases := make(map[string]struct{})
+	tofuKinds := make(map[string]tofuEntryKind)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		switch filepath.Ext(name) {
+		case ".tf":
+			tfBases[name[:len(name)-len(".tf")]] = struct{}{}
+		case ".tofu":
+			kind := classifyTofuEntry(e)
+			tofuKinds[name] = kind
+			if kind == tofuEntryRegular {
+				tofuBases[name[:len(name)-len(".tofu")]] = struct{}{}
+			}
+		}
+	}
+
+	selected := make([]os.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		switch filepath.Ext(name) {
+		case ".tofu":
+			base := name[:len(name)-len(".tofu")]
+			switch tofuKinds[name] {
+			case tofuEntryRegular:
+				selected = append(selected, e)
+			case tofuEntryMetadataUnknown:
+				if _, hasTerraformPeer := tfBases[base]; !hasTerraformPeer {
+					selected = append(selected, e)
+				}
+			case tofuEntryExcluded:
+				continue
+			}
+		case ".tf":
+			base := name[:len(name)-len(".tf")]
+			if _, shadowed := tofuBases[base]; !shadowed {
+				selected = append(selected, e)
+			}
+		}
+	}
+	return selected
+}
+
+// allNativeConfigEntries selects every native-HCL Terraform/OpenTofu file
+// without applying module-loading precedence. Formatters use this because
+// `tofu fmt` formats same-basename .tf and .tofu files independently.
+func allNativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
+	selected := make([]os.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch filepath.Ext(e.Name()) {
+		case ".tf", ".tofu":
+			selected = append(selected, e)
+		}
+	}
+	return selected
+}
+
+type tofuEntryKind uint8
+
+const (
+	tofuEntryMetadataUnknown tofuEntryKind = iota
+	tofuEntryRegular
+	tofuEntryExcluded
+)
+
+// classifyTofuEntry determines whether a .tofu entry can authoritatively
+// shadow a same-basename .tf file. Calling Info is intentional even when
+// DirEntry.Type reports no symlink bit: filesystems such as FUSE and network
+// mounts may return Type()==0 for every entry, including symlinks.
+func classifyTofuEntry(e os.DirEntry) tofuEntryKind {
+	info, err := e.Info()
+	if err != nil {
+		return tofuEntryMetadataUnknown
+	}
+	if info.Mode().IsRegular() {
+		return tofuEntryRegular
+	}
+	return tofuEntryExcluded
 }
 
 // parseResult is the result of parsing a single file.
@@ -63,7 +168,8 @@ func collectResults(results []parseResult) ([]ParsedFile, []Violation) {
 	return files, violations
 }
 
-// ParseDir parses all .tf files in dir concurrently. Returns parsed files,
+// ParseDir parses native-HCL .tf and .tofu files in dir concurrently, applying
+// OpenTofu's same-basename precedence rule. Returns parsed files,
 // any syntax/infrastructure violations, and a non-nil error if ctx was
 // cancelled mid-walk. On cancellation, files and violations may be
 // partial — every result populated before the cancellation fired is
@@ -77,6 +183,17 @@ func collectResults(results []parseResult) ([]ParsedFile, []Violation) {
 // branch, and via errgroup.WithContext in the concurrent branch. A
 // cancelled ctx propagates as context.Canceled / context.DeadlineExceeded.
 func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error) {
+	return parseDir(ctx, dir, true)
+}
+
+// ParseDirForFormat parses every native-HCL .tf and .tofu file in dir without
+// applying same-basename precedence. OpenTofu applies precedence when loading a
+// module, but `tofu fmt` formats both files independently.
+func ParseDirForFormat(ctx context.Context, dir string) ([]ParsedFile, []Violation, error) {
+	return parseDir(ctx, dir, false)
+}
+
+func parseDir(ctx context.Context, dir string, applyTofuPrecedence bool) ([]ParsedFile, []Violation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -87,23 +204,25 @@ func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error
 		return nil, []Violation{{Code: "E000", Severity: "error", File: dir, Message: fmt.Sprintf("cannot read directory: %v", err)}}, nil
 	}
 
-	// Collect eligible .tf entries (sequential, cheap).
-	var tfEntries []os.DirEntry
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".tf" {
-			continue
-		}
-		tfEntries = append(tfEntries, e)
+	var configEntries []os.DirEntry
+	if applyTofuPrecedence {
+		// Linting models module loading, where .tofu shadows a same-basename
+		// .tf file.
+		configEntries = nativeConfigEntries(entries)
+	} else {
+		// Formatting models `tofu fmt`, which treats both files independently.
+		configEntries = allNativeConfigEntries(entries)
 	}
 
-	results := make([]parseResult, len(tfEntries))
+	results := make([]parseResult, len(configEntries))
 
 	// Sequential fallback for small directories: goroutine setup + scheduling
 	// overhead exceeds the parallelism win below this threshold. Typical
-	// Terraform modules have 1-5 .tf files, so this is the common case.
+	// Terraform/OpenTofu modules have 1-5 configuration files, so this is the
+	// common case.
 	const parallelThreshold = 4
-	if len(tfEntries) <= parallelThreshold {
-		for i, e := range tfEntries {
+	if len(configEntries) <= parallelThreshold {
+		for i, e := range configEntries {
 			if err := ctx.Err(); err != nil {
 				// Return what we've parsed so far rather than discarding it.
 				files, violations := collectResults(results[:i])
@@ -117,7 +236,7 @@ func ParseDir(ctx context.Context, dir string) ([]ParsedFile, []Violation, error
 		// cancellation through g.Wait().
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(runtime.NumCPU() * 2)
-		for i, e := range tfEntries {
+		for i, e := range configEntries {
 			// Pre-dispatch cancel check. Without this, g.Go below
 			// blocks the dispatcher on the SetLimit semaphore for every
 			// remaining file even after cancellation has fired —

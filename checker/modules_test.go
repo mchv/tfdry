@@ -109,6 +109,9 @@ func TestParseTypeSchema(t *testing.T) {
 
 		{"unknown function-call falls through", "x = nope()", schemaUnknown},
 		{"object()", "x = object({})", schemaObject},
+		{"object dotted key → unknown", "x = object({ foo.bar = string })", schemaUnknown},
+		{"object indexed key → unknown", "x = object({ foo[0] = string })", schemaUnknown},
+		{"object quoted dotted key remains valid", `x = object({ "foo.bar" = string })`, schemaObject},
 		{"list()", "x = list(string)", schemaList},
 		{"map()", "x = map(number)", schemaMap},
 		{"set()", "x = set(bool)", schemaSet},
@@ -117,6 +120,15 @@ func TestParseTypeSchema(t *testing.T) {
 		{"optional() with no args → unknown", "x = optional()", schemaUnknown},
 
 		{"unknown traversal name → unknown (skip checks)", "x = mystery", schemaUnknown},
+
+		// Primitive keywords are valid only as bare traversals. Dotted and
+		// indexed forms are malformed declarations and must remain Unknown so
+		// downstream E006 checks do not compare callers against a bogus scalar.
+		{"dotted string traversal → unknown", "x = string.foo", schemaUnknown},
+		{"dotted number traversal → unknown", "x = number.foo", schemaUnknown},
+		{"dotted bool traversal → unknown", "x = bool.foo", schemaUnknown},
+		{"dotted any traversal → unknown", "x = any.foo", schemaUnknown},
+		{"indexed string traversal → unknown", "x = string[0]", schemaUnknown},
 
 		// Malformed container types must return Unknown, not concrete
 		// schemaList/schemaSet/schemaMap with Elem=nil. Emitting a concrete kind makes
@@ -150,6 +162,24 @@ func TestParseTypeSchema(t *testing.T) {
 				t.Errorf("parseTypeSchema(%q).Kind = %v, want %v", tc.src, got.Kind, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseTypeSchema_QuotedDottedObjectKey(t *testing.T) {
+	expr := parseAttrExpr(t, `x = object({ "foo.bar" = string })`)
+	got := parseTypeSchema(expr)
+	if got.Kind != schemaObject {
+		t.Fatalf("quoted dotted key schema kind = %v, want %v", got.Kind, schemaObject)
+	}
+	if len(got.Fields) != 1 {
+		t.Fatalf("quoted dotted key field count = %d, want 1", len(got.Fields))
+	}
+	field, ok := got.Fields["foo.bar"]
+	if !ok {
+		t.Fatalf("quoted dotted key fields = %v, want foo.bar", got.Fields)
+	}
+	if field.Kind != schemaString {
+		t.Errorf("quoted dotted key kind = %v, want %v", field.Kind, schemaString)
 	}
 }
 

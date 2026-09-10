@@ -11,6 +11,8 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
 )
 
 // schemaKind is the kind of a typeSchema node.
@@ -82,9 +84,11 @@ func (s typeSchema) label() string {
 	}
 }
 
-// parseModuleVarSchemas reads all *.tf files in moduleDir and returns a map of
-// variable name → typeSchema. Returns nil if the directory can't be read.
-// Results are cached in the provided cache map (keyed by moduleDir).
+// parseModuleVarSchemas reads native .tf and .tofu files in moduleDir and
+// returns a map of variable name → typeSchema. OpenTofu same-basename
+// precedence is applied by nativeConfigEntries. Returns nil if the directory
+// can't be read. Results are cached in the provided cache map (keyed by
+// moduleDir).
 func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSchema) map[string]typeSchema {
 	// Tolerate a nil cache. Later code writes to cache[moduleDir]
 	// (both early-out paths and the success path), which would panic on
@@ -111,10 +115,7 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSch
 	}
 
 	schemas := make(map[string]typeSchema)
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".tf" {
-			continue
-		}
+	for _, e := range nativeConfigEntries(entries) {
 		path := filepath.Join(moduleDir, e.Name())
 		// Open with O_NOFOLLOW to atomically reject symlinks (matches parseOne).
 		// On Windows oNoFollow = 0; the IsRegular check below provides a
@@ -168,6 +169,12 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSch
 func parseTypeSchema(expr hclsyntax.Expression) typeSchema {
 	switch e := expr.(type) {
 	case *hclsyntax.ScopeTraversalExpr:
+		// Primitive type keywords are valid only as bare traversals. Treat
+		// dotted or indexed forms as malformed so callers are not checked
+		// against a bogus concrete schema.
+		if len(e.Traversal) != 1 {
+			return typeSchema{Kind: schemaUnknown}
+		}
 		switch e.Traversal.RootName() {
 		case "string":
 			return typeSchema{Kind: schemaString}
@@ -252,9 +259,10 @@ func parseTypeSchema(expr hclsyntax.Expression) typeSchema {
 }
 
 // parseObjectSchema parses object({key=type, ...}) into a typeSchema.
-// Malformed object() forms (wrong arity or non-object literal) return Unknown
-// so compareObjectToSchema doesn't flag every key in the caller's literal as
-// E007 "unknown field" — the real bug is the module type constraint.
+// Malformed object() forms (wrong arity, non-object literal, or non-literal
+// attribute key) return Unknown so compareObjectToSchema doesn't flag every
+// key in the caller's literal as E007 "unknown field" — the real bug is the
+// module type constraint.
 func parseObjectSchema(e *hclsyntax.FunctionCallExpr) typeSchema {
 	if len(e.Args) != 1 {
 		return typeSchema{Kind: schemaUnknown}
@@ -267,7 +275,7 @@ func parseObjectSchema(e *hclsyntax.FunctionCallExpr) typeSchema {
 	for _, item := range obj.Items {
 		key := objectKeyName(item.KeyExpr)
 		if key == "" {
-			continue
+			return typeSchema{Kind: schemaUnknown}
 		}
 		s.Fields[key] = parseTypeSchema(item.ValueExpr)
 	}
@@ -291,7 +299,9 @@ func objectKeyName(expr hclsyntax.Expression) string {
 	case *hclsyntax.TemplateWrapExpr:
 		return objectKeyName(e.Wrapped)
 	case *hclsyntax.ScopeTraversalExpr:
-		return e.Traversal.RootName()
+		if len(e.Traversal) == 1 {
+			return e.Traversal.RootName()
+		}
 	case *hclsyntax.ObjectConsKeyExpr:
 		if e.ForceNonLiteral {
 			return ""
@@ -331,9 +341,9 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]localInfo, ch
 		// `../shared/<module>` are the standard monorepo pattern and must
 		// be checked. tfdry runs with the user's permissions on the user's
 		// own files, so a project-root boundary doesn't add a real security
-		// property — symlink rejection on file open (O_NOFOLLOW) is the
-		// actual defence (see the EvalSymlinks-based root containment
-		// check below).
+		// property — symlink rejection on each file open (O_NOFOLLOW) is
+		// the actual defence. EvalSymlinks here is used only to detect the
+		// self-reference case below.
 		moduleDir := filepath.Join(dir, filepath.FromSlash(source))
 		realModule, err1 := filepath.EvalSymlinks(moduleDir)
 		realDir, err2 := filepath.EvalSymlinks(dir)
@@ -458,10 +468,13 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 		})
 		return
 	}
-	// Both scalar: check specific scalar type (string vs number vs bool).
+	// Both scalar: apply Terraform/OpenTofu primitive conversion semantics.
+	// bool and number always convert to string. Strings convert to bool or
+	// number when their value has a valid representation; when the value is
+	// runtime-unknown, E006 cannot prove the conversion will fail and skips it.
 	if schema.isScalar() && exprType.IsScalar() {
 		schemaVarType := schemaKindToVarType(schema.Kind)
-		if schemaVarType != TypeUnknown && schemaVarType != exprType {
+		if schemaVarType != TypeUnknown && !scalarTypesCompatible(expr, exprType, schemaVarType, locals) {
 			*out = append(*out, Violation{
 				Code:     "E006",
 				Severity: "error",
@@ -483,6 +496,67 @@ func compareExprToSchema(file string, line int, context string, expr hclsyntax.E
 			Message:  context + ": declared " + schema.label() + ", got " + schemaKindLabel(exprKind),
 		})
 	}
+}
+
+// scalarTypesCompatible reports whether a caller-side primitive can satisfy a
+// declared primitive type under Terraform/OpenTofu's automatic conversions.
+// It returns true for runtime-unknown strings targeting bool/number because a
+// static checker cannot prove those conversions invalid; known constants are
+// converted with cty so invalid representations still produce E006.
+func scalarTypesCompatible(expr hclsyntax.Expression, source, target VarType, locals map[string]localInfo) bool {
+	if source == target {
+		return true
+	}
+	if target == TypeString && (source == TypeBool || source == TypeNumber) {
+		return true
+	}
+	if source != TypeString || (target != TypeBool && target != TypeNumber) {
+		return false
+	}
+
+	value, known := resolveConstantScalarValue(expr, locals, nil)
+	if !known {
+		return true
+	}
+	targetType := cty.Bool
+	if target == TypeNumber {
+		targetType = cty.Number
+	}
+	_, err := convert.Convert(value, targetType)
+	return err == nil
+}
+
+// resolveConstantScalarValue evaluates literal/template expressions and
+// follows local-only reference chains. Expressions depending on variables,
+// resources, functions without an evaluation context, or cycles are runtime
+// unknown for this check.
+func resolveConstantScalarValue(expr hclsyntax.Expression, locals map[string]localInfo, seen map[string]struct{}) (cty.Value, bool) {
+	expr = unwrapExpr(expr)
+	if ref, ok := expr.(*hclsyntax.ScopeTraversalExpr); ok &&
+		len(ref.Traversal) == 2 && ref.Traversal.RootName() == "local" {
+		attr, ok := ref.Traversal[1].(hcl.TraverseAttr)
+		if !ok {
+			return cty.NilVal, false
+		}
+		if seen == nil {
+			seen = make(map[string]struct{})
+		}
+		if _, cycle := seen[attr.Name]; cycle {
+			return cty.NilVal, false
+		}
+		seen[attr.Name] = struct{}{}
+		local, exists := locals[attr.Name]
+		if !exists || local.Expr == nil {
+			return cty.NilVal, false
+		}
+		return resolveConstantScalarValue(local.Expr, locals, seen)
+	}
+
+	value, diags := expr.Value(nil)
+	if diags.HasErrors() || !value.IsKnown() || value.IsNull() {
+		return cty.NilVal, false
+	}
+	return value, true
 }
 
 // schemaKindToVarType maps a scalar schemaKind to its VarType equivalent.

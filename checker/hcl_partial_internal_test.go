@@ -4,7 +4,11 @@
 package checker
 
 import (
+	"errors"
+	"os"
+	"slices"
 	"testing"
+	"time"
 )
 
 // TestCollectResults_PartialAndNilFiles pins the partial-collection
@@ -74,5 +78,93 @@ func TestCollectResults_EmptyInput(t *testing.T) {
 	empty := make([]parseResult, 4)
 	if files, vs := collectResults(empty); len(files) != 0 || len(vs) != 0 {
 		t.Errorf("collectResults(empty×4) = (%v, %v), want empty", files, vs)
+	}
+}
+
+type nativeConfigTestDirEntry struct {
+	name    string
+	mode    os.FileMode
+	infoErr error
+}
+
+func (e nativeConfigTestDirEntry) Name() string      { return e.name }
+func (e nativeConfigTestDirEntry) IsDir() bool       { return false }
+func (e nativeConfigTestDirEntry) Type() os.FileMode { return 0 }
+func (e nativeConfigTestDirEntry) Info() (os.FileInfo, error) {
+	if e.infoErr != nil {
+		return nil, e.infoErr
+	}
+	return nativeConfigTestFileInfo(e), nil
+}
+
+type nativeConfigTestFileInfo nativeConfigTestDirEntry
+
+func (i nativeConfigTestFileInfo) Name() string       { return i.name }
+func (i nativeConfigTestFileInfo) Size() int64        { return 0 }
+func (i nativeConfigTestFileInfo) Mode() os.FileMode  { return i.mode }
+func (i nativeConfigTestFileInfo) ModTime() time.Time { return time.Time{} }
+func (i nativeConfigTestFileInfo) IsDir() bool        { return false }
+func (i nativeConfigTestFileInfo) Sys() any           { return nil }
+
+func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
+	t.Parallel()
+	regularTerraform := nativeConfigTestDirEntry{name: "main.tf", mode: 0o644}
+	tests := []struct {
+		name      string
+		entries   []os.DirEntry
+		wantNames []string
+	}{
+		{
+			name: "regular tofu shadows terraform",
+			entries: []os.DirEntry{
+				regularTerraform,
+				nativeConfigTestDirEntry{name: "main.tofu", mode: 0o644},
+			},
+			wantNames: []string{"main.tofu"},
+		},
+		{
+			name: "symlink tofu is excluded and does not shadow terraform",
+			entries: []os.DirEntry{
+				regularTerraform,
+				nativeConfigTestDirEntry{name: "main.tofu", mode: os.ModeSymlink | 0o777},
+			},
+			wantNames: []string{"main.tf"},
+		},
+		{
+			name: "unreadable tofu metadata is excluded when terraform peer exists",
+			entries: []os.DirEntry{
+				regularTerraform,
+				nativeConfigTestDirEntry{name: "main.tofu", mode: 0o644, infoErr: errors.New("metadata unavailable")},
+			},
+			wantNames: []string{"main.tf"},
+		},
+		{
+			name: "standalone tofu with unreadable metadata remains a parse candidate",
+			entries: []os.DirEntry{
+				nativeConfigTestDirEntry{name: "main.tofu", mode: 0o644, infoErr: errors.New("metadata unavailable")},
+			},
+			wantNames: []string{"main.tofu"},
+		},
+		{
+			name: "standalone tofu symlink is excluded",
+			entries: []os.DirEntry{
+				nativeConfigTestDirEntry{name: "main.tofu", mode: os.ModeSymlink | 0o777},
+			},
+			wantNames: nil,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			selected := nativeConfigEntries(tc.entries)
+			got := make([]string, len(selected))
+			for i, entry := range selected {
+				got[i] = entry.Name()
+			}
+			if !slices.Equal(got, tc.wantNames) {
+				t.Fatalf("nativeConfigEntries() = %v, want %v", got, tc.wantNames)
+			}
+		})
 	}
 }

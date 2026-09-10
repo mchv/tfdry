@@ -486,18 +486,108 @@ output "o" { value = "prefix-${local.env}" }
 	}
 }
 
-// Non-.tf files in the directory must be ignored.
-func TestParseDir_IgnoresNonTfFiles(t *testing.T) {
+func TestParseDir_OpenTofuFileLinted(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tofu": `output "x" { value = local.missing }`,
+	})
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	if len(files) != 1 || files[0].Name != "main.tofu" {
+		t.Fatalf("parsed files = %+v, want only main.tofu", files)
+	}
+	vs := mustRun(context.Background(), files, nil, dir)
+	if !hasCode(vs, "E003") {
+		t.Fatalf("expected E003 from main.tofu, got %v", codes(vs))
+	}
+}
+
+func TestParseDir_OpenTofuTakesPrecedenceOverSameBasenameTerraform(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":   `locals { broken = `,
+		"main.tofu": "locals {\n  selected = \"tofu\"\n}\n",
+	})
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("same-basename main.tf must be ignored, got %+v", parseViolations)
+	}
+	if len(files) != 1 || files[0].Name != "main.tofu" {
+		t.Fatalf("parsed files = %+v, want only main.tofu", files)
+	}
+}
+
+func TestParseDirForFormat_ParsesEveryNativeFileIndependently(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":           "locals {\n  terraform = true\n}\n",
+		"main.tofu":         "locals {\n  opentofu = true\n}\n",
+		"ignored.tf.json":   `{"locals":{"ignored":true}}`,
+		"ignored.tofu.json": `{"locals":{"ignored":true}}`,
+		"nested/child.tf":   "locals {\n  nested = true\n}\n",
+	})
+
+	files, parseViolations, err := checker.ParseDirForFormat(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	gotNames := make([]string, len(files))
+	for i, file := range files {
+		gotNames[i] = file.Name
+	}
+	wantNames := []string{"main.tf", "main.tofu"}
+	if !slices.Equal(gotNames, wantNames) {
+		t.Fatalf("parsed files = %v, want %v", gotNames, wantNames)
+	}
+}
+
+func TestParseDir_MergesDistinctTerraformAndOpenTofuFiles(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"locals.tofu": "locals {\n  shared = \"value\"\n}\n",
+		"output.tf":   "output \"shared\" {\n  value = local.shared\n}\n",
+	})
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	if len(files) != 2 {
+		t.Fatalf("parsed %d files, want both distinct .tf and .tofu files", len(files))
+	}
+	vs := mustRun(context.Background(), files, nil, dir)
+	if hasCode(vs, "E003") || hasCode(vs, "W001") {
+		t.Fatalf("cross-extension local must resolve and count as used, got %v", codes(vs))
+	}
+}
+
+// Non-native-HCL files in the directory must be ignored. JSON syntax remains
+// unsupported consistently for both Terraform and OpenTofu file extensions.
+func TestParseDir_IgnoresNonNativeHCLFiles(t *testing.T) {
 	t.Parallel()
 	vs := run(t, map[string]string{
-		"main.tf":   `locals { x = "y" }`,
-		"README.md": `# not terraform`,
-		"vars.json": `{"key": "value"}`,
+		"main.tf":           `locals { x = "y" }`,
+		"README.md":         `# not terraform`,
+		"vars.json":         `{"key": "value"}`,
+		"ignored.tf.json":   `this is not native HCL`,
+		"ignored.tofu.json": `this is not native HCL`,
 	})
-	// No violations expected — non-.tf files should be silently skipped.
 	for _, v := range vs {
 		if v.Code == "E001" {
-			t.Fatalf("E001 fired on non-.tf file: %+v", v)
+			t.Fatalf("E001 fired on non-native-HCL file: %+v", v)
 		}
 	}
 }
@@ -651,24 +741,41 @@ func TestParseDir_DotDotSegment_Allowed(t *testing.T) {
 	}
 }
 
-// ParseDir rejects files over 10MB.
-func TestParseDir_FileTooLarge_EmitsE000(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "big.tf")
-	// Write 10MB + 1 byte.
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
+// ParseDir accepts files exactly at the 10 MiB limit and emits E000 for
+// larger files, consistently across Terraform and OpenTofu extensions.
+func TestParseDir_FileSizeBoundary(t *testing.T) {
+	const limit = 10 * 1024 * 1024
+	tests := []struct {
+		name     string
+		ext      string
+		size     int64
+		wantE000 bool
+	}{
+		{name: "terraform exact limit", ext: ".tf", size: limit},
+		{name: "terraform over limit", ext: ".tf", size: limit + 1, wantE000: true},
+		{name: "opentofu exact limit", ext: ".tofu", size: limit},
+		{name: "opentofu over limit", ext: ".tofu", size: limit + 1, wantE000: true},
 	}
-	if err := f.Truncate(10*1024*1024 + 1); err != nil {
-		f.Close()
-		t.Fatal(err)
-	}
-	f.Close()
-	_, vs, _ := checker.ParseDir(context.Background(), dir)
-	if !hasCode(vs, "E000") {
-		t.Fatalf("expected E000 for oversized file, got %v", codes(vs))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "big"+tc.ext)
+			f, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Truncate(tc.size); err != nil {
+				_ = f.Close()
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			_, vs, _ := checker.ParseDir(context.Background(), dir)
+			if got := hasCode(vs, "E000"); got != tc.wantE000 {
+				t.Fatalf("E000 presence = %v, want %v; violations=%v", got, tc.wantE000, codes(vs))
+			}
+		})
 	}
 }
 
@@ -921,6 +1028,8 @@ func TestE007_MalformedObjectType_NoFalsePositive(t *testing.T) {
 		{"object_no_args", "object()"},
 		{"object_too_many", "object({a = string}, {b = number})"},
 		{"object_non_object_arg", `object("not_an_object_literal")`},
+		{"object_dotted_key", "object({foo.bar = string})"},
+		{"object_indexed_key", "object({foo[0] = string})"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1052,14 +1161,14 @@ module "m" {
 		map[string]string{
 			"variables.tf": `
 variable "v" {
-  type = string
+  type = bool
 }
 `,
 		},
 	)
 	vs := runDir(t, dir)
 	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 (number transitively passed as string), got %v", codes(vs))
+		t.Fatalf("expected E006 (number transitively passed as bool), got %v", codes(vs))
 	}
 }
 
@@ -1113,17 +1222,17 @@ func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
 			"main.tf": `module "m" {
   source = "./modules/m"
   names = [
-    "alpha",
-    "beta",
+    true,
+    false,
     42,
-    "delta",
+    true,
   ]
 }
 `,
 		},
 		"modules/m",
 		map[string]string{
-			"variables.tf": `variable "names" { type = list(string) }`,
+			"variables.tf": `variable "names" { type = list(bool) }`,
 		},
 	)
 	vs := runDir(t, dir)
@@ -1137,9 +1246,10 @@ func TestE006_ListElementMismatch_ReportsElementLine(t *testing.T) {
 	if got == nil {
 		t.Fatalf("expected E006 for list element mismatch, got %v", codes(vs))
 	}
-	// The `42` literal is on line 6 of main.tf (1-indexed: blank/module/source/names/alpha/beta/42).
-	// The attribute `names = [...]` starts on line 4. Anything reporting
-	// line 4 is the bug; line 6 is the fix.
+	// The `42` literal is on line 6 of main.tf
+	// (1-indexed: module/source/names/true/false/42). The attribute
+	// `names = [...]` starts on line 3. Anything reporting line 3 is the bug;
+	// line 6 is the fix.
 	if got.Line != 6 {
 		t.Errorf("expected violation Line=6 (the `42` literal), got %d — full violation: %+v",
 			got.Line, *got)
@@ -1646,8 +1756,8 @@ func TestFixFormat_SkipsFormattedFiles(t *testing.T) {
 	}
 }
 
-// E006: number literal passed where string expected.
-func TestE006_NumberPassedWhereStringExpected(t *testing.T) {
+// E006: number literals automatically convert to strings.
+func TestE006_NumberPassedWhereStringExpected_NoViolation(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -1665,8 +1775,8 @@ module "m" {
 		},
 	)
 	vs := runDir(t, dir)
-	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 for number passed where string expected, got %v", codes(vs))
+	if hasCode(vs, "E006") {
+		t.Fatalf("number passed where string expected is convertible, got %v", codes(vs))
 	}
 }
 
@@ -1696,8 +1806,8 @@ module "m" {
 
 // ── Recursive element type checking for list/set/map ─────────────────────
 
-// list(string) with a non-string element must fire E006.
-func TestE006_ListOfString_WithNumberElement(t *testing.T) {
+// list(string) accepts number elements through recursive primitive conversion.
+func TestE006_ListOfString_WithNumberElement_NoViolation(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -1715,13 +1825,13 @@ module "m" {
 		},
 	)
 	vs := runDir(t, dir)
-	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 for number element in list(string), got %v", codes(vs))
+	if hasCode(vs, "E006") {
+		t.Fatalf("number element in list(string) is convertible, got %v", codes(vs))
 	}
 }
 
-// set(string) with a non-string element must fire E006.
-func TestE006_SetOfString_WithBoolElement(t *testing.T) {
+// set(string) accepts bool elements through recursive primitive conversion.
+func TestE006_SetOfString_WithBoolElement_NoViolation(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -1739,8 +1849,8 @@ module "m" {
 		},
 	)
 	vs := runDir(t, dir)
-	if !hasCode(vs, "E006") {
-		t.Fatalf("expected E006 for bool element in set(string), got %v", codes(vs))
+	if hasCode(vs, "E006") {
+		t.Fatalf("bool element in set(string) is convertible, got %v", codes(vs))
 	}
 }
 
@@ -2247,12 +2357,11 @@ variable "config" {
 	}
 }
 
-// T9: parenthesised object keys are dynamic — schema field is silently skipped.
-// This exercises the ObjectConsKeyExpr ForceNonLiteral branch in objectKeyName.
-// Without this, a caller's matching plain key would treat the dynamic field as
-// "missing from schema" and produce E007. We assert that behaviour explicitly so
-// any change in semantics is caught.
-func TestE007_ParenthesisedSchemaKey_TreatedAsDynamic(t *testing.T) {
+// Parenthesised object keys are dynamic and therefore invalid in a static type
+// constraint. The module declaration is broken, so its object schema must be
+// treated as Unknown rather than as a concrete object with an empty field map;
+// otherwise valid caller keys produce misleading E007 diagnostics.
+func TestE007_ParenthesisedSchemaKey_NoFalsePositive(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -2279,8 +2388,122 @@ variable "config" {
 		},
 	)
 	vs := runDir(t, dir)
-	// The dynamic key is skipped from the schema, so 'name' is unknown → E007.
-	if !hasCode(vs, "E007") {
-		t.Fatalf("expected E007 because parenthesised schema key is dynamic and excluded from field map, got %v", codes(vs))
+	if hasCode(vs, "E007") {
+		t.Fatalf("E007 false positive on parenthesised schema key: %v", codes(vs))
+	}
+}
+
+// TestE006_OpenTofuPrimitiveConversions_NoViolation covers the automatic
+// primitive conversions defined by Terraform/OpenTofu type constraints.
+// These are valid module calls, so strict scalar enum equality must not emit
+// E006. The local bool case reproduces the real-world Motorway findings.
+func TestE006_OpenTofuPrimitiveConversions_NoViolation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		locals     string
+		expression string
+		targetType string
+	}{
+		{
+			name:       "local bool to string",
+			locals:     `locals { value = true }`,
+			expression: "local.value",
+			targetType: "string",
+		},
+		{
+			name:       "number to string",
+			expression: "42",
+			targetType: "string",
+		},
+		{
+			name:       "valid string to bool",
+			expression: `"true"`,
+			targetType: "bool",
+		},
+		{
+			name:       "valid string to number",
+			expression: `"42.5"`,
+			targetType: "number",
+		},
+		{
+			name:       "runtime string potentially convertible to number",
+			locals:     `locals { value = var.choose_first ? "1" : "2" }`,
+			expression: "local.value",
+			targetType: "number",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeModuleFiles(
+				t,
+				map[string]string{
+					"main.tf": tc.locals + `
+module "m" {
+  source = "./modules/m"
+  value  = ` + tc.expression + `
+}
+`,
+				},
+				"modules/m",
+				map[string]string{
+					"variables.tf": `variable "value" { type = ` + tc.targetType + ` }`,
+				},
+			)
+			vs := runDir(t, dir)
+			if hasCode(vs, "E006") {
+				t.Fatalf("%s conversion must not emit E006, got %v", tc.name, codes(vs))
+			}
+		})
+	}
+}
+
+// TestE006_ImpossibleOrInvalidPrimitiveConversions_StillViolate ensures the
+// conversion-aware logic does not hide scalar pairs OpenTofu cannot convert,
+// or literal strings whose value proves the requested conversion will fail.
+func TestE006_ImpossibleOrInvalidPrimitiveConversions_StillViolate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		locals     string
+		expression string
+		targetType string
+	}{
+		{name: "number to bool", expression: "1", targetType: "bool"},
+		{name: "bool to number", expression: "true", targetType: "number"},
+		{name: "invalid string to bool", expression: `"yes"`, targetType: "bool"},
+		{name: "invalid string to number", expression: `"forty-two"`, targetType: "number"},
+		{
+			name:       "invalid local string to number",
+			locals:     `locals { value = "forty-two" }`,
+			expression: "local.value",
+			targetType: "number",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeModuleFiles(
+				t,
+				map[string]string{
+					"main.tf": tc.locals + `
+module "m" {
+  source = "./modules/m"
+  value  = ` + tc.expression + `
+}`,
+				},
+				"modules/m",
+				map[string]string{
+					"variables.tf": `variable "value" { type = ` + tc.targetType + ` }`,
+				},
+			)
+			vs := runDir(t, dir)
+			if !hasCode(vs, "E006") {
+				t.Fatalf("invalid %s conversion must emit E006, got %v", tc.name, codes(vs))
+			}
+		})
 	}
 }

@@ -144,6 +144,31 @@ resource "aws_security_group" "x" {
 	}
 }
 
+// TestW009_DynamicBlockNonContentSubBlockDoesNotInheritIterator verifies the
+// defensive path for malformed dynamic blocks. Only content{} introduces the
+// dynamic iterator; an unexpected sibling sub-block must retain the outer
+// scope rather than silently accepting the iterator reference.
+func TestW009_DynamicBlockNonContentSubBlockDoesNotInheritIterator(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_security_group" "x" {
+  dynamic "ingress" {
+    for_each = var.cidrs
+    metadata {
+      value = ingress.value
+    }
+  }
+}
+`,
+	})
+	if !hasCode(vs, "W009") {
+		t.Fatalf("expected W009 when a non-content dynamic sub-block uses the iterator, got: %v", codes(vs))
+	}
+	if hasCode(vs, "E009") {
+		t.Fatalf("dynamic iterator name is unfamiliar rather than a known typo; expected W009 only, got: %v", codes(vs))
+	}
+}
+
 // TestE009_DynamicBlockNested_BothIteratorsInScope verifies that nested
 // dynamic blocks stack their iterators — the inner content{} sees both
 // the inner and outer iterator names.
@@ -339,6 +364,67 @@ locals {
 	assertNoScopeRootDiag(t, vs, "nested for-expression iterators")
 }
 
+// ── OpenTofu language edition keyword ──────────────────────────────────────
+
+func TestE009_OpenTofuEditionKeyword_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"versions.tf": `
+language {
+  compatible_with {
+    opentofu = ">= 1.12"
+  }
+  edition = tofu2024
+}
+`,
+	})
+	assertNoScopeRootDiag(t, vs, "OpenTofu tofu2024 edition keyword")
+
+	invalidContexts := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "bare outside declaration",
+			src:  `output "x" { value = tofu2024 }`,
+		},
+		{
+			name: "dotted outside declaration",
+			src:  `output "x" { value = tofu2024.value }`,
+		},
+		{
+			name: "labelled language block",
+			src:  `language "label" { edition = tofu2024 }`,
+		},
+		{
+			name: "nested language block",
+			src: `wrapper {
+  language {
+    edition = tofu2024
+  }
+}`,
+		},
+		{
+			name: "different language attribute",
+			src:  `language { custom = tofu2024 }`,
+		},
+		{
+			name: "dotted edition value",
+			src:  `language { edition = tofu2024.value }`,
+		},
+	}
+	for _, tc := range invalidContexts {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := run(t, map[string]string{"main.tf": tc.src})
+			if !hasCode(got, "W009") {
+				t.Fatalf("tofu2024 outside exact language.edition declaration must remain scope-checked, got %v", codes(got))
+			}
+		})
+	}
+}
+
 // ── ephemeral root (Terraform 1.10+) ────────────────────────────────────────
 
 // TestE009_EphemeralRoot_NoFalsePositive verifies that the
@@ -458,4 +544,378 @@ resource "aws_s3_bucket" "b" {
 		}
 	}
 	t.Fatalf("expected at least one W009 violation, got codes: %v", codes(vs))
+}
+
+// TestE009_ContextualReferences_NoFalsePositive covers Terraform/OpenTofu
+// expression positions whose bare traversals are declarations, relative
+// paths, provider references, or keywords rather than ordinary scope-root
+// references. Real-world validation found that treating these like normal
+// expressions produced thousands of W009 false positives.
+func TestE009_ContextualReferences_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "variable type constraints",
+			src: `variable "settings" {
+  type = object({
+    name     = string
+    enabled  = bool
+    attempts = number
+    payload  = any
+  })
+}`,
+		},
+		{
+			name: "module provider mapping",
+			src: `module "child" {
+  source = "./child"
+  providers = {
+    aws = aws.secondary
+  }
+}`,
+		},
+		{
+			name: "provider meta argument",
+			src: `resource "aws_s3_bucket" "example" {
+  provider = aws.secondary
+}`,
+		},
+		{
+			name: "lifecycle ignore changes",
+			src: `resource "aws_s3_bucket" "example" {
+  lifecycle {
+    ignore_changes = [tags, bucket]
+  }
+}`,
+		},
+		{
+			name: "required provider aliases",
+			src: `terraform {
+  required_providers {
+    aws = {
+      source                = "hashicorp/aws"
+      configuration_aliases = [aws.secondary]
+    }
+  }
+}`,
+		},
+		{
+			name: "provisioner on failure keyword",
+			src: `resource "null_resource" "example" {
+  provisioner "local-exec" {
+    command    = "exit 1"
+    on_failure = continue
+  }
+}`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tf": tc.src})
+			assertNoScopeRootDiag(t, vs, tc.name)
+		})
+	}
+}
+
+// TestE009_ContextualReferences_ExemptionsRemainNarrow ensures contextual
+// handling does not globally add declaration keywords to the scope-root
+// allow-list or suppress clear typos in otherwise-special attributes.
+func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		src      string
+		wantCode string
+	}{
+		{
+			name:     "invalid variable type traversal",
+			src:      `variable "x" { type = vars.bad }`,
+			wantCode: "E009",
+		},
+		{
+			name:     "dotted string type keyword",
+			src:      `variable "x" { type = string.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "dotted number type keyword",
+			src:      `variable "x" { type = number.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "dotted bool type keyword",
+			src:      `variable "x" { type = bool.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "dotted any type keyword",
+			src:      `variable "x" { type = any.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "indexed primitive type keyword",
+			src:      `variable "x" { type = string[0] }`,
+			wantCode: "W009",
+		},
+		{
+			name: "invalid provisioner keyword traversal",
+			src: `resource "null_resource" "example" {
+  provisioner "local-exec" {
+    command    = "true"
+    on_failure = vars.bad
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid state encryption method reference",
+			src: `terraform {
+  encryption {
+    state {
+      method = vars.bad
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid plan encryption method reference",
+			src: `terraform {
+  encryption {
+    plan {
+      method = vars.bad
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid state encryption fallback reference",
+			src: `terraform {
+  encryption {
+    state {
+      fallback {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid plan encryption fallback reference",
+			src: `terraform {
+  encryption {
+    plan {
+      fallback {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid remote-state encryption reference",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      default {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid named remote-state encryption reference",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      remote_state_data_source "archive" {
+        method = vars.bad
+      }
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "state encryption lookalike without terraform",
+			src: `encryption {
+  state {
+    method = method.aes_gcm.main
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "fallback lookalike without terraform",
+			src: `encryption {
+  state {
+    fallback {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "remote-state lookalike without terraform",
+			src: `encryption {
+  remote_state_data_sources {
+    default {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "nested terraform lookalike",
+			src: `resource "example" "bad" {
+  terraform {
+    encryption {
+      state {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled terraform lookalike",
+			src: `terraform "bad" {
+  encryption {
+    state {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled encryption lookalike",
+			src: `terraform {
+  encryption "bad" {
+    state {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled state lookalike",
+			src: `terraform {
+  encryption {
+    state "bad" {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled plan lookalike",
+			src: `terraform {
+  encryption {
+    plan "bad" {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled fallback lookalike",
+			src: `terraform {
+  encryption {
+    state {
+      fallback "bad" {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled remote-state collection lookalike",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources "bad" {
+      default {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled remote-state default lookalike",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      default "bad" {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "unlabelled named remote-state lookalike",
+			src: `terraform {
+  encryption {
+    remote_state_data_sources {
+      remote_state_data_source {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "indexed method traversal",
+			src: `terraform {
+  encryption {
+    state {
+      method = method[0].main
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name:     "method outside state encryption",
+			src:      `output "x" { value = method.aes_gcm.main }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "continue outside provisioner",
+			src:      `output "x" { value = continue }`,
+			wantCode: "W009",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tf": tc.src})
+			if !hasCode(vs, tc.wantCode) {
+				t.Fatalf("expected %s, got %v", tc.wantCode, codes(vs))
+			}
+		})
+	}
 }
