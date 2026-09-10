@@ -1028,6 +1028,8 @@ func TestE007_MalformedObjectType_NoFalsePositive(t *testing.T) {
 		{"object_no_args", "object()"},
 		{"object_too_many", "object({a = string}, {b = number})"},
 		{"object_non_object_arg", `object("not_an_object_literal")`},
+		{"object_dotted_key", "object({foo.bar = string})"},
+		{"object_indexed_key", "object({foo[0] = string})"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2355,12 +2357,11 @@ variable "config" {
 	}
 }
 
-// T9: parenthesised object keys are dynamic — schema field is silently skipped.
-// This exercises the ObjectConsKeyExpr ForceNonLiteral branch in objectKeyName.
-// Without this, a caller's matching plain key would treat the dynamic field as
-// "missing from schema" and produce E007. We assert that behaviour explicitly so
-// any change in semantics is caught.
-func TestE007_ParenthesisedSchemaKey_TreatedAsDynamic(t *testing.T) {
+// Parenthesised object keys are dynamic and therefore invalid in a static type
+// constraint. The module declaration is broken, so its object schema must be
+// treated as Unknown rather than as a concrete object with an empty field map;
+// otherwise valid caller keys produce misleading E007 diagnostics.
+func TestE007_ParenthesisedSchemaKey_NoFalsePositive(t *testing.T) {
 	t.Parallel()
 	dir := writeModuleFiles(
 		t,
@@ -2387,9 +2388,8 @@ variable "config" {
 		},
 	)
 	vs := runDir(t, dir)
-	// The dynamic key is skipped from the schema, so 'name' is unknown → E007.
-	if !hasCode(vs, "E007") {
-		t.Fatalf("expected E007 because parenthesised schema key is dynamic and excluded from field map, got %v", codes(vs))
+	if hasCode(vs, "E007") {
+		t.Fatalf("E007 false positive on parenthesised schema key: %v", codes(vs))
 	}
 }
 

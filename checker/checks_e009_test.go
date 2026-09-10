@@ -638,6 +638,31 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
 			wantCode: "E009",
 		},
 		{
+			name:     "dotted string type keyword",
+			src:      `variable "x" { type = string.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "dotted number type keyword",
+			src:      `variable "x" { type = number.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "dotted bool type keyword",
+			src:      `variable "x" { type = bool.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "dotted any type keyword",
+			src:      `variable "x" { type = any.foo }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "indexed primitive type keyword",
+			src:      `variable "x" { type = string[0] }`,
+			wantCode: "W009",
+		},
+		{
 			name: "invalid provisioner keyword traversal",
 			src: `resource "null_resource" "example" {
   provisioner "local-exec" {

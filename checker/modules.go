@@ -169,6 +169,12 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSch
 func parseTypeSchema(expr hclsyntax.Expression) typeSchema {
 	switch e := expr.(type) {
 	case *hclsyntax.ScopeTraversalExpr:
+		// Primitive type keywords are valid only as bare traversals. Treat
+		// dotted or indexed forms as malformed so callers are not checked
+		// against a bogus concrete schema.
+		if len(e.Traversal) != 1 {
+			return typeSchema{Kind: schemaUnknown}
+		}
 		switch e.Traversal.RootName() {
 		case "string":
 			return typeSchema{Kind: schemaString}
@@ -253,9 +259,10 @@ func parseTypeSchema(expr hclsyntax.Expression) typeSchema {
 }
 
 // parseObjectSchema parses object({key=type, ...}) into a typeSchema.
-// Malformed object() forms (wrong arity or non-object literal) return Unknown
-// so compareObjectToSchema doesn't flag every key in the caller's literal as
-// E007 "unknown field" — the real bug is the module type constraint.
+// Malformed object() forms (wrong arity, non-object literal, or non-literal
+// attribute key) return Unknown so compareObjectToSchema doesn't flag every
+// key in the caller's literal as E007 "unknown field" — the real bug is the
+// module type constraint.
 func parseObjectSchema(e *hclsyntax.FunctionCallExpr) typeSchema {
 	if len(e.Args) != 1 {
 		return typeSchema{Kind: schemaUnknown}
@@ -268,7 +275,7 @@ func parseObjectSchema(e *hclsyntax.FunctionCallExpr) typeSchema {
 	for _, item := range obj.Items {
 		key := objectKeyName(item.KeyExpr)
 		if key == "" {
-			continue
+			return typeSchema{Kind: schemaUnknown}
 		}
 		s.Fields[key] = parseTypeSchema(item.ValueExpr)
 	}
@@ -292,7 +299,9 @@ func objectKeyName(expr hclsyntax.Expression) string {
 	case *hclsyntax.TemplateWrapExpr:
 		return objectKeyName(e.Wrapped)
 	case *hclsyntax.ScopeTraversalExpr:
-		return e.Traversal.RootName()
+		if len(e.Traversal) == 1 {
+			return e.Traversal.RootName()
+		}
 	case *hclsyntax.ObjectConsKeyExpr:
 		if e.ForceNonLiteral {
 			return ""
