@@ -7,20 +7,21 @@ package checker
 
 // oNoFollow on Windows is 0 (no-op).
 //
-// Windows does not honour POSIX O_NOFOLLOW. Genuine symlink protection on
-// Windows requires CreateFile with FILE_FLAG_OPEN_REPARSE_POINT and is
-// outside the scope of the current build. Without it, the symlink check
-// here degrades to "best effort": symlinks pointing at regular files will
-// be silently followed, but the subsequent fi.Mode().IsRegular() check
-// still rejects symlinks pointing at directories or devices.
-//
-// See TODO.md "Distribution" / "Windows support" for the proper
-// implementation, which must land alongside Windows CI coverage.
+// Windows does not honour POSIX O_NOFOLLOW. Read-only configuration loading
+// intentionally follows symlinks to regular files on every platform. Formatting
+// writes reject links with Lstat, but without CreateFile and
+// FILE_FLAG_OPEN_REPARSE_POINT the protection against a concurrent link swap
+// remains best-effort on Windows.
 const oNoFollow = 0
 
 // isSymlinkRejection on Windows always returns false: without O_NOFOLLOW,
-// the open never produces a "would have followed a symlink" error. Symlink
-// rejection on Windows currently relies on the post-open IsRegular check.
+// OpenFile cannot provide the Unix atomic rejection signal. Formatting writes
+// rely on surrounding Lstat checks instead.
 func isSymlinkRejection(err error) bool {
 	return false
 }
+
+// Windows has no os.OpenFile flag equivalent needed here. A pre-open Stat and
+// post-open file check reject non-regular targets; concurrent swaps remain a
+// best-effort limitation on this platform.
+const oReadNonblock = 0

@@ -40,8 +40,8 @@ including same-basename pairs, matching `tofu fmt`. JSON configurations
 | E001 | error    | Invalid HCL syntax |
 | E002 | error    | Duplicate local definition |
 | E003 | error    | Reference to undefined local |
-| E004 | error    | Non-scalar local used in string interpolation |
-| E005 | error    | `count` and `for_each` used together on same resource/data/module block |
+| E004 | error    | Non-scalar local embedded in a string-producing template; interpolation-only values preserve their type |
+| E005 | error    | `count` and `for_each` used together on same resource/data/module/action block |
 | E006 | error    | Local module input type mismatch |
 | E007 | error    | Unknown local module input key |
 | E008 | error    | File not formatted (`terraform fmt` / `tofu fmt` compatible) |
@@ -120,7 +120,7 @@ tfdry describe --json
 
 - tfdry does not execute Terraform or OpenTofu code. It parses native `.tf` and `.tofu` files with hclsyntax/hclwrite — no validation, plan/apply, or module install.
 - tfdry makes no network requests.
-- Symlinked path arguments to `tfdry fmt` are rejected. On Unix-like systems, symlinked `.tf` / `.tofu` files inside a scanned directory are also skipped via `O_NOFOLLOW`. **Windows is best-effort**: without `O_NOFOLLOW` the symlink-to-regular-file case is silently followed (symlinks pointing to directories or devices are still rejected by a post-open `IsRegular` check). Both behaviours aim to prevent surprising file rewrites through symlinks.
+- Read-only directory scans and `tfdry fmt -check` follow symlinks whose targets are regular `.tf` / `.tofu` files, matching Terraform/OpenTofu loading and formatting checks. Broken links and non-regular targets surface tool errors. Write operations (`--fix` and `tfdry fmt` without `-check`) refuse to replace symlink paths; Unix additionally enforces `O_NOFOLLOW` on the write-path open, while Windows link-swap protection remains best-effort.
 - Output fields (filenames, local names, error messages) are sanitized for ANSI escape sequences and Unicode bidi-override / isolate-control characters before writing to stdout/JSON, mitigating terminal-injection attacks via crafted `.tf` / `.tofu` content.
 - Directory-based lint and format reads are capped at 10 MiB per `.tf` / `.tofu` file; oversized files are skipped with an `E000` violation. Explicit single-file `tfdry fmt <path>` preserves its existing unrestricted read behaviour.
 - tfdry does **not** sandbox path arguments. Relative paths (`./infra`, `../shared`), absolute paths, and module `source = "../foo"` references are accepted as given (matching Terraform/OpenTofu behaviour). Run tfdry inside the directory or container scope you intend to validate.

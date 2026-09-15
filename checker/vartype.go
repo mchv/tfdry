@@ -7,7 +7,7 @@ package checker
 //
 // VarType represents the inferred type of a *caller-side* expression (local
 // values, attribute values). It is used by:
-//   - E004 (non-scalar in string interpolation) — via [VarType.IsScalar]
+//   - E004 (non-scalar embedded in a string-producing template) — via [VarType.IsScalar]
 //     in checks.go:checkInterpolationScalar
 //   - E006 (module input type mismatch) — via resolveExprType in
 //     modules.go, which feeds compareExprToSchema
@@ -64,7 +64,7 @@ func (t VarType) Label() string {
 	case TypeBool:
 		return "bool"
 	case TypeObject:
-		return "object"
+		return "non-scalar value"
 	case TypeUnknown:
 		return "unknown"
 	default:

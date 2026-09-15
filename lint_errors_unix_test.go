@@ -247,3 +247,25 @@ func TestRun_LintNonRecursive_DirLevelE000_PreservesDirectoryPath(t *testing.T) 
 		t.Errorf("no E000 violation in output; got: %+v", got.Violations)
 	}
 }
+
+func TestRun_BrokenSymlinkSuppressesCrossFileSemanticChecks(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "missing.tf"), filepath.Join(dir, "locals.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "output.tf"),
+		[]byte(`output "x" { value = local.shared }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runCLI(dir)
+	if code != 2 {
+		t.Fatalf("broken-link run exit = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "[E000]") {
+		t.Fatalf("broken-link output missing E000: %q", stdout)
+	}
+	if strings.Contains(stdout, "[E003]") {
+		t.Fatalf("partial root module produced false E003: %q", stdout)
+	}
+}

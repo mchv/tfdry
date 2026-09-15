@@ -8,7 +8,9 @@ package checker
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // Tests in this file rely on POSIX-specific behaviour — `os.Chmod` with
@@ -19,20 +21,14 @@ import (
 // relying on a runtime `t.Skip` (which still compiles the file and
 // pulls in unused imports on Windows builds).
 
-// TestParseModuleVarSchemas_UnreadableFile_SkippedSilently — see
-// parseModuleVarSchemas's per-entry continue-on-OpenFile-error branch
-// (modules.go:107). A file that's syntactically valid but cannot be
-// opened (mode 0o000) must be skipped silently, and a well-formed
-// neighbour in the same directory must still be parsed.
-func TestParseModuleVarSchemas_UnreadableFile_SkippedSilently(t *testing.T) {
+// An unreadable selected module file makes the aggregate schema incomplete,
+// so callers must receive nil and skip E006/E007 rather than infer absence.
+func TestParseModuleVarSchemas_UnreadableFile_InvalidatesSchema(t *testing.T) {
 	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses file mode permissions; cannot exercise unreadable path")
 	}
 	dir := t.TempDir()
-	// One good file with a valid schema, one unreadable file. The
-	// good file must still be parsed even though the bad file is
-	// silently skipped.
 	if err := os.WriteFile(filepath.Join(dir, "good.tf"),
 		[]byte(`variable "good" { type = string }`), 0o644); err != nil {
 		t.Fatal(err)
@@ -44,20 +40,36 @@ func TestParseModuleVarSchemas_UnreadableFile_SkippedSilently(t *testing.T) {
 	if err := os.Chmod(badPath, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(badPath, 0o644) }) // let t.TempDir clean up
+	t.Cleanup(func() { _ = os.Chmod(badPath, 0o644) })
 
-	got := parseModuleVarSchemas(dir, nil)
-	if _, ok := got["good"]; !ok {
-		t.Errorf("good.tf must still be parsed: got %v", got)
-	}
-	if _, ok := got["bad"]; ok {
-		t.Errorf("bad.tf (unreadable) must NOT appear in schemas: got %v", got)
+	if got := parseModuleVarSchemas(dir, nil); got != nil {
+		t.Fatalf("schema with unreadable file = %v, want nil", got)
 	}
 }
 
-// A skipped .tofu symlink must not shadow a regular same-basename .tf file
-// when loading relative-module variable schemas.
-func TestParseModuleVarSchemas_OpenTofuSymlinkDoesNotShadowTerraform(t *testing.T) {
+// Symlinked module schema files that resolve to regular files are loaded.
+func TestParseModuleVarSchemas_SymlinkedTerraformLoaded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "variables.tf")
+	if err := os.WriteFile(target,
+		[]byte(`variable "from_tf" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "variables.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	got := parseModuleVarSchemas(dir, nil)
+	if got["from_tf"].Kind != schemaString {
+		t.Fatalf("symlinked variables.tf was not loaded: %v", got)
+	}
+}
+
+// A symlinked .tofu schema file remains authoritative over a regular
+// same-basename .tf peer when loading relative-module variables.
+func TestParseModuleVarSchemas_OpenTofuSymlinkShadowsTerraform(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "variables.tf"),
@@ -75,10 +87,49 @@ func TestParseModuleVarSchemas_OpenTofuSymlinkDoesNotShadowTerraform(t *testing.
 	}
 
 	got := parseModuleVarSchemas(dir, nil)
-	if got["from_tf"].Kind != schemaString {
-		t.Fatalf("regular variables.tf was hidden by skipped symlink: %v", got)
+	if got["from_tofu"].Kind != schemaNumber {
+		t.Fatalf("symlinked variables.tofu was not loaded: %v", got)
 	}
-	if _, ok := got["from_tofu"]; ok {
-		t.Fatalf("symlinked variables.tofu must not contribute a schema: %v", got)
+	if _, ok := got["from_tf"]; ok {
+		t.Fatalf("shadowed variables.tf contributed a schema: %v", got)
+	}
+}
+
+func TestParseModuleVarSchemas_SymlinkToFIFOInvalidatesWithoutBlocking(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	targetDir := t.TempDir()
+	fifo := filepath.Join(targetDir, "variables.tf")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("cannot create FIFO:", err)
+	}
+	if err := os.Symlink(fifo, filepath.Join(dir, "variables.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	done := make(chan map[string]typeSchema, 1)
+	go func() { done <- parseModuleVarSchemas(dir, nil) }()
+	select {
+	case got := <-done:
+		if got != nil {
+			t.Fatalf("schema from FIFO symlink = %v, want nil", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("parseModuleVarSchemas blocked opening a symlink to a FIFO")
+	}
+}
+
+func TestParseModuleVarSchemas_OpenTofuNamedPipeInvalidatesSchema(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "variables.tf"),
+		[]byte(`variable "fallback" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "variables.tofu"), 0o600); err != nil {
+		t.Skip("cannot create FIFO:", err)
+	}
+	if got := parseModuleVarSchemas(dir, nil); got != nil {
+		t.Fatalf("schema with authoritative non-regular variables.tofu = %v, want nil", got)
 	}
 }

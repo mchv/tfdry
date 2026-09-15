@@ -162,21 +162,21 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 // Users who rely on group-shared trees or extended ACLs should be aware
 // that running `tfdry fmt` may strip those attributes on rewrite.
 func writeFormatted(path string, formatted []byte) (bool, error) {
-	// Cross-platform symlink rejection: on Windows oNoFollow == 0 means
-	// O_NOFOLLOW is a no-op and OpenFile silently follows symlinks. Without
-	// this Lstat precheck, the subsequent os.Rename would destroy the symlink
-	// and replace it with a regular file. Lstat introduces a small TOCTOU
-	// window between the check and the open, but that's a fundamentally less
-	// severe failure mode than silent symlink destruction. Unix is already
-	// covered by O_NOFOLLOW below; the Lstat is defence in depth there.
-	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
+	// Reject symlinks and other non-regular targets before opening. Unix also
+	// combines O_NOFOLLOW with O_NONBLOCK below so a raced FIFO cannot block;
+	// Windows retains the documented best-effort race limitation.
+	li, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	if !li.Mode().IsRegular() {
 		return false, fmt.Errorf("not a regular file")
 	}
 	// Open with O_NOFOLLOW so a symlink at path is rejected atomically (ELOOP),
-	// closing the small race window between Lstat and the subsequent operations.
-	// On Windows oNoFollow = 0; the Lstat precheck above is the actual symlink
-	// rejection on that platform (see checker/nofollow_windows.go).
-	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
+	// and O_NONBLOCK so a raced FIFO cannot hang before the post-open Stat.
+	// On Windows both flags are 0; the surrounding Lstat checks provide the
+	// best available protection without CreateFile reparse-point handling.
+	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow|oReadNonblock, 0)
 	if err != nil {
 		if isSymlinkRejection(err) {
 			return false, fmt.Errorf("not a regular file")
@@ -184,12 +184,11 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 		return false, err
 	}
 	fi, err := f.Stat()
-	// Permission-check open: we only needed the open() to verify the
-	// caller has write access + the file's mode bits for the eventual
-	// rename. The rename works on the path, not on this file handle,
-	// so a Close error here would only signal that something happened
-	// on the kernel side that doesn't affect our write — explicit
-	// ignore via `_ =`.
+	// The read-only descriptor atomically verifies the target type on Unix and
+	// captures its mode bits. It does not prove write access: CreateTemp and
+	// Rename below depend primarily on permissions for the parent directory.
+	// The rename works on the path rather than this descriptor, so a Close
+	// error cannot affect the replacement operation; ignore it explicitly.
 	_ = f.Close()
 	if err != nil {
 		return false, err

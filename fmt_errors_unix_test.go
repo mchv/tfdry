@@ -9,27 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
-// TestRun_Fmt_SymlinkArg_ExitTwo exercises runFmt's outer symlink
-// rejection (main.go:396-399) — the entry-point check that catches
-// symlinks passed as `tfdry fmt` arguments. The inner runFmtFile
-// Lstat check (main.go:510-513) is structurally similar but
-// unreachable from the CLI surface because runFmt fires first; it
-// stays as defensive belt-and-braces for callers that bypass runFmt
-// (none exist today; future caller graph could).
-//
-// Without the outer check, `-check` would follow the symlink at
-// os.ReadFile and exit 3 if the target was dirty, while a write pass
-// would later destroy the symlink on Windows (where O_NOFOLLOW is a
-// no-op). Reject upfront so the failure mode is identical across
-// read/write/platforms.
-//
-// Unix-only: Windows symlink creation needs elevated privileges by
-// default; the equivalent path on Windows is the post-open IsRegular()
-// check in checker/nofollow_windows.go, which the TODO.md "Proper
-// Windows symlink protection" entry tracks separately.
+// TestRun_Fmt_SymlinkArg_ExitTwo exercises write-mode symlink rejection at
+// the runFmt entry point. Read-only `fmt -check` intentionally follows links
+// to regular files, but write mode must reject before any rename can replace
+// the link itself.
 func TestRun_Fmt_SymlinkArg_ExitTwo(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -148,5 +136,32 @@ func TestRun_Fmt_SymlinkArgTrailingSlash_ExitTwo(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "symlinked path") {
 		t.Errorf("stderr should mention symlinked-path rejection, got %q", stderr)
+	}
+}
+
+func TestRun_Fmt_FIFOPath_RefusesWithoutBlocking(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "main.tf")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("cannot create FIFO:", err)
+	}
+	for _, args := range [][]string{{"fmt", fifo}, {"fmt", "-check", fifo}} {
+		args := args
+		t.Run(strings.Join(args[:len(args)-1], "_"), func(t *testing.T) {
+			done := make(chan int, 1)
+			go func() {
+				code, _, _ := runCLI(args...)
+				done <- code
+			}()
+			select {
+			case code := <-done:
+				if code != 2 {
+					t.Fatalf("runCLI(%v) = %d, want 2", args, code)
+				}
+			case <-time.After(500 * time.Millisecond):
+				t.Fatalf("runCLI(%v) blocked opening FIFO", args)
+			}
+		})
 	}
 }

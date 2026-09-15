@@ -270,6 +270,19 @@ resource "aws_iam_role_policy_attachment" "x" {
 	}
 }
 
+func TestE203_ValidEuropeanSovereignCloudARN_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+resource "aws_lambda_permission" "x" {
+  function_arn = "arn:aws-eusc:lambda:eusc-de-east-1:123456789012:function:example"
+}
+`,
+	})
+	if hasCode(vs, "E203") {
+		t.Fatalf("expected no E203 for aws-eusc ARN, got: %v", codes(vs))
+	}
+}
+
 // TestE203_ValidEmptyRegionAndAccount_NoViolation verifies ARNs with
 // empty region + empty account fields (typical for S3, IAM global).
 func TestE203_ValidEmptyRegionAndAccount_NoViolation(t *testing.T) {

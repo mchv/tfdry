@@ -87,8 +87,9 @@ func (s typeSchema) label() string {
 // parseModuleVarSchemas reads native .tf and .tofu files in moduleDir and
 // returns a map of variable name → typeSchema. OpenTofu same-basename
 // precedence is applied by nativeConfigEntries. Returns nil if the directory
-// can't be read. Results are cached in the provided cache map (keyed by
-// moduleDir).
+// cannot be read or any selected file cannot be read and parsed completely;
+// callers must not derive E006/E007 from a partial schema. Results are cached
+// in the provided cache map (keyed by moduleDir).
 func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSchema) map[string]typeSchema {
 	// Tolerate a nil cache. Later code writes to cache[moduleDir]
 	// (both early-out paths and the success path), which would panic on
@@ -115,37 +116,40 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSch
 	}
 
 	schemas := make(map[string]typeSchema)
+	invalidate := func() map[string]typeSchema {
+		cache[moduleDir] = nil
+		return nil
+	}
 	for _, e := range nativeConfigEntries(entries) {
 		path := filepath.Join(moduleDir, e.Name())
-		// Open with O_NOFOLLOW to atomically reject symlinks (matches parseOne).
-		// On Windows oNoFollow = 0; the IsRegular check below provides a
-		// best-effort fallback (see checker/nofollow_windows.go).
-		fh, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
-		if err != nil {
-			continue
-		}
-		fi, err := fh.Stat()
-		if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxFileSize {
-			_ = fh.Close()
-			continue
+		// Schema loading is read-only and follows symlinks to regular files,
+		// matching root configuration loading. Any failure makes the aggregate
+		// schema incomplete, so fail safely rather than infer that declarations
+		// in the unread file do not exist.
+		fh, fi, err := openRegularFileRead(path)
+		if err != nil || fi.Size() > maxFileSize {
+			if fh != nil {
+				_ = fh.Close()
+			}
+			return invalidate()
 		}
 		src, rerr := readAll(fh, fi.Size())
 		_ = fh.Close()
 		if rerr != nil {
-			continue
+			return invalidate()
 		}
 		// readAll is bounded to maxFileSize+1 but is robust against Stat
-		// reporting a stale size (FUSE / file grew). Skip oversized files.
+		// reporting a stale size (FUSE / file grew).
 		if int64(len(src)) > maxFileSize {
-			continue
+			return invalidate()
 		}
 		f, diags := hclsyntax.ParseConfig(src, e.Name(), hcl.Pos{Line: 1, Column: 1})
 		if diags.HasErrors() {
-			continue
+			return invalidate()
 		}
 		body, ok := f.Body.(*hclsyntax.Body)
 		if !ok {
-			continue
+			return invalidate()
 		}
 		for _, block := range body.Blocks {
 			if block.Type != "variable" || len(block.Labels) != 1 {
@@ -687,6 +691,7 @@ func resolveExprType(expr hclsyntax.Expression, locals map[string]localInfo) Var
 }
 
 func resolveExprTypeRecursive(expr hclsyntax.Expression, locals map[string]localInfo, seen map[string]struct{}) VarType {
+	expr = unwrapExpr(expr)
 	if t := inferExprType(expr); t != TypeUnknown {
 		return t
 	}

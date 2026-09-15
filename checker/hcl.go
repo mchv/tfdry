@@ -28,6 +28,33 @@ func readAll(r io.Reader, _ int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, maxFileSize+1))
 }
 
+// openRegularFileRead follows symlinks for read-only compatibility while
+// refusing non-regular targets before reading. The Unix non-blocking flag also
+// closes the Stat/Open race for FIFOs; post-open Stat handles any other swap.
+func openRegularFileRead(path string) (*os.File, os.FileInfo, error) {
+	pre, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !pre.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("not a regular file")
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|oReadNonblock, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("not a regular file")
+	}
+	return f, fi, nil
+}
+
 // ParsedFile holds the parsed AST and original source for one native HCL
 // configuration file (.tf or .tofu).
 type ParsedFile struct {
@@ -42,32 +69,24 @@ type ParsedFile struct {
 // .tf and .tofu files are both part of the module. JSON variants are excluded
 // because this parser intentionally supports native HCL only.
 //
-// A known symlink or non-regular .tofu entry is excluded before parsing so
-// Windows cannot follow it and merge it with a same-basename .tf file. If .tofu
-// metadata cannot be read, the .tf peer wins conservatively; a standalone .tofu
-// remains a candidate so the normal parser can surface an E000 if opening it
-// also fails.
+// Every .tofu filename remains a candidate regardless of entry metadata:
+// module precedence is filename-driven, while openRegularFileRead follows
+// symlinks only to regular files and rejects broken/non-regular targets without
+// blocking. A .tofu candidate remains authoritative over its same-basename .tf
+// peer; any read failure surfaces as E000 rather than silently changing the
+// loaded configuration.
 //
 // os.ReadDir returns entries sorted by filename, and this function preserves
 // their order so parsing and diagnostics remain deterministic.
 func nativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
-	tfBases := make(map[string]struct{})
 	tofuBases := make(map[string]struct{})
-	tofuKinds := make(map[string]tofuEntryKind)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		switch filepath.Ext(name) {
-		case ".tf":
-			tfBases[name[:len(name)-len(".tf")]] = struct{}{}
-		case ".tofu":
-			kind := classifyTofuEntry(e)
-			tofuKinds[name] = kind
-			if kind == tofuEntryRegular {
-				tofuBases[name[:len(name)-len(".tofu")]] = struct{}{}
-			}
+		if filepath.Ext(name) == ".tofu" {
+			tofuBases[name[:len(name)-len(".tofu")]] = struct{}{}
 		}
 	}
 
@@ -79,17 +98,7 @@ func nativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
 		name := e.Name()
 		switch filepath.Ext(name) {
 		case ".tofu":
-			base := name[:len(name)-len(".tofu")]
-			switch tofuKinds[name] {
-			case tofuEntryRegular:
-				selected = append(selected, e)
-			case tofuEntryMetadataUnknown:
-				if _, hasTerraformPeer := tfBases[base]; !hasTerraformPeer {
-					selected = append(selected, e)
-				}
-			case tofuEntryExcluded:
-				continue
-			}
+			selected = append(selected, e)
 		case ".tf":
 			base := name[:len(name)-len(".tf")]
 			if _, shadowed := tofuBases[base]; !shadowed {
@@ -115,29 +124,6 @@ func allNativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
 		}
 	}
 	return selected
-}
-
-type tofuEntryKind uint8
-
-const (
-	tofuEntryMetadataUnknown tofuEntryKind = iota
-	tofuEntryRegular
-	tofuEntryExcluded
-)
-
-// classifyTofuEntry determines whether a .tofu entry can authoritatively
-// shadow a same-basename .tf file. Calling Info is intentional even when
-// DirEntry.Type reports no symlink bit: filesystems such as FUSE and network
-// mounts may return Type()==0 for every entry, including symlinks.
-func classifyTofuEntry(e os.DirEntry) tofuEntryKind {
-	info, err := e.Info()
-	if err != nil {
-		return tofuEntryMetadataUnknown
-	}
-	if info.Mode().IsRegular() {
-		return tofuEntryRegular
-	}
-	return tofuEntryExcluded
 }
 
 // parseResult is the result of parsing a single file.
@@ -285,30 +271,17 @@ func parseDir(ctx context.Context, dir string, applyTofuPrecedence bool) ([]Pars
 func parseOne(dir string, e os.DirEntry) parseResult {
 	path := filepath.Join(dir, e.Name())
 
-	// Open with O_NOFOLLOW to atomically reject symlinks and read the file,
-	// eliminating the TOCTOU race between Lstat and ReadFile. On Windows
-	// oNoFollow = 0 (see checker/nofollow_windows.go).
-	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
+	// Read-only loading follows symlinks to regular files, matching
+	// Terraform/OpenTofu, while the shared opener rejects non-regular targets
+	// without blocking. Formatting writes retain separate no-follow guards.
+	f, fi, err := openRegularFileRead(path)
 	if err != nil {
-		// Symlink path — skip silently.
-		if isSymlinkRejection(err) {
-			return parseResult{}
-		}
 		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("cannot open file: %v", err)}}}
 	}
 	// Read-only path: a failed Close after a successful Read has no
-	// recoverable signal (the data we read is already in memory). Use
-	// the explicit `_ =` form rather than excluding Close globally so
-	// the intent is locally visible.
+	// recoverable signal (the data we read is already in memory).
 	defer func() { _ = f.Close() }()
 
-	fi, err := f.Stat()
-	if err != nil {
-		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("cannot stat file: %v", err)}}}
-	}
-	if !fi.Mode().IsRegular() {
-		return parseResult{} // skip non-regular files silently
-	}
 	if fi.Size() > maxFileSize {
 		return parseResult{violations: []Violation{{Code: "E000", Severity: "error", File: e.Name(), Message: fmt.Sprintf("file exceeds size limit (%d MB)", maxFileSize/1024/1024)}}}
 	}

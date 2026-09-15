@@ -83,12 +83,13 @@ test suite already exercises, so a security report should ideally
 demonstrate that one of these is bypassed:
 
 - **Symlink handling** on native `.tf` / `.tofu` reads and writes.
-  Explicit `tfdry fmt` path arguments reject symlinks with `Lstat` on
-  all supported platforms. Unix directory scans skip symlinked files
-  atomically with `O_NOFOLLOW`. **Windows scan-time handling is
-  best-effort**: without `O_NOFOLLOW`, a symlink to a regular file can
-  be followed silently, while symlinks to directories or devices are
-  rejected by the post-open `IsRegular` check.
+  Read-only module loading and format checks follow symlinks whose targets are
+  regular files, matching Terraform/OpenTofu; broken links and non-regular
+  targets surface E000 instead of disappearing from analysis. Formatting
+  writes reject symlink paths before replacement on every supported platform.
+  Unix additionally uses `O_NOFOLLOW` on the write-path open; Windows relies on
+  the pre-write `Lstat`, so its protection against a concurrent link swap is
+  best-effort.
 - **TOCTOU defence-in-depth** on the atomic formatting rewrite path: a
   final `Lstat` immediately before `Rename` fails the operation if
   the target was swapped to a symlink between the initial check and
