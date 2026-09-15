@@ -83,7 +83,7 @@ func inferExprType(expr hclsyntax.Expression) VarType {
 	case *hclsyntax.TemplateExpr:
 		return TypeString
 	case *hclsyntax.TemplateWrapExpr:
-		return TypeString
+		return inferExprType(e.Wrapped)
 	case *hclsyntax.ObjectConsExpr:
 		return TypeObject
 	case *hclsyntax.TupleConsExpr:
@@ -105,8 +105,8 @@ func inferExprType(expr hclsyntax.Expression) VarType {
 //
 // The list intentionally covers only the functions tfdry sees most often in
 // practice (locals, module inputs). Adding more pure-typed functions here
-// directly improves E004 (non-scalar in interpolation) and E006 (module
-// input type mismatch) precision by reducing TypeUnknown returns. Functions
+// directly improves E004 (non-scalar in mixed string templates) and E006
+// (module input type mismatch) precision by reducing TypeUnknown returns. Functions
 // that would return TypeUnknown for "depends on the input" reasons (e.g.
 // `lookup`, `coalesce`, `try`) are intentionally omitted.
 func inferFuncReturnType(name string) VarType {

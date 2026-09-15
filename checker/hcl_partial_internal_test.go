@@ -123,20 +123,20 @@ func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
 			wantNames: []string{"main.tofu"},
 		},
 		{
-			name: "symlink tofu is excluded and does not shadow terraform",
+			name: "symlink tofu shadows terraform",
 			entries: []os.DirEntry{
 				regularTerraform,
 				nativeConfigTestDirEntry{name: "main.tofu", mode: os.ModeSymlink | 0o777},
 			},
-			wantNames: []string{"main.tf"},
+			wantNames: []string{"main.tofu"},
 		},
 		{
-			name: "unreadable tofu metadata is excluded when terraform peer exists",
+			name: "unreadable tofu metadata still shadows terraform",
 			entries: []os.DirEntry{
 				regularTerraform,
 				nativeConfigTestDirEntry{name: "main.tofu", mode: 0o644, infoErr: errors.New("metadata unavailable")},
 			},
-			wantNames: []string{"main.tf"},
+			wantNames: []string{"main.tofu"},
 		},
 		{
 			name: "standalone tofu with unreadable metadata remains a parse candidate",
@@ -146,11 +146,19 @@ func TestNativeConfigEntries_UnknownTypeOpenTofuClassification(t *testing.T) {
 			wantNames: []string{"main.tofu"},
 		},
 		{
-			name: "standalone tofu symlink is excluded",
+			name: "standalone tofu symlink remains a parse candidate",
 			entries: []os.DirEntry{
 				nativeConfigTestDirEntry{name: "main.tofu", mode: os.ModeSymlink | 0o777},
 			},
-			wantNames: nil,
+			wantNames: []string{"main.tofu"},
+		},
+		{
+			name: "named pipe tofu shadows terraform for explicit rejection",
+			entries: []os.DirEntry{
+				regularTerraform,
+				nativeConfigTestDirEntry{name: "main.tofu", mode: os.ModeNamedPipe | 0o600},
+			},
+			wantNames: []string{"main.tofu"},
 		},
 	}
 	for _, tc := range tests {

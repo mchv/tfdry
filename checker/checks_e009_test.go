@@ -611,6 +611,72 @@ func TestE009_ContextualReferences_NoFalsePositive(t *testing.T) {
   }
 }`,
 		},
+		{
+			name: "provisioner when keywords",
+			src: `resource "terraform_data" "example" {
+  provisioner "local-exec" {
+    when    = create
+    command = "true"
+  }
+  provisioner "local-exec" {
+    when    = destroy
+    command = "true"
+  }
+}`,
+		},
+		{
+			name: "removed block destroy provisioner",
+			src: `removed {
+  from = terraform_data.example
+  provisioner "local-exec" {
+    when    = destroy
+    command = "true"
+  }
+}`,
+		},
+		{
+			name: "import provider reference",
+			src: `import {
+  to       = aws_s3_bucket.example
+  id       = "example"
+  provider = aws.west
+}`,
+		},
+		{
+			name: "action references and keywords",
+			src: `action "aws_lambda_invoke" "example" {
+  provider = aws.west
+  config {
+    function_name = caller.arn
+  }
+}
+resource "aws_instance" "example" {
+  lifecycle {
+    action_trigger {
+      events = [
+        before_create,
+        after_create,
+        before_update,
+        after_update,
+        before_destroy,
+        after_destroy,
+      ]
+      actions    = [action.aws_lambda_invoke.example]
+      on_failure = halt
+    }
+    action_trigger {
+      events     = [after_create]
+      actions    = [action.aws_lambda_invoke.example]
+      on_failure = continue
+    }
+    action_trigger {
+      events     = [after_update]
+      actions    = [action.aws_lambda_invoke.example]
+      on_failure = taint
+    }
+  }
+}`,
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -671,6 +737,138 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
   }
 }`,
 			wantCode: "E009",
+		},
+		{
+			name: "invalid provisioner when traversal",
+			src: `resource "terraform_data" "example" {
+  provisioner "local-exec" {
+    command = "true"
+    when    = vars.bad
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid import provider traversal",
+			src: `import {
+  to       = aws_s3_bucket.example
+  id       = "example"
+  provider = vars.bad
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid action provider traversal",
+			src: `action "aws_lambda_invoke" "example" {
+  provider = vars.bad
+  config {}
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid action trigger reference",
+			src: `resource "aws_instance" "example" {
+  lifecycle {
+    action_trigger {
+      events  = [after_create]
+      actions = [vars.bad]
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid action failure keyword traversal",
+			src: `resource "aws_instance" "example" {
+  lifecycle {
+    action_trigger {
+      events     = [after_create]
+      actions    = [action.aws_lambda_invoke.example]
+      on_failure = vars.bad
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name:     "destroy outside provisioner when",
+			src:      `output "x" { value = destroy }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "halt outside action trigger",
+			src:      `output "x" { value = halt }`,
+			wantCode: "W009",
+		},
+		{
+			name:     "caller outside action config",
+			src:      `output "x" { value = caller.arn }`,
+			wantCode: "W009",
+		},
+		{
+			name: "top-level provisioner lookalike",
+			src: `provisioner "local-exec" {
+  when    = destroy
+  command = "true"
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled provisioner lookalike",
+			src: `resource "terraform_data" "example" {
+  provisioner "local-exec" "bad" {
+    when    = destroy
+    command = "true"
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled import lookalike",
+			src: `import "bad" {
+  to       = aws_s3_bucket.example
+  id       = "example"
+  provider = aws.west
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "nested import lookalike",
+			src: `resource "example" "bad" {
+  import {
+    provider = aws.west
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "nested action lookalike caller",
+			src: `resource "example" "bad" {
+  action "type" "name" {
+    config {
+      value = caller.id
+    }
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "top-level action trigger lookalike",
+			src: `action_trigger {
+  on_failure = halt
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "labelled action trigger lookalike",
+			src: `resource "example" "bad" {
+  lifecycle {
+    action_trigger "bad" {
+      on_failure = halt
+    }
+  }
+}`,
+			wantCode: "W009",
 		},
 		{
 			name: "invalid state encryption method reference",

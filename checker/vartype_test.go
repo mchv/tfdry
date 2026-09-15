@@ -16,7 +16,7 @@ func TestVarType_Label(t *testing.T) {
 		{"string", TypeString, "string"},
 		{"number", TypeNumber, "number"},
 		{"bool", TypeBool, "bool"},
-		{"object", TypeObject, "object"},
+		{"non_scalar", TypeObject, "non-scalar value"},
 		{"explicit_unknown", TypeUnknown, "unknown"},
 		{"out_of_range_defaults_to_unknown", VarType(99), "unknown"}, // default branch
 	}

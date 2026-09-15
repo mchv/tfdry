@@ -10,13 +10,9 @@
 //     honour POSIX permission bits the same way (a 0o000 chmod is
 //     effectively a no-op there), so the chmod can't drive the E000
 //     path on Windows.
-//   - TestParseDir_SymlinkSkipped relies on POSIX symlink semantics —
-//     creating a symlink without elevated privileges (which doesn't
-//     work on default Windows) plus the kernel-level O_NOFOLLOW
-//     rejection in checker/nofollow_unix.go. The Windows variant uses
-//     a post-open IsRegular() check that, today, doesn't trigger on
-//     all symlink types — tracked separately in TODO.md as "Proper
-//     Windows symlink protection".
+//   - Symlink read tests rely on POSIX link creation without elevated
+//     privileges. Read-only loading follows links to regular files, while
+//     FixFormat retains its no-follow write guard.
 //   - TestFixFormat_WriteError_ReturnsE000 uses os.Chmod(0o555) to
 //     make a directory read-only so the rewrite path fails with
 //     EROFS / EACCES. Same Windows permission-model issue.
@@ -37,11 +33,14 @@
 package checker_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/mchv/tfdry/checker"
 )
@@ -97,35 +96,43 @@ func TestParseDir_UnreadableFile_EmitsE000(t *testing.T) {
 	}
 }
 
-// ParseDir skips symlinks silently.
-func TestParseDir_SymlinkSkipped(t *testing.T) {
+// Directory scans follow symlinks to regular native-HCL files for read-only
+// loading, matching Terraform/OpenTofu module semantics.
+func TestParseDir_SymlinkedTerraformLoaded(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	// Create a real file and a symlink to it.
-	realPath := filepath.Join(dir, "real.tf")
-	if err := os.WriteFile(realPath, []byte(`locals { x = "y" }`), 0o644); err != nil {
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "locals.tf")
+	if err := os.WriteFile(target, []byte(`locals { shared = "ok" }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(dir, "link.tf")
-	if err := os.Symlink(realPath, link); err != nil {
+	if err := os.Symlink(target, filepath.Join(dir, "locals.tf")); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
-	files, vs, _ := checker.ParseDir(context.Background(), dir)
-	// No E000 for the symlink — it should be silently skipped.
-	for _, v := range vs {
-		if v.Code == "E000" {
-			t.Fatalf("unexpected E000 for symlink: %v", v.Message)
-		}
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
+		[]byte(`output "x" { value = local.shared }`), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	// Only the real file should be parsed.
-	if len(files) != 1 {
-		t.Fatalf("expected 1 parsed file, got %d", len(files))
+
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	if len(files) != 2 {
+		t.Fatalf("parsed files = %d, want 2", len(files))
+	}
+	vs := mustRun(context.Background(), files, nil, dir)
+	if hasCode(vs, "E003") {
+		t.Fatalf("symlinked local was not loaded: %v", codes(vs))
 	}
 }
 
-// A skipped .tofu symlink must not become authoritative for OpenTofu
-// precedence and hide a regular same-basename .tf file.
-func TestParseDir_OpenTofuSymlinkDoesNotShadowTerraform(t *testing.T) {
+// A symlinked .tofu file that resolves to a regular file remains authoritative
+// over a same-basename .tf peer, matching OpenTofu extension precedence.
+func TestParseDir_OpenTofuSymlinkShadowsTerraform(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
@@ -134,7 +141,7 @@ func TestParseDir_OpenTofuSymlinkDoesNotShadowTerraform(t *testing.T) {
 	}
 	targetDir := t.TempDir()
 	target := filepath.Join(targetDir, "main.tofu")
-	if err := os.WriteFile(target, []byte(`locals { selected = "symlink" }`), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte(`output "x" { value = "tofu" }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(dir, "main.tofu")); err != nil {
@@ -148,12 +155,100 @@ func TestParseDir_OpenTofuSymlinkDoesNotShadowTerraform(t *testing.T) {
 	if len(parseViolations) != 0 {
 		t.Fatalf("unexpected parse violations: %+v", parseViolations)
 	}
-	if len(files) != 1 || files[0].Name != "main.tf" {
-		t.Fatalf("parsed files = %+v, want regular main.tf", files)
+	if len(files) != 1 || files[0].Name != "main.tofu" {
+		t.Fatalf("parsed files = %+v, want authoritative main.tofu", files)
 	}
 	vs := mustRun(context.Background(), files, nil, dir)
-	if !hasCode(vs, "E003") {
-		t.Fatalf("regular main.tf was hidden by skipped symlink, got %v", codes(vs))
+	if hasCode(vs, "E003") {
+		t.Fatalf("shadowed main.tf was loaded: %v", codes(vs))
+	}
+}
+
+func TestParseDir_BrokenSymlinkEmitsE000(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "missing.tf"), filepath.Join(dir, "main.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+	files, vs, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("parsed files = %d, want 0", len(files))
+	}
+	if !hasCode(vs, "E000") {
+		t.Fatalf("broken symlink must emit E000, got %v", codes(vs))
+	}
+}
+
+func TestParseDirForFormat_SymlinkedFileCheckedReadOnly(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "main.tf")
+	dirty := []byte("locals {x=1}\n")
+	if err := os.WriteFile(target, dirty, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "main.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+	files, parseViolations, err := checker.ParseDirForFormat(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	formatViolations, err := checker.CheckFormat(context.Background(), files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasCode(formatViolations, "E008") {
+		t.Fatalf("read-only format check missed dirty symlink target: %v", codes(formatViolations))
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, dirty) {
+		t.Fatalf("read-only format check modified target: %q", got)
+	}
+}
+
+func TestFixFormat_SymlinkedFileRefusesWrite(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "main.tf")
+	dirty := []byte("locals {x=1}\n")
+	if err := os.WriteFile(target, dirty, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "main.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+	files, parseViolations, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parseViolations) != 0 {
+		t.Fatalf("unexpected parse violations: %+v", parseViolations)
+	}
+	_, vs, err := checker.FixFormat(context.Background(), files, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasCode(vs, "E000") || !hasCode(vs, "E008") {
+		t.Fatalf("dirty symlink write must emit E000 and E008, got %v", codes(vs))
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, dirty) {
+		t.Fatalf("symlink target was modified: %q", got)
 	}
 }
 
@@ -211,5 +306,75 @@ func TestFormatFile_PreservesPermissions(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("FormatFile changed permissions: got %o, want 0600", fi.Mode().Perm())
+	}
+}
+
+func TestParseDir_SymlinkToFIFOEmitsE000WithoutBlocking(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	targetDir := t.TempDir()
+	fifo := filepath.Join(targetDir, "target.tf")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("cannot create FIFO:", err)
+	}
+	if err := os.Symlink(fifo, filepath.Join(dir, "main.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	done := make(chan []checker.Violation, 1)
+	go func() {
+		_, vs, _ := checker.ParseDir(context.Background(), dir)
+		done <- vs
+	}()
+	select {
+	case vs := <-done:
+		if !hasCode(vs, "E000") {
+			t.Fatalf("FIFO symlink must emit E000, got %v", codes(vs))
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("ParseDir blocked opening a symlink to a FIFO")
+	}
+}
+
+func TestParseDir_OpenTofuNamedPipeShadowsTerraformAndEmitsE000(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"),
+		[]byte(`output "x" { value = "terraform" }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "main.tofu"), 0o600); err != nil {
+		t.Skip("cannot create FIFO:", err)
+	}
+	files, vs, err := checker.ParseDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("fallback Terraform file was loaded: %+v", files)
+	}
+	if !hasCode(vs, "E000") {
+		t.Fatalf("non-regular authoritative OpenTofu file must emit E000, got %v", codes(vs))
+	}
+}
+
+func TestFormatFile_FIFORefusesWithoutBlocking(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "main.tf")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("cannot create FIFO:", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- checker.FormatFile(context.Background(), fifo, []byte("locals { x = 1 }\n"))
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("FormatFile(FIFO) = nil, want error")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("FormatFile blocked opening FIFO")
 	}
 }

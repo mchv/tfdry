@@ -29,6 +29,24 @@ Each release entry groups changes under the following headings (omitted if empty
   is also recognised without a spurious W009 diagnostic. JSON
   configurations (`.tf.json` and `.tofu.json`) remain unsupported.
 
+### Fixed
+
+- Follow symlinks to regular `.tf` / `.tofu` files for read-only module
+  loading and format checks, matching Terraform/OpenTofu, while continuing to
+  reject symlink replacement during formatting writes. Broken links now surface
+  E000 instead of silently removing configuration from analysis.
+- Treat a relative child-module schema as unavailable if any selected file is
+  unreadable, oversized, or unparsable, preventing false E006/E007 findings
+  from partial variable maps.
+- Preserve interpolation-only values and their underlying types, so
+  `"${local.value}"` no longer produces false E004/E006 diagnostics while
+  mixed string templates still reject non-scalar values with accurate wording.
+- Recognise Terraform action references, provisioner timing, import providers,
+  and lifecycle action-trigger keywords without weakening E009/W009; E005 now
+  also checks action blocks.
+- Recognise the AWS European Sovereign Cloud region `eusc-de-east-1` and ARN
+  partition `aws-eusc`.
+
 ## [0.2.0] — 2026-08-04
 
 ### Added

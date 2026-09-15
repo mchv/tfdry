@@ -94,6 +94,19 @@ provider "aws" {
 	}
 }
 
+func TestE201_ValidEuropeanSovereignCloudRegion_NoViolation(t *testing.T) {
+	vs := run(t, map[string]string{
+		"main.tf": `
+provider "aws" {
+  region = "eusc-de-east-1"
+}
+`,
+	})
+	if hasCode(vs, "E201") {
+		t.Fatalf("expected no E201 for eusc-de-east-1, got: %v", codes(vs))
+	}
+}
+
 // TestE201_InvalidRegion_Violation catches an obvious typo.
 func TestE201_InvalidRegion_Violation(t *testing.T) {
 	vs := run(t, map[string]string{

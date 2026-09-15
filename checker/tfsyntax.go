@@ -43,6 +43,7 @@ var tfScopeRoots = map[string]struct{}{
 	"each":      {}, // each.key, each.value — inside for_each
 	"count":     {}, // count.index — inside count
 	"self":      {}, // self.<ATTR> — inside precondition/postcondition
+	"action":    {}, // action.<TYPE>.<NAME> — provider-defined actions (Terraform 1.14+)
 }
 
 // isResourceTypeIdentifier reports whether name looks like a Terraform

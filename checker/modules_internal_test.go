@@ -392,49 +392,56 @@ func TestParseModuleVarSchemas_NotADir_CachesNil(t *testing.T) {
 	}
 }
 
-// ── P1.4: defensive continue paths in parseModuleVarSchemas ──────────────────
+// ── Child module schema read failures ───────────────────────────────────────
 //
-// The integration-level E006/E007 tests exercise parseModuleVarSchemas
-// indirectly via Run(). These tests target the individual `continue`
-// branches inside the per-entry loop (modules.go:104-148) so a
-// regression in one of them surfaces as a sharp, targeted failure
-// instead of a confusing E006 false-positive in an integration test.
-//
-// Untested branches that stay uncovered by design:
-//   - Stat error after a successful Open (essentially unreachable on
-//     normal filesystems; would need fault injection).
-//   - readAll error after a successful Stat (same as above).
-//   - Oversize file (> 10 MiB) — already covered via parseDir's
-//     TestRun_E000_FileExceedsSize_ExitTwo and writing a 10 MiB
-//     fixture per test bloats CI.
-//   - body type-assertion failure (hclsyntax.ParseConfig guarantees
-//     *hclsyntax.Body for a non-erroring parse; unreachable in practice).
+// E006/E007 consume a schema aggregated from every selected child-module file.
+// A failure in any one file invalidates the aggregate; retaining declarations
+// from neighbours would make absent keys indistinguishable from unread keys.
+// The tests below cover parse and size failures directly, while Unix-only
+// permission failure coverage lives in modules_internal_unix_test.go.
+// Stat/read failures after a successful open require filesystem fault injection
+// and follow the same production invalidation branch.
 
-// Tests requiring POSIX-only behaviour (e.g. unreadable file via
-// chmod 0o000) live in modules_internal_unix_test.go to keep this
-// file cross-platform-clean.
-
-// Malformed HCL must be skipped silently. The parseModuleVarSchemas
-// path is used to type-check `module` blocks; a broken neighbour .tf
-// shouldn't cascade into spurious E006s on the well-formed files.
-func TestParseModuleVarSchemas_ParseError_SkippedSilently(t *testing.T) {
+// Any selected module file that cannot be parsed makes the aggregate schema
+// incomplete. Return nil so callers skip E006/E007 rather than treating
+// declarations from the failed file as absent.
+func TestParseModuleVarSchemas_ParseError_InvalidatesSchema(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "good.tf"),
 		[]byte(`variable "good" { type = string }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Intentionally unterminated block.
 	if err := os.WriteFile(filepath.Join(dir, "broken.tf"),
 		[]byte(`variable "broken" { type = `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := parseModuleVarSchemas(dir, nil)
-	if _, ok := got["good"]; !ok {
-		t.Errorf("good.tf must still be parsed: got %v", got)
+	cache := make(map[string]map[string]typeSchema)
+	if got := parseModuleVarSchemas(dir, cache); got != nil {
+		t.Fatalf("incomplete schema = %v, want nil", got)
 	}
-	if _, ok := got["broken"]; ok {
-		t.Errorf("broken.tf (parse error) must NOT appear in schemas: got %v", got)
+	cached, ok := cache[dir]
+	if !ok || cached != nil {
+		t.Fatalf("cached incomplete schema = %v (present=%v), want present nil", cached, ok)
+	}
+}
+
+func TestParseModuleVarSchemas_OversizedFile_InvalidatesSchema(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "good.tf"),
+		[]byte(`variable "good" { type = string }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oversized := filepath.Join(dir, "oversized.tf")
+	if err := os.WriteFile(oversized, []byte(`variable "missing" {}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(oversized, maxFileSize+1); err != nil {
+		t.Fatal(err)
+	}
+	if got := parseModuleVarSchemas(dir, nil); got != nil {
+		t.Fatalf("schema with oversized file = %v, want nil", got)
 	}
 }
 
