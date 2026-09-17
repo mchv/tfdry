@@ -23,12 +23,10 @@ import (
 
 // oNoFollow is the OS-level "do not follow symlinks" open flag.
 //
-// On Unix-like systems, opening with O_NOFOLLOW atomically rejects symlinks
-// at the kernel level (returns ELOOP/EMLINK), eliminating the TOCTOU window
-// between Lstat and the subsequent open or rename operations.
-//
-// Used in checker/hcl.go (parseOne), checker/format.go (writeFormatted),
-// and checker/modules.go (parseModuleVarSchemas).
+// On Unix-like systems, opening with O_NOFOLLOW atomically rejects a
+// formatting target that became a symlink between the Lstat check and open.
+// Read-only configuration loading intentionally follows regular-file links;
+// this flag is used only by checker/format.go's write path.
 const oNoFollow = syscall.O_NOFOLLOW
 
 // isSymlinkRejection reports whether err returned from os.OpenFile is the
@@ -37,3 +35,7 @@ const oNoFollow = syscall.O_NOFOLLOW
 func isSymlinkRejection(err error) bool {
 	return errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK)
 }
+
+// oReadNonblock prevents a raced or symlinked FIFO from blocking before the
+// post-open regular-file check. It has no effect on regular files.
+const oReadNonblock = syscall.O_NONBLOCK

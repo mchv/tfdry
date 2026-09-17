@@ -84,6 +84,7 @@ func TestValidateScopeRoot_ValidRoots(t *testing.T) {
 		"each.value",
 		"count.index",
 		"self.arn",
+		"action.aws_lambda_invoke.example",
 
 		// Resource type identifiers
 		"aws_iam_role.example.arn",

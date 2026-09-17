@@ -152,14 +152,14 @@ exit code).
 | E001  | error    | Invalid HCL syntax. |
 | E002  | error    | Duplicate `locals` definition within the same directory. |
 | E003  | error    | Reference to an undefined local. |
-| E004  | error    | Non-scalar local (object, list, map, set) used in a string interpolation context. |
-| E005  | error    | `count` and `for_each` used together on the same `resource` / `data` / `module` block. |
+| E004  | error    | Non-scalar local (object, list, map, set) embedded in a string template that requires string conversion; interpolation-only values preserve their original type. |
+| E005  | error    | `count` and `for_each` used together on the same `resource` / `data` / `module` / `action` block. |
 | E006  | error    | Module input type mismatch (relative-path modules only — remote modules aren't fetched). |
 | E007  | error    | Unknown input key for a relative-path module. |
 | E008  | error    | File is not formatted (`terraform fmt` / `tofu fmt` compatible, auto-fixable with `--fix`). |
 | E009  | error    | Invalid Terraform/OpenTofu scope root in expression (e.g. `${vars.foo}` — did you mean `${var.foo}`?). |
 | E101  | error    | Invalid CIDR block literal (IPv4 / IPv6, with interpolation-aware placeholder composition). |
-| E201  | error    | Invalid AWS region — attribute value is not a recognised region across aws, aws-us-gov, or aws-cn partitions. |
+| E201  | error    | Invalid AWS region — attribute value is not a recognised region across `aws`, `aws-us-gov`, `aws-cn`, or `aws-eusc` partitions. |
 | E202  | error    | Invalid AWS account ID — value is not a 12-digit string on an `account_id` attribute. |
 | E203  | error    | Malformed ARN structure — grammar violation on an `*_arn` or `*_arns` attribute (bad prefix, unknown partition, malformed structure, empty resource). Validates ARN structure rather than service-specific resource semantics. |
 | E204  | error    | Invalid AWS S3 bucket name — validates literal `bucket` declarations in `aws_s3_bucket` and `aws_s3_directory_bucket` resources using their distinct naming rules. General-purpose names enforce length (3–63), character set (`[a-z0-9.-]`), alphanumeric boundaries, no consecutive dots, and no IP-address-shaped names. Directory buckets additionally require `<base-name>--<zone-id>--x-s3`. Existing-bucket references and contexts that also accept access-point ARNs are skipped. |

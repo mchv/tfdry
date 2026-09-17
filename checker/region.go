@@ -32,12 +32,13 @@ import (
 // via a var initialiser (not a function call), so lookup is constant-time
 // with no allocation.
 
-// awsRegions is the enumerated set of AWS region codes across all three
-// partitions:
+// awsRegions is the enumerated set of AWS region codes across the public
+// commercial, GovCloud, China, and European Sovereign Cloud partitions:
 //
 //   - aws (commercial) — the standard partition
 //   - aws-us-gov — GovCloud
 //   - aws-cn — China (operated by Sinnet in Beijing and NWCD in Ningxia)
+//   - aws-eusc — European Sovereign Cloud
 //
 // Sourced from the AWS documentation:
 // https://docs.aws.amazon.com/general/latest/gr/rande.html
@@ -82,6 +83,8 @@ var awsRegions = map[string]struct{}{
 	"eu-north-1":   {}, // Stockholm
 	"eu-south-1":   {}, // Milan
 	"eu-south-2":   {}, // Spain
+	// European Sovereign Cloud (aws-eusc partition)
+	"eusc-de-east-1": {}, // Brandenburg, Germany
 	// Commercial (aws partition) — Israel
 	"il-central-1": {}, // Tel Aviv
 	// Commercial (aws partition) — Mexico

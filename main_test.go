@@ -1349,12 +1349,8 @@ func TestRun_Fmt_RecursiveOnFile_ExitTwo(t *testing.T) {
 	}
 }
 
-// tfdry fmt <symlink-path> must reject symlinks before reading or
-// writing — on Unix this was already enforced at writeFormatted via
-// O_NOFOLLOW, but the dirty-detection read in runFmtFile happened first
-// (os.ReadFile follows symlinks), and on Windows oNoFollow=0 means the
-// rename would later destroy the symlink. The Lstat precheck rejects
-// symlinks consistently across platforms before any I/O against the target.
+// `tfdry fmt <symlink-path>` write mode must reject before replacement. The
+// paired `fmt -check` regression below follows the same link read-only.
 func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
@@ -1394,9 +1390,7 @@ func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 	}
 }
 
-// Read-only path: fmt -check on a symlink should also reject (no read
-// follows, no exit-3 false positive, just a usage error).
-func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
+func TestRunFmtFile_WriteModeSymlinkRejected(t *testing.T) {
 	t.Parallel()
 	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
 	realPath := filepath.Join(dir, "real.tf")
@@ -1404,9 +1398,56 @@ func TestRun_FmtCheck_FilePathIsSymlink_Rejected(t *testing.T) {
 	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("cannot create symlink:", err)
 	}
-	code, _, stderr := runCLI("fmt", "-check", link)
+	var stdout, stderr bytes.Buffer
+	code := runFmtFile(context.Background(), &stdout, &stderr, link, false)
 	if code != 2 {
-		t.Errorf("fmt -check <symlink> should exit 2, got %d (stderr=%q)", code, stderr)
+		t.Fatalf("runFmtFile(write symlink) = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("runFmtFile(write symlink) stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("runFmtFile(write symlink) must explain the refusal")
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("runFmtFile replaced the symlink")
+	}
+	target, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(target) != fmtDirtyTF {
+		t.Fatalf("runFmtFile modified symlink target: %q", target)
+	}
+}
+
+// Read-only file mode follows symlinks to regular files and reports whether
+// the target needs formatting, while leaving the target untouched.
+func TestRun_FmtCheck_FilePathSymlinkFollowedReadOnly(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
+	realPath := filepath.Join(dir, "real.tf")
+	link := filepath.Join(dir, "link.tf")
+	if err := os.Symlink(realPath, link); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+	code, stdout, stderr := runCLI("fmt", "-check", link)
+	if code != 3 {
+		t.Errorf("fmt -check <symlink> should exit 3, got %d (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("fmt -check <symlink> stderr = %q, want empty", stderr)
+	}
+	target, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(target) != fmtDirtyTF {
+		t.Fatalf("fmt -check modified symlink target; got %q", string(target))
 	}
 }
 
@@ -1632,12 +1673,9 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 	if !strings.Contains(s, "## Security") {
 		t.Error("SKILL.md should retain a Security section describing the actual posture")
 	}
-	// The symlink bullet must qualify Windows behaviour. The
-	// O_NOFOLLOW protection only applies on Unix-like systems; on
-	// Windows oNoFollow=0 and the symlink-to-regular-file case is
-	// silently followed (see checker/nofollow_windows.go). Without
-	// this qualification, the bullet overpromises cross-platform
-	// symlink skipping.
+	// The symlink bullet must distinguish read-only following from write-path
+	// refusal and retain the Windows best-effort qualification for concurrent
+	// link-swap protection.
 	if !strings.Contains(s, "Windows") {
 		t.Error("SKILL.md symlink bullet must qualify Windows behaviour")
 	}
@@ -2704,5 +2742,23 @@ func TestRun_FmtRecursive_DotPrefixedRoot_PathsClean(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "nested/dirty.tf") {
 		t.Errorf("expected 'nested/dirty.tf' in output, got: %q", stdout)
+	}
+}
+
+func TestRun_ParseErrorSuppressesCrossFileSemanticChecks(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"broken.tf": `locals { shared = `,
+		"main.tf":   `output "x" { value = local.shared }`,
+	})
+	code, stdout, stderr := runCLI(dir)
+	if code != 1 {
+		t.Fatalf("parse-error run exit = %d, want 1 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "[E001]") {
+		t.Fatalf("parse-error output missing E001: %q", stdout)
+	}
+	if strings.Contains(stdout, "[E003]") {
+		t.Fatalf("partial root module produced false E003: %q", stdout)
 	}
 }

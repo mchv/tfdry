@@ -135,6 +135,16 @@ windows-amd64. `make verify` cross-builds for all four. Don't import
 packages that aren't available on one of these targets without a
 build constraint.
 
+## AWS metadata maintenance
+
+E201 and E203 deliberately validate literals against committed AWS region and
+partition sets. Before each release, compare `checker/region.go` and
+`checker/arn.go` with the current AWS Regions and Availability Zones reference
+and AWS partition documentation. Every newly announced region or partition
+must include a no-violation regression in `region_test.go` or `arn_test.go` in
+the same change. Do not add an identifier from an announcement or assumption
+without a public AWS source.
+
 ## Decision flagging
 
 If you're unsure about a design choice mid-PR (e.g. should this

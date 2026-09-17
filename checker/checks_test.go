@@ -367,9 +367,10 @@ func TestChecksFlag_InvalidCode_ReturnsError(t *testing.T) {
 
 // ── Additional coverage tests ─────────────────────────────────────────────────
 
-// E004 via TemplateWrapExpr: bare "${local.tags}" (no surrounding text) parses
-// differently from "prefix-${local.tags}" — must still be caught.
-func TestE004_TemplateWrapExpr_BareInterpolation(t *testing.T) {
+// Interpolation-only templates preserve the wrapped value unchanged. A
+// non-scalar local is therefore valid here; E004 applies only when a value
+// must actually be converted into part of a string template.
+func TestE004_TemplateWrapExpr_BareInterpolation_NoViolation(t *testing.T) {
 	t.Parallel()
 	vs := run(t, map[string]string{
 		"main.tf": `
@@ -377,8 +378,8 @@ locals { tags = { env = "prod" } }
 output "o" { value = "${local.tags}" }
 `,
 	})
-	if !hasCode(vs, "E004") {
-		t.Fatalf("expected E004 for bare interpolation of object local, got %v", codes(vs))
+	if hasCode(vs, "E004") {
+		t.Fatalf("E004 false positive for interpolation-only value: %v", codes(vs))
 	}
 }
 
@@ -413,6 +414,22 @@ module "vpc" {
 	})
 	if !hasCode(vs, "E005") {
 		t.Fatalf("expected E005 for module block with count+for_each, got %v", codes(vs))
+	}
+}
+
+func TestE005_ActionBlock_CountAndForEach(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `
+action "aws_lambda_invoke" "example" {
+  count    = 1
+  for_each = toset(["a"])
+  config {}
+}
+`,
+	})
+	if !hasCode(vs, "E005") {
+		t.Fatalf("expected E005 for action block with count+for_each, got %v", codes(vs))
 	}
 }
 
@@ -637,28 +654,91 @@ func TestChecksFlag_EmptyValue_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestInferExprType_TemplateWrapExpr_NoPanic exercises the inferExprType path
-// for a TemplateWrapExpr (`"${local.x}"`) whose inner expression resolves to
-// a non-scalar (object). In Terraform, `"${local.tags}"` evaluates to the
-// string-coerced form of the object, so this is technically valid HCL. The
-// invariant being guarded here is purely operational: inferExprType must not
-// panic when it walks into a TemplateWrapExpr wrapping a non-scalar. Whether
-// it returns TypeString (matching Terraform's coercion) or TypeUnknown
-// (statically unresolvable) is intentionally not asserted — both are
-// acceptable strategies and the call sites tolerate either.
-func TestInferExprType_TemplateWrapExpr_NoPanic(t *testing.T) {
+func TestE004_UndefinedLocalMixedTemplateOnlyE003(t *testing.T) {
 	t.Parallel()
 	vs := run(t, map[string]string{
-		"main.tf": `
-locals {
+		"main.tf": `output "o" { value = "prefix-${local.missing}" }`,
+	})
+	if !hasCode(vs, "E003") {
+		t.Fatalf("expected E003 for undefined local, got %v", codes(vs))
+	}
+	if hasCode(vs, "E004") {
+		t.Fatalf("undefined local must not also produce E004, got %v", codes(vs))
+	}
+}
+
+func TestE004_TemplateWrapAliasPreservesWrappedType(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `locals {
   tags  = { env = "prod" }
   alias = "${local.tags}"
 }
 output "o" { value = "prefix-${local.alias}" }
 `,
 	})
-	// No panic, no crash — that's the whole assertion.
-	_ = vs
+	var e004 []checker.Violation
+	for _, v := range vs {
+		if v.Code == "E004" {
+			e004 = append(e004, v)
+		}
+	}
+	if len(e004) != 1 {
+		t.Fatalf("E004 violations = %+v, want exactly one mixed-template finding", e004)
+	}
+	if e004[0].Line != 5 {
+		t.Fatalf("E004 line = %d, want mixed template on line 5", e004[0].Line)
+	}
+	if !strings.Contains(e004[0].Message, "non-scalar value") {
+		t.Fatalf("E004 message = %q, want non-scalar wording", e004[0].Message)
+	}
+}
+
+func TestE006_TemplateWrapAliasPreservesWrappedType(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(
+		t,
+		map[string]string{
+			"main.tf": `
+locals {
+  tags  = { env = "prod" }
+  alias = "${local.tags}"
+}
+module "child" {
+  source = "./child"
+  value  = local.alias
+}
+`,
+		},
+		"child",
+		map[string]string{
+			"variables.tf": `variable "value" { type = object({ env = string }) }`,
+		},
+	)
+	vs := runDir(t, dir)
+	if hasCode(vs, "E004") || hasCode(vs, "E006") {
+		t.Fatalf("wrapped object alias must remain an object value, got %v", codes(vs))
+	}
+}
+
+func TestE004_ListMessageUsesNonScalarWording(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `locals { items = ["a", "b"] }
+output "o" { value = "items=${local.items}" }
+`,
+	})
+	for _, v := range vs {
+		if v.Code != "E004" {
+			continue
+		}
+		want := "local.items is non-scalar value, used where string expected in interpolation"
+		if v.Message != want {
+			t.Fatalf("E004 message = %q, want %q", v.Message, want)
+		}
+		return
+	}
+	t.Fatalf("expected E004 for list in mixed template, got %v", codes(vs))
 }
 
 // .. path check false positive: legitimate dir name containing ".." substring.
@@ -760,16 +840,26 @@ func TestParseDir_FileSizeBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "big"+tc.ext)
-			f, err := os.Create(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := f.Truncate(tc.size); err != nil {
-				_ = f.Close()
-				t.Fatal(err)
-			}
-			if err := f.Close(); err != nil {
-				t.Fatal(err)
+			if tc.size == limit {
+				// Exact-limit files must reach the parser. Use valid whitespace
+				// rather than sparse NUL bytes: the latter exercises a pathological
+				// lexer error path and makes Windows race tests take minutes, which
+				// is unrelated to this size-boundary assertion.
+				if err := os.WriteFile(path, bytes.Repeat([]byte{' '}, int(tc.size)), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				f, err := os.Create(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Truncate(tc.size); err != nil {
+					_ = f.Close()
+					t.Fatal(err)
+				}
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			_, vs, _ := checker.ParseDir(context.Background(), dir)
 			if got := hasCode(vs, "E000"); got != tc.wantE000 {
@@ -934,6 +1024,30 @@ variable "name" {
 	vs := runDir(t, dir)
 	if hasCode(vs, "E006") {
 		t.Fatalf("unexpected E006 for unresolvable type: %v", codes(vs))
+	}
+}
+
+func TestE007_UnparseableModuleFile_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	dir := writeModuleFiles(
+		t,
+		map[string]string{
+			"main.tf": `
+module "child" {
+  source = "./child"
+  value  = "ok"
+}
+`,
+		},
+		"child",
+		map[string]string{
+			"good.tf":   `variable "other" { type = string }`,
+			"broken.tf": `variable "value" { type = string`,
+		},
+	)
+	vs := runDir(t, dir)
+	if hasCode(vs, "E007") {
+		t.Fatalf("E007 false positive from incomplete child schema: %v", codes(vs))
 	}
 }
 
@@ -1559,9 +1673,9 @@ module "evil" {
 }
 `,
 	})
-	// The parent dir doesn't exist as a tfdry-readable module; no checks
-	// fire. (We no longer enforce containment — the security boundary lives
-	// at the kernel level via O_NOFOLLOW + EvalSymlinks.)
+	// The parent dir doesn't exist as a readable module; no checks fire.
+	// Parent-relative paths are intentionally allowed, while unavailable
+	// schemas fail safely without derived E006/E007 findings.
 	if hasCode(vs, "E006") || hasCode(vs, "E007") {
 		t.Fatalf("non-existent parent dir produced spurious findings: %v", codes(vs))
 	}

@@ -24,7 +24,7 @@ import (
 //
 // Fields:
 //   - PARTITION   one of the AWS partitions (aws, aws-us-gov, aws-cn,
-//                 aws-iso, aws-iso-b, aws-iso-e, aws-iso-f). Wildcards are
+//                 aws-eusc, aws-iso, aws-iso-b, aws-iso-e, aws-iso-f). Wildcards are
 //                 not accepted on the `_arn` trigger surface — the wildcard
 //                 partition pattern (`arn:*:...`) only appears in IAM
 //                 policy `Resource`/`NotResource` fields, which are not
@@ -69,22 +69,23 @@ import (
 //   - Fixed-size [5]string array for field boundaries — stack-allocated.
 //   - Fields extracted via substring slicing (zero-copy string headers).
 
-// awsPartitions enumerates the AWS partitions. The three commercial-style
-// partitions (aws, aws-us-gov, aws-cn) are documented in AWS's
-// Fault Isolation Boundaries whitepaper. The four ISO partitions
+// awsPartitions enumerates the AWS partitions. The commercial, GovCloud,
+// China, and European Sovereign Cloud partitions are documented by AWS. The
+// four ISO partitions
 // (aws-iso, aws-iso-b, aws-iso-e, aws-iso-f) are used in air-gapped
 // classified environments (CIA, SC2S, NATO-partner MODs); they're
 // documented in the AWS Go/Java SDKs and the terraform-provider-aws
 // issue tracker (hashicorp/terraform-provider-aws#18593). Legitimate
 // ISO ARNs must not false-positive on the partition field.
 //
-// Locked list — new partitions have not been added since aws-iso-f;
-// adding one requires a documented AWS announcement.
+// Locked list — additions require a documented AWS announcement and the
+// maintenance steps in CONTRIBUTING.md.
 var awsPartitions = map[string]struct{}{
-	// Commercial / GovCloud / China
+	// Commercial / GovCloud / China / European Sovereign Cloud
 	"aws":        {}, // commercial
 	"aws-us-gov": {}, // GovCloud
 	"aws-cn":     {}, // China (Sinnet + NWCD)
+	"aws-eusc":   {}, // European Sovereign Cloud
 	// ISO (classified environments — regions are not publicly enumerable
 	// in a stable form, so validateARNFields skips strict region
 	// validation when the partition is one of these)

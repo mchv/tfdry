@@ -393,7 +393,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		// level E000 (unreadable dir) does the same. Dropping the
 		// iteration wholesale would swallow those signals.
 		if len(files) > 0 {
-			if !skipRun {
+			// Semantic checks require a complete root-module view. If any selected
+			// file failed to parse or load, running on the surviving subset can
+			// turn declarations from the failed file into false E002–E009/W001
+			// findings. Parse diagnostics remain visible above; --fix may still
+			// format successfully parsed files independently.
+			if !skipRun && len(parseViolations) == 0 {
 				runViolations, err := checker.Run(ctx, files, runFilter, d)
 				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 					return code
@@ -629,28 +634,16 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
 		return code
 	}
-	// Reject symlinked roots up front (consistent with file-mode symlink
-	// rejection in runFmtFile, round 4). Without this, a symlinked-dir
-	// root produces inconsistent behaviour: ParseDir / os.ReadDir follows
-	// symlinks but filepath.WalkDir is Lstat-based and silently does
-	// nothing for `fmt -recursive`, exiting 0 with no output.
-	// Reject in both modes so the security/atomicity contract of the path
-	// argument is uniform regardless of -recursive.
-	//
-	// filepath.Clean before Lstat handles the POSIX trailing-slash
-	// quirk: os.Lstat on a symlink with `/` suffix (e.g. `link/`)
-	// resolves the symlink to the target directory rather than
-	// returning symlink info, so `Mode & ModeSymlink` is 0 and the
-	// guard silently passes. filepath.WalkDir then sees the cleaned
-	// form as a symlink and refuses to recurse, producing an empty
-	// walk and a silent exit-0 no-op. Cleaning first means the Lstat
-	// here and the Lstat inside WalkDir see the same normalised
-	// shape. Error messages still use the user-supplied `path` so
-	// the reported path matches what the caller typed.
+	// Read-only checks may follow a symlink to a regular file, matching
+	// Terraform/OpenTofu. Write mode and symlinked directories remain rejected:
+	// writes must never replace a link, and WalkDir does not recurse into one.
 	pathClean := filepath.Clean(path)
 	if li, err := os.Lstat(pathClean); err == nil && li.Mode()&os.ModeSymlink != 0 {
-		fmt.Fprintf(stderr, "tfdry fmt: refusing to operate on symlinked path: %s\n", path)
-		return 2
+		target, targetErr := os.Stat(pathClean)
+		if !check || targetErr != nil || !target.Mode().IsRegular() {
+			fmt.Fprintf(stderr, "tfdry fmt: refusing to operate on symlinked path: %s\n", path)
+			return 2
+		}
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -749,24 +742,48 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 	return 0
 }
 
+func readRegularFile(path string) ([]byte, error) {
+	pre, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !pre.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file")
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|oReadNonblock, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file")
+	}
+	return io.ReadAll(f)
+}
+
 // runFmtFile formats a single file path, the file-mode counterpart of the
 // directory-walking branch in runFmt. Mirrors terraform fmt's behaviour for
 // individual files: prints the path on stdout when dirty, rewrites in-place
 // unless `check` is set, and uses exit code 3 only when -check finds dirt.
 //
-// Symlinks are rejected: without Lstat here, `-check` would follow the
-// symlink at os.ReadFile and exit 3 if the target was dirty, while a write
-// pass would later destroy the symlink on Windows (oNoFollow=0). Reject
-// upfront so the failure mode is identical across read/write/platforms.
+// Read-only checks follow symlinks to regular files. Write mode rejects them
+// before reading so the later atomic rename cannot replace the link itself.
 func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, check bool) int {
 	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
 		return code
 	}
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
-		fmt.Fprintf(stderr, "tfdry fmt: %s: not a regular file (symlinks are not supported)\n", path)
-		return 2
+		target, targetErr := os.Stat(path)
+		if !check || targetErr != nil || !target.Mode().IsRegular() {
+			fmt.Fprintf(stderr, "tfdry fmt: %s: not a regular file (symlink writes are not supported)\n", path)
+			return 2
+		}
 	}
-	src, err := os.ReadFile(path)
+	src, err := readRegularFile(path)
 	if err != nil {
 		fmt.Fprintln(stderr, "tfdry fmt:", err)
 		return 2
