@@ -827,16 +827,26 @@ func TestParseDir_FileSizeBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "big"+tc.ext)
-			f, err := os.Create(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := f.Truncate(tc.size); err != nil {
-				_ = f.Close()
-				t.Fatal(err)
-			}
-			if err := f.Close(); err != nil {
-				t.Fatal(err)
+			if tc.size == limit {
+				// Exact-limit files must reach the parser. Use valid whitespace
+				// rather than sparse NUL bytes: the latter exercises a pathological
+				// lexer error path and makes Windows race tests take minutes, which
+				// is unrelated to this size-boundary assertion.
+				if err := os.WriteFile(path, bytes.Repeat([]byte{' '}, int(tc.size)), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				f, err := os.Create(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Truncate(tc.size); err != nil {
+					_ = f.Close()
+					t.Fatal(err)
+				}
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			_, vs, _ := checker.ParseDir(context.Background(), dir)
 			if got := hasCode(vs, "E000"); got != tc.wantE000 {
