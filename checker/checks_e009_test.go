@@ -584,6 +584,12 @@ func TestE009_ContextualReferences_NoFalsePositive(t *testing.T) {
 }`,
 		},
 		{
+			name: "bare provider meta argument",
+			src: `resource "aws_s3_bucket" "example" {
+  provider = aws
+}`,
+		},
+		{
 			name: "lifecycle ignore changes",
 			src: `resource "aws_s3_bucket" "example" {
   lifecycle {
@@ -677,6 +683,19 @@ resource "aws_instance" "example" {
   }
 }`,
 		},
+		{
+			name: "dynamic action config caller scope",
+			src: `action "example_action" "example" {
+  config {
+    dynamic "rule" {
+      for_each = caller.rules
+      content {
+        value = caller.id
+      }
+    }
+  }
+}`,
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -758,6 +777,37 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
 			wantCode: "E009",
 		},
 		{
+			name: "deep provider traversal",
+			src: `resource "aws_s3_bucket" "example" {
+  provider = aws.secondary.extra
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "indexed provider traversal",
+			src: `resource "aws_s3_bucket" "example" {
+  provider = aws["secondary"]
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "malformed resource provider lookalike",
+			src: `resource "aws_s3_bucket" {
+  provider = aws.secondary
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "malformed module provider lookalike",
+			src: `module {
+  source = "./child"
+  providers = {
+    aws = aws.secondary
+  }
+}`,
+			wantCode: "W009",
+		},
+		{
 			name: "invalid action provider traversal",
 			src: `action "aws_lambda_invoke" "example" {
   provider = vars.bad
@@ -772,6 +822,18 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
     action_trigger {
       events  = [after_create]
       actions = [vars.bad]
+    }
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "invalid action event traversal",
+			src: `resource "aws_instance" "example" {
+  lifecycle {
+    action_trigger {
+      events  = [vars.bad]
+      actions = [action.example.run]
     }
   }
 }`,
