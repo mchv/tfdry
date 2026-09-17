@@ -1390,6 +1390,41 @@ func TestRun_Fmt_FilePathIsSymlink_Rejected(t *testing.T) {
 	}
 }
 
+func TestRunFmtFile_WriteModeSymlinkRejected(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{"real.tf": fmtDirtyTF})
+	realPath := filepath.Join(dir, "real.tf")
+	link := filepath.Join(dir, "link.tf")
+	if err := os.Symlink(realPath, link); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := runFmtFile(context.Background(), &stdout, &stderr, link, false)
+	if code != 2 {
+		t.Fatalf("runFmtFile(write symlink) = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("runFmtFile(write symlink) stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("runFmtFile(write symlink) must explain the refusal")
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("runFmtFile replaced the symlink")
+	}
+	target, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(target) != fmtDirtyTF {
+		t.Fatalf("runFmtFile modified symlink target: %q", target)
+	}
+}
+
 // Read-only file mode follows symlinks to regular files and reports whether
 // the target needs formatting, while leaving the target untouched.
 func TestRun_FmtCheck_FilePathSymlinkFollowedReadOnly(t *testing.T) {

@@ -654,6 +654,19 @@ func TestChecksFlag_EmptyValue_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestE004_UndefinedLocalMixedTemplateOnlyE003(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `output "o" { value = "prefix-${local.missing}" }`,
+	})
+	if !hasCode(vs, "E003") {
+		t.Fatalf("expected E003 for undefined local, got %v", codes(vs))
+	}
+	if hasCode(vs, "E004") {
+		t.Fatalf("undefined local must not also produce E004, got %v", codes(vs))
+	}
+}
+
 func TestE004_TemplateWrapAliasPreservesWrappedType(t *testing.T) {
 	t.Parallel()
 	vs := run(t, map[string]string{

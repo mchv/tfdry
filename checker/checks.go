@@ -304,9 +304,6 @@ func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[st
 	if !ok {
 		return nil
 	}
-	if _, defined := locals[attr.Name]; !defined {
-		return nil
-	}
 	resolvedType := resolveExprType(ref, locals)
 	if resolvedType == TypeUnknown || resolvedType.IsScalar() {
 		return nil
