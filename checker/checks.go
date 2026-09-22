@@ -196,6 +196,9 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 						}
 					}
 				}
+				if _, shadowed := iterators[e.Traversal.RootName()]; shadowed {
+					return
+				}
 				if len(e.Traversal) < 2 || e.Traversal.RootName() != "local" {
 					return
 				}
@@ -221,7 +224,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 					return
 				}
 				for _, part := range e.Parts {
-					if v := typeMismatchViolation(f.Name, part, locals); v != nil {
+					if v := typeMismatchViolation(f.Name, part, locals, iterators); v != nil {
 						violations = append(violations, *v)
 					}
 				}
@@ -291,9 +294,12 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 	return violations, nil
 }
 
-func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[string]localInfo) *Violation {
+func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[string]localInfo, iterators map[string]struct{}) *Violation {
 	ref, ok := expr.(*hclsyntax.ScopeTraversalExpr)
 	if !ok || len(ref.Traversal) < 2 || ref.Traversal.RootName() != "local" {
+		return nil
+	}
+	if _, shadowed := iterators[ref.Traversal.RootName()]; shadowed {
 		return nil
 	}
 	// local.foo.bar — attribute access on the object; leaf type is unknown, skip.
@@ -354,14 +360,11 @@ func checkCountForEach(f ParsedFile) []Violation {
 // Two scope-introducing constructs are handled:
 //
 //   - Dynamic blocks: `dynamic "X" { content { ... } }` binds X (or
-//     the value of `iterator = <name>`) inside content{}. The walker
-//     visits the block's own attributes (for_each, iterator, labels,
-//     ...) with the OUTER scope — those expressions are evaluated
-//     before the iterator is bound — then descends into content{}
-//     with the iterator name added to a fresh copy of the iterators
-//     map. Non-content sub-blocks (unusual — Terraform's grammar
-//     allows only `content`) are visited with the outer scope. See
-//     walkDynamicBlock.
+//     the value of `iterator = <name>`) for `labels` and inside `content`.
+//     `for_each` and malformed unknown attributes use the outer scope;
+//     `iterator` is a declaration and is not walked as a reference.
+//     Non-content sub-blocks (unusual — Terraform's grammar allows only
+//     `content`) are visited with the outer scope. See walkDynamicBlock.
 //
 //   - For-expressions: `[for K, V in COLL : ...]` and `{for K, V in
 //     COLL : ... => ...}` bind KeyVar and ValVar inside KeyExpr,
@@ -423,6 +426,10 @@ func walkExpressionsAt(body *hclsyntax.Body, iterators map[string]struct{}, topL
 		w.iterators = iterators
 		w.stack = w.stack[:0]
 		w.scopeContext = classifyScopeTraversalContext(inActionConfig, parentBlockType, grandparentBlockType, greatGrandparentBlockType, greatGreatGrandparentBlockType, attr.Name)
+		w.providerReferences = nil
+		if w.scopeContext == scopeTraversalProviderReference {
+			w.providerReferences = collectProviderReferences(attr.Expr, parentBlockType, grandparentBlockType, attr.Name)
+		}
 		//nolint:errcheck // Callback returns no diagnostics; we don't use hclsyntax.Walk's aggregated diagnostics.
 		hclsyntax.Walk(attr.Expr, w)
 	}
@@ -507,8 +514,6 @@ func classifyScopeTraversalContext(inActionConfig bool, parentBlockType, grandpa
 		return scopeTraversalProviderReference
 	case (parentBlockType == "resource" || parentBlockType == "data" || parentBlockType == "ephemeral" || parentBlockType == "action" || parentBlockType == "import") && attrName == "provider":
 		return scopeTraversalProviderReference
-	case parentBlockType == "terraform" && attrName == "required_providers":
-		return scopeTraversalProviderReference
 	case parentBlockType == "required_providers" && grandparentBlockType == "terraform":
 		return scopeTraversalProviderReference
 	case parentBlockType == "provisioner" && (grandparentBlockType == "resource" || grandparentBlockType == "removed") && attrName == "on_failure":
@@ -533,6 +538,90 @@ func classifyScopeTraversalContext(inActionConfig bool, parentBlockType, grandpa
 	}
 }
 
+func collectProviderReferences(expr hclsyntax.Expression, parentBlockType, grandparentBlockType, attrName string) map[*hclsyntax.ScopeTraversalExpr]struct{} {
+	refs := make(map[*hclsyntax.ScopeTraversalExpr]struct{})
+	switch {
+	case parentBlockType == "module" && attrName == "providers":
+		obj, ok := expr.(*hclsyntax.ObjectConsExpr)
+		if !ok {
+			return refs
+		}
+		for _, item := range obj.Items {
+			keyExpr := item.KeyExpr
+			if key, ok := keyExpr.(*hclsyntax.ObjectConsKeyExpr); ok {
+				keyExpr = key.Wrapped
+			}
+			addProviderReference(refs, keyExpr, false, "")
+			addProviderReference(refs, item.ValueExpr, true, "")
+		}
+	case parentBlockType == "required_providers" && grandparentBlockType == "terraform":
+		obj, ok := expr.(*hclsyntax.ObjectConsExpr)
+		if !ok {
+			return refs
+		}
+		for _, item := range obj.Items {
+			if objectKeyName(item.KeyExpr) != "configuration_aliases" {
+				continue
+			}
+			tuple, ok := item.ValueExpr.(*hclsyntax.TupleConsExpr)
+			if !ok {
+				continue
+			}
+			for _, alias := range tuple.Exprs {
+				addProviderReference(refs, alias, false, attrName)
+			}
+		}
+	default:
+		addProviderReference(refs, expr, parentBlockType != "action", "")
+	}
+	return refs
+}
+
+func addProviderReference(refs map[*hclsyntax.ScopeTraversalExpr]struct{}, expr hclsyntax.Expression, allowInstanceKey bool, expectedRoot string) {
+	switch e := expr.(type) {
+	case *hclsyntax.ScopeTraversalExpr:
+		if !isProviderTraversal(e.Traversal, allowInstanceKey, expectedRoot) {
+			return
+		}
+		refs[e] = struct{}{}
+	case *hclsyntax.IndexExpr:
+		if !allowInstanceKey {
+			return
+		}
+		collection, ok := e.Collection.(*hclsyntax.ScopeTraversalExpr)
+		if !ok || !isProviderTraversal(collection.Traversal, false, expectedRoot) || len(collection.Traversal) != 2 {
+			return
+		}
+		refs[collection] = struct{}{}
+	}
+}
+
+func isProviderTraversal(traversal hcl.Traversal, allowInstanceKey bool, expectedRoot string) bool {
+	if len(traversal) == 0 {
+		return false
+	}
+	root := traversal.RootName()
+	if expectedRoot != "" && root != expectedRoot {
+		return false
+	}
+	switch len(traversal) {
+	case 1:
+		return true
+	case 2:
+		_, aliasIsAttr := traversal[1].(hcl.TraverseAttr)
+		return aliasIsAttr
+	case 3:
+		if !allowInstanceKey {
+			return false
+		}
+		_, aliasIsAttr := traversal[1].(hcl.TraverseAttr)
+		_, keyIsIndex := traversal[2].(hcl.TraverseIndex)
+		return aliasIsAttr && keyIsIndex
+	default:
+		return false
+	}
+}
+
 func skipScopeTraversalForContext(expr *hclsyntax.ScopeTraversalExpr, scopeContext scopeTraversalContext) bool {
 	if len(expr.Traversal) == 0 {
 		return false
@@ -550,16 +639,6 @@ func skipScopeTraversalForContext(expr *hclsyntax.ScopeTraversalExpr, scopeConte
 	case scopeTraversalRelativePath:
 		return true
 	case scopeTraversalProviderReference:
-		if _, knownTypo := scopeRootTypo[root]; knownTypo {
-			return false
-		}
-		if len(expr.Traversal) == 1 {
-			return true
-		}
-		if len(expr.Traversal) == 2 {
-			_, aliasIsAttr := expr.Traversal[1].(hcl.TraverseAttr)
-			return aliasIsAttr
-		}
 		return false
 	case scopeTraversalProvisionerOnFailure:
 		return len(expr.Traversal) == 1 && (root == "continue" || root == "fail")
@@ -602,10 +681,11 @@ func isOpenTofuEditionKeyword(expr hclsyntax.Expression) bool {
 // wrappers by pushing the local names onto its stack. Non-wrapper
 // expression nodes just forward to fn with the current scope.
 type scopedExprWalker struct {
-	iterators    map[string]struct{}   // current in-scope iterator names
-	stack        []map[string]struct{} // saved states, one per active ChildScope frame
-	scopeContext scopeTraversalContext
-	fn           func(hclsyntax.Expression, map[string]struct{})
+	iterators          map[string]struct{}   // current in-scope iterator names
+	stack              []map[string]struct{} // saved states, one per active ChildScope frame
+	scopeContext       scopeTraversalContext
+	providerReferences map[*hclsyntax.ScopeTraversalExpr]struct{}
+	fn                 func(hclsyntax.Expression, map[string]struct{})
 }
 
 // Enter implements hclsyntax.Walker. Pushes iterator names on
@@ -621,6 +701,9 @@ func (w *scopedExprWalker) Enter(n hclsyntax.Node) hcl.Diagnostics {
 		w.stack = append(w.stack, w.iterators)
 		w.iterators = cloneIteratorsBulk(w.iterators, tn.LocalNames)
 	case *hclsyntax.ScopeTraversalExpr:
+		if _, providerReference := w.providerReferences[tn]; providerReference {
+			break
+		}
 		if !skipScopeTraversalForContext(tn, w.scopeContext) {
 			w.fn(tn, w.iterators)
 		}
@@ -673,23 +756,23 @@ func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, inA
 		return
 	}
 	iterName := dynamicIteratorName(block)
+	augmented := cloneIterators(iterators, iterName)
 
-	// Visit dynamic-level attributes (for_each, labels, iterator) with
-	// the OUTER scope — they are evaluated before the iterator is bound.
-	// Notably: the `iterator = <name>` attribute itself parses as a
-	// ScopeTraversalExpr but is a declaration, not a reference; we skip
-	// it here so E009 doesn't flag the iterator name being introduced.
+	// Dynamic for_each is evaluated before the iterator is bound, while labels
+	// and content use the current iteration context. The iterator attribute is a
+	// declaration rather than a reference and is skipped.
 	//
-	// Uses the same scoped Walker as walkExpressions so ForExpr scope
-	// (e.g. `for_each = [for x in var.list : x.id]`) is honoured inside
-	// the dynamic-block's own attribute expressions. One walker per
-	// invocation, reused across attributes (matches walkExpressions).
+	// Uses the same scoped Walker as walkExpressions so nested ForExpr scope is
+	// honoured inside each dynamic-block attribute.
 	w := &scopedExprWalker{fn: fn}
 	for _, attr := range block.Body.Attributes {
 		if attr.Name == "iterator" {
 			continue
 		}
 		w.iterators = iterators
+		if attr.Name == "labels" {
+			w.iterators = augmented
+		}
 		w.stack = w.stack[:0]
 		if inActionConfig {
 			w.scopeContext = scopeTraversalActionConfig
@@ -701,7 +784,6 @@ func walkDynamicBlock(block *hclsyntax.Block, iterators map[string]struct{}, inA
 	// Descend into sub-blocks. content{} sees the iterator; others don't
 	// (Terraform's grammar only allows content, but we tolerate other
 	// shapes without crashing).
-	augmented := cloneIterators(iterators, iterName)
 	for _, sub := range block.Body.Blocks {
 		if sub.Type == "content" {
 			walkExpressionsAt(sub.Body, augmented, false, false, inActionConfig, sub.Type, "dynamic", "", "", fn)

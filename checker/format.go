@@ -138,9 +138,11 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 }
 
 // writeFormatted atomically writes pre-formatted bytes to path.
-// Uses O_NOFOLLOW open to atomically reject symlinks and obtain real
-// permissions in one syscall (mirrors the pattern in hcl.go:parseOne).
-// Returns (true, nil) on success, (false, err) on error.
+// On Unix, O_NOFOLLOW atomically rejects a symlink during the initial open;
+// f.Stat then captures the file's mode for the replacement. The later
+// path-based Lstat/Rename sequence remains best-effort against concurrent
+// directory-entry replacement. Returns (true, nil) on success, (false, err)
+// on error.
 //
 // Atomicity tradeoff: the implementation uses CreateTemp + Rename
 // rather than an in-place truncating write. This guarantees the file is
@@ -163,8 +165,9 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 // that running `tfdry fmt` may strip those attributes on rewrite.
 func writeFormatted(path string, formatted []byte) (bool, error) {
 	// Reject symlinks and other non-regular targets before opening. Unix also
-	// combines O_NOFOLLOW with O_NONBLOCK below so a raced FIFO cannot block;
-	// Windows retains the documented best-effort race limitation.
+	// combines O_NOFOLLOW with O_NONBLOCK below so a raced FIFO cannot block and
+	// a symlink cannot pass the initial open. The later path-based Lstat/Rename
+	// sequence remains best-effort against concurrent replacement everywhere.
 	li, err := os.Lstat(path)
 	if err != nil {
 		return false, err
@@ -234,9 +237,9 @@ func writeFormatted(path string, formatted []byte) (bool, error) {
 	// following the symlink, so the symlink's target file is NOT
 	// modified — but the user-visible result is still a surprise (a
 	// regular file appears where the symlink used to be, instead of
-	// where the user thought their .tf file was). A final Lstat right
-	// before Rename closes the window and fails the operation when the
-	// race occurs.
+	// where the user thought their .tf file was). A final Lstat before
+	// Rename detects swaps that have already occurred and narrows the window,
+	// but a directory entry can still change between these two operations.
 	//
 	// Production calls leave writeFormattedBeforeRename nil; tests set
 	// it to inject the swap deterministically between this hook and the

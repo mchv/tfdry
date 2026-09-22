@@ -32,9 +32,12 @@ Each release entry groups changes under the following headings (omitted if empty
 ### Fixed
 
 - Follow symlinks to regular `.tf` / `.tofu` files for read-only module
-  loading and format checks, matching Terraform/OpenTofu, while continuing to
-  reject symlink replacement during formatting writes. Broken links now surface
-  E000 instead of silently removing configuration from analysis.
+  loading and format checks, matching Terraform/OpenTofu, while refusing paths
+  observed to be symlinks during formatting writes. Concurrent replacement
+  protection remains best-effort because the final path check and rename are
+  separate operations. Broken links in root/config scans now surface E000
+  instead of silently removing configuration from analysis; relative child
+  schema failures make E006/E007 unavailable without a child diagnostic.
 - Treat a relative child-module schema as unavailable if any selected file is
   unreadable, oversized, or unparsable, preventing false E006/E007 findings
   from partial variable maps.
@@ -44,6 +47,14 @@ Each release entry groups changes under the following headings (omitted if empty
 - Recognise Terraform action references, provisioner timing, import providers,
   and lifecycle action-trigger keywords without weakening E009/W009; E005 now
   also checks action blocks.
+- Treat provider local names as their own namespace and recognise OpenTofu
+  provider instances selected through literal or dynamic alias indices, while
+  continuing to validate selector expressions normally.
+- Honour lexical iterator shadowing in E003, E004, and W001, including
+  for-expressions and dynamic-block labels/content, without leaking scope into
+  dynamic `for_each` expressions.
+- Continue file-local E008 checks on intact files when another root-module file
+  fails to parse and cross-file semantic checks are conservatively withheld.
 - Recognise the AWS European Sovereign Cloud region `eusc-de-east-1` and ARN
   partition `aws-eusc`.
 
@@ -302,9 +313,10 @@ shipped; for the per-PR breakdown see the merged PRs in the
 - `darwin-arm64` — primary development target.
 - `linux-amd64` — primary deployment target.
 - `linux-arm64` — secondary deployment target.
-- `windows-amd64` — best-effort. The atomic-rewrite symlink rejection
-  degrades to "post-open IsRegular check" because Windows doesn't
-  honour POSIX `O_NOFOLLOW`. See `checker/nofollow_windows.go`.
+- `windows-amd64` — best-effort concurrent replacement protection. Windows
+  uses pre-replacement `Lstat` checks but lacks Unix `O_NOFOLLOW` on the initial
+  open; on every platform the final `Lstat` and `Rename` remain separate
+  path-based operations. See `checker/nofollow_windows.go`.
 
 [Unreleased]: https://github.com/mchv/tfdry/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/mchv/tfdry/compare/v0.1.1...v0.2.0

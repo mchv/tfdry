@@ -395,15 +395,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if len(files) > 0 {
 			// Semantic checks require a complete root-module view. If any selected
 			// file failed to parse or load, running on the surviving subset can
-			// turn declarations from the failed file into false E002–E009/W001
-			// findings. Parse diagnostics remain visible above; --fix may still
-			// format successfully parsed files independently.
+			// turn declarations from the failed file into false cross-file
+			// E002–E007/E009/W001 findings. Parse diagnostics remain visible;
+			// file-local E008 and --fix still operate on intact parsed files.
 			if !skipRun && len(parseViolations) == 0 {
 				runViolations, err := checker.Run(ctx, files, runFilter, d)
 				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 					return code
 				}
 				dirViolations = append(dirViolations, runViolations...)
+			} else if !skipRun && runFilter.Enabled("E008") {
+				// Formatting is file-local and remains valid on the successfully
+				// parsed subset even when semantic checks need a complete module.
+				formatViolations, err := checker.CheckFormat(ctx, files)
+				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+					return code
+				}
+				dirViolations = append(dirViolations, formatViolations...)
 			}
 
 			if shouldFix {
@@ -635,8 +643,9 @@ func runFmt(ctx context.Context, stdout, stderr io.Writer, path string, check, r
 		return code
 	}
 	// Read-only checks may follow a symlink to a regular file, matching
-	// Terraform/OpenTofu. Write mode and symlinked directories remain rejected:
-	// writes must never replace a link, and WalkDir does not recurse into one.
+	// Terraform/OpenTofu. Write mode rejects paths observed as links, and
+	// symlinked directories remain unsupported because WalkDir does not recurse
+	// into them.
 	pathClean := filepath.Clean(path)
 	if li, err := os.Lstat(pathClean); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		target, targetErr := os.Stat(pathClean)
@@ -770,8 +779,9 @@ func readRegularFile(path string) ([]byte, error) {
 // individual files: prints the path on stdout when dirty, rewrites in-place
 // unless `check` is set, and uses exit code 3 only when -check finds dirt.
 //
-// Read-only checks follow symlinks to regular files. Write mode rejects them
-// before reading so the later atomic rename cannot replace the link itself.
+// Read-only checks follow symlinks to regular files. Write mode rejects a link
+// observed before reading; concurrent replacement after the final write-path
+// check remains best-effort as documented in SECURITY.md.
 func runFmtFile(ctx context.Context, stdout, stderr io.Writer, path string, check bool) int {
 	if code, ok := handleFatalErr(ctx.Err(), stderr, "tfdry fmt"); ok {
 		return code
