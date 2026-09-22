@@ -768,11 +768,11 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
 			wantCode: "E009",
 		},
 		{
-			name: "invalid import provider traversal",
+			name: "invalid deep import provider traversal",
 			src: `import {
   to       = aws_s3_bucket.example
   id       = "example"
-  provider = vars.bad
+  provider = vars.bad.extra
 }`,
 			wantCode: "E009",
 		},
@@ -808,9 +808,9 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
 			wantCode: "W009",
 		},
 		{
-			name: "invalid action provider traversal",
+			name: "invalid deep action provider traversal",
 			src: `action "aws_lambda_invoke" "example" {
-  provider = vars.bad
+  provider = vars.bad.extra
   config {}
 }`,
 			wantCode: "E009",
@@ -1177,5 +1177,160 @@ func TestE009_ContextualReferences_ExemptionsRemainNarrow(t *testing.T) {
 				t.Fatalf("expected %s, got %v", tc.wantCode, codes(vs))
 			}
 		})
+	}
+}
+
+func TestE009_ProviderLocalNamesAndInstances_NoFalsePositive(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "typo-like provider local name and alias",
+			src: `terraform {
+  required_providers {
+    vars = {
+      source                = "hashicorp/random"
+      configuration_aliases = [vars.secondary]
+    }
+  }
+}
+provider "vars" {}
+provider "vars" { alias = "secondary" }
+resource "random_integer" "default" {
+  provider = vars
+  min      = 1
+  max      = 10
+}
+resource "random_integer" "aliased" {
+  provider = vars.secondary
+  min      = 1
+  max      = 10
+}
+module "child" {
+  source = "./child"
+  providers = {
+    vars = vars.secondary
+  }
+}`,
+		},
+		{
+			name: "literal indexed provider instance",
+			src: `provider "aws" {
+  alias    = "by_region"
+  for_each = toset(["eu-west-1"])
+  region   = each.key
+}
+resource "aws_vpc" "example" {
+  provider   = aws.by_region["eu-west-1"]
+  cidr_block = "10.0.0.0/16"
+}`,
+		},
+		{
+			name: "dynamic indexed provider instances in resource and module",
+			src: `variable "regions" { type = map(string) }
+provider "aws" {
+  alias    = "by_region"
+  for_each = var.regions
+  region   = each.key
+}
+resource "aws_vpc" "example" {
+  for_each   = var.regions
+  provider   = aws.by_region[each.key]
+  cidr_block = each.value
+}
+module "child" {
+  source   = "./child"
+  for_each = var.regions
+  providers = {
+    aws = aws.by_region[each.key]
+  }
+}`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tofu": tc.src})
+			assertNoScopeRootDiag(t, vs, tc.name)
+		})
+	}
+}
+
+func TestE009_ProviderSelectorExpressionsRemainChecked(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		src      string
+		wantCode string
+	}{
+		{
+			name: "known typo in resource provider selector",
+			src: `resource "aws_vpc" "example" {
+  provider   = aws.by_region[vars.bad]
+  cidr_block = "10.0.0.0/16"
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "unknown root in resource provider selector",
+			src: `resource "aws_vpc" "example" {
+  provider   = aws.by_region[mystery.key]
+  cidr_block = "10.0.0.0/16"
+}`,
+			wantCode: "W009",
+		},
+		{
+			name: "undefined local in resource provider selector",
+			src: `resource "aws_vpc" "example" {
+  provider   = aws.by_region[local.missing]
+  cidr_block = "10.0.0.0/16"
+}`,
+			wantCode: "E003",
+		},
+		{
+			name: "known typo in module provider selector",
+			src: `module "child" {
+  source = "./child"
+  providers = {
+    aws = aws.by_region[vars.bad]
+  }
+}`,
+			wantCode: "E009",
+		},
+		{
+			name: "index without alias remains invalid",
+			src: `resource "aws_vpc" "example" {
+  provider   = aws["secondary"]
+  cidr_block = "10.0.0.0/16"
+}`,
+			wantCode: "W009",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tofu": tc.src})
+			if !hasCode(vs, tc.wantCode) {
+				t.Fatalf("expected %s, got %v", tc.wantCode, codes(vs))
+			}
+		})
+	}
+}
+
+func TestW001_ProviderSelectorLocalCountsAsUsed(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tofu": `locals { region = "eu-west-1" }
+resource "aws_vpc" "example" {
+  provider   = aws.by_region[local.region]
+  cidr_block = "10.0.0.0/16"
+}`,
+	})
+	if hasCode(vs, "W001") {
+		t.Fatalf("provider selector local must count as used, got %v", codes(vs))
 	}
 }

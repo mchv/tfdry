@@ -2621,3 +2621,137 @@ module "m" {
 		})
 	}
 }
+
+func TestForIteratorNamedLocalShadowsModuleNamespace(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "transitive module local must not drive E004",
+			src: `locals {
+  backing = ["global"]
+  value   = local.backing
+}
+output "example" {
+  value = [for local in [{ value = "ok" }] : "prefix-${local.value}"]
+}`,
+		},
+		{
+			name: "iterator without matching module local",
+			src: `output "example" {
+  value = [for local in [{ value = "ok" }] : local.value]
+}`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{"main.tf": tc.src})
+			if hasCode(vs, "E003") || hasCode(vs, "E004") {
+				t.Fatalf("shadowed iterator produced module-local diagnostics: %v", codes(vs))
+			}
+		})
+	}
+}
+
+func TestForIteratorNamedLocalDoesNotMarkModuleLocalUsed(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `locals { value = "module local" }
+output "example" {
+  value = [for local in [{ value = "iterator" }] : local.value]
+}`,
+	})
+	if !hasCode(vs, "W001") {
+		t.Fatalf("shadowed iterator incorrectly marked module local used: %v", codes(vs))
+	}
+}
+
+func TestForIteratorShadowingRestoresOuterLocalScope(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `locals { value = ["module local"] }
+output "shadowed" {
+  value = [for local in [{ value = "iterator" }] : "prefix-${local.value}"]
+}
+output "outer" {
+  value = "prefix-${local.value}"
+}`,
+	})
+	count := 0
+	for _, v := range vs {
+		if v.Code == "E004" {
+			count++
+			if v.Line != 6 {
+				t.Fatalf("E004 line = %d, want outer local use on line 6", v.Line)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("E004 count = %d, want 1; codes=%v", count, codes(vs))
+	}
+}
+
+func TestDynamicIteratorNamedLocalShadowsModuleNamespace(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `locals { value = ["module local"] }
+resource "example" "x" {
+  dynamic "setting" {
+    iterator = local
+    for_each = [{ value = "iterator" }]
+    labels   = [local.value]
+    content {
+      text = "prefix-${local.value}"
+    }
+  }
+}`,
+	})
+	if hasCode(vs, "E003") || hasCode(vs, "E004") || hasCode(vs, "E009") {
+		t.Fatalf("dynamic iterator shadow produced diagnostics: %v", codes(vs))
+	}
+	if !hasCode(vs, "W001") {
+		t.Fatalf("dynamic iterator incorrectly marked module local used: %v", codes(vs))
+	}
+}
+
+func TestDynamicLabelsUseCurrentIteratorScope(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `resource "example" "x" {
+  dynamic "setting" {
+    iterator = rule
+    for_each = [{ key = "name" }]
+    labels   = [rule.key]
+    content {
+      value = rule.key
+    }
+  }
+}`,
+	})
+	if hasCode(vs, "E009") || hasCode(vs, "W009") {
+		t.Fatalf("dynamic labels/content iterator produced scope diagnostic: %v", codes(vs))
+	}
+}
+
+func TestDynamicForEachUsesOuterLocalScope(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `locals { items = [{ value = "ok" }] }
+resource "example" "x" {
+  dynamic "setting" {
+    iterator = local
+    for_each = local.items
+    content {
+      value = local.value
+    }
+  }
+}`,
+	})
+	if hasCode(vs, "E003") || hasCode(vs, "W001") {
+		t.Fatalf("dynamic for_each did not use outer local scope correctly: %v", codes(vs))
+	}
+}

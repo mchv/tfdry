@@ -74,16 +74,13 @@ func TestWriteFormatted_SuccessPath_NoLeftoverTemp(t *testing.T) {
 	}
 }
 
-// writeFormatted must Lstat the target path immediately before
-// os.Rename, not only at the start of the function. Without this
-// defence-in-depth check, a TOCTOU race where an attacker swaps the
-// path to a symlink between the initial check and the final rename
-// would have Rename silently destroy the symlink and create a regular
-// file in its place. Adding a final Lstat catches that race and fails
-// closed.
+// writeFormatted Lstats the target path immediately before os.Rename, not
+// only at function entry. This defence-in-depth check detects the injected
+// swap before the check and refuses replacement. It narrows but does not close
+// the real Lstat/Rename race because those remain separate operations.
 //
-// The test uses the writeFormattedBeforeRename hook (production code
-// leaves it nil; tests set it to perform the swap deterministically).
+// The test uses the writeFormattedBeforeRename hook (production code leaves it
+// nil) to perform the swap deterministically before the final Lstat.
 func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test relies on POSIX symlink behaviour")
@@ -130,11 +127,10 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 
 	// Strong invariants of the defence:
 	//   1. The eventual target of the (now-)symlink must NOT have been
-	//      overwritten with the formatted content. Rename replacing the
-	//      symlink would have left `target` as a regular file (different
-	//      file from elsewhere.tf), but it could also have followed the
-	//      symlink in some implementations. Either way, otherTarget's
-	//      content must be unchanged.
+	//      overwritten with the formatted content. POSIX Rename would replace
+	//      the symlink directory entry rather than follow it; this test confirms
+	//      the injected pre-check swap aborts before either entry replacement or
+	//      target modification.
 	final, err := os.ReadFile(otherTarget)
 	if err != nil {
 		t.Fatal(err)

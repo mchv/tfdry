@@ -83,17 +83,20 @@ test suite already exercises, so a security report should ideally
 demonstrate that one of these is bypassed:
 
 - **Symlink handling** on native `.tf` / `.tofu` reads and writes.
-  Read-only module loading and format checks follow symlinks whose targets are
-  regular files, matching Terraform/OpenTofu; broken links and non-regular
-  targets surface E000 instead of disappearing from analysis. Formatting
-  writes reject symlink paths before replacement on every supported platform.
-  Unix additionally uses `O_NOFOLLOW` on the write-path open; Windows relies on
-  the pre-write `Lstat`, so its protection against a concurrent link swap is
-  best-effort.
+  Read-only configuration loading and format checks follow symlinks whose
+  targets are regular files, matching Terraform/OpenTofu. Broken links and
+  non-regular targets in root/config scans surface E000 instead of disappearing
+  from analysis; failures while inspecting a relative child module invalidate
+  its aggregate schema and suppress derived E006/E007, but do not currently
+  emit a child diagnostic in a non-recursive run. Formatting writes refuse paths observed to be symlinks or non-regular files before open
+  and again before replacement. Unix additionally protects the initial open
+  with `O_NOFOLLOW`. Because the final `Lstat` and `Rename` are separate
+  path-based operations, protection against a concurrent directory-entry swap
+  remains best-effort on every platform; `Rename` can replace a late symlink
+  entry, but does not follow it or modify its target.
 - **TOCTOU defence-in-depth** on the atomic formatting rewrite path: a
-  final `Lstat` immediately before `Rename` fails the operation if
-  the target was swapped to a symlink between the initial check and
-  the rename.
+  final `Lstat` detects non-regular replacements that occur before that check
+  and narrows, but does not close, the remaining race window before `Rename`.
 - **Trojan Source / terminal-injection** sanitisation: filenames and
   HCL diagnostic text are stripped of ANSI escapes, Bidi-override /
   isolate-control characters (Unicode Cf category), and embedded

@@ -1674,10 +1674,10 @@ func TestSkillMd_NoMisleadingPathTraversalClaim(t *testing.T) {
 		t.Error("SKILL.md should retain a Security section describing the actual posture")
 	}
 	// The symlink bullet must distinguish read-only following from write-path
-	// refusal and retain the Windows best-effort qualification for concurrent
-	// link-swap protection.
-	if !strings.Contains(s, "Windows") {
-		t.Error("SKILL.md symlink bullet must qualify Windows behaviour")
+	// refusal and state that concurrent replacement protection remains
+	// best-effort on every platform.
+	if !strings.Contains(s, "best-effort on every platform") {
+		t.Error("SKILL.md must qualify concurrent path replacement on every platform")
 	}
 	// The "never modifies files unless --fix" invariant is misleading
 	// because the `fmt` subcommand rewrites files by default (without
@@ -2760,5 +2760,23 @@ func TestRun_ParseErrorSuppressesCrossFileSemanticChecks(t *testing.T) {
 	}
 	if strings.Contains(stdout, "[E003]") {
 		t.Fatalf("partial root module produced false E003: %q", stdout)
+	}
+}
+
+func TestRun_ParseErrorStillChecksFormattingOnIntactFiles(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"broken.tf": `locals { shared = `,
+		"dirty.tf":  "locals {x=1}\n",
+	})
+	code, stdout, stderr := runCLI("--checks=E008", dir)
+	if code != 1 {
+		t.Fatalf("partial-root format run exit = %d, want 1 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "[E001]") {
+		t.Fatalf("partial-root output missing E001: %q", stdout)
+	}
+	if !strings.Contains(stdout, "[E008]") {
+		t.Fatalf("partial-root output missing E008 for intact dirty file: %q", stdout)
 	}
 }

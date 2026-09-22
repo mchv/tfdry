@@ -345,8 +345,8 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]localInfo, ch
 		// `../shared/<module>` are the standard monorepo pattern and must
 		// be checked. tfdry runs with the user's permissions on the user's
 		// own files, so a project-root boundary doesn't add a real security
-		// property — symlink rejection on each file open (O_NOFOLLOW) is
-		// the actual defence. EvalSymlinks here is used only to detect the
+		// property. Read-only child schema loading intentionally follows
+		// regular-file symlinks; EvalSymlinks here is used only to detect the
 		// self-reference case below.
 		moduleDir := filepath.Join(dir, filepath.FromSlash(source))
 		realModule, err1 := filepath.EvalSymlinks(moduleDir)
