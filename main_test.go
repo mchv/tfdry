@@ -2780,3 +2780,38 @@ func TestRun_ParseErrorStillChecksFormattingOnIntactFiles(t *testing.T) {
 		t.Fatalf("partial-root output missing E008 for intact dirty file: %q", stdout)
 	}
 }
+
+func TestRun_E008ChecksShadowedTerraformPeer(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":   "locals {value=\"terraform\"}\n",
+		"main.tofu": "locals {\n  value = \"opentofu\"\n}\n",
+	})
+	code, stdout, stderr := runCLI("--checks=E008", dir)
+	if code != 1 {
+		t.Fatalf("E008 shadowed-peer exit = %d, want 1 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "[E008] main.tf") {
+		t.Fatalf("shadowed main.tf missing E008: %q", stdout)
+	}
+}
+
+func TestRun_FixFormatsShadowedTerraformPeer(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf":   "locals {value=\"terraform\"}\n",
+		"main.tofu": "locals {\n  value = \"opentofu\"\n}\n",
+	})
+	code, stdout, stderr := runCLI("--fix", dir)
+	if code != 0 {
+		t.Fatalf("--fix shadowed-peer exit = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "locals { value = \"terraform\" }\n"
+	if string(got) != want {
+		t.Fatalf("shadowed main.tf after --fix = %q, want %q", got, want)
+	}
+}

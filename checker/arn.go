@@ -185,11 +185,12 @@ func walkARNBlocks(body *hclsyntax.Body, file string, violations *[]Violation) {
 		return
 	}
 	for _, attr := range body.Attributes {
+		attrFile := rangeFilename(attr.NameRange, file)
 		switch arnAttributeShape(attr.Name) {
 		case cidrShapeScalar:
-			checkARNScalar(file, attr, violations)
+			checkARNScalar(attrFile, attr, violations)
 		case cidrShapeList:
-			checkARNList(file, attr, violations)
+			checkARNList(attrFile, attr, violations)
 		case cidrShapeNone:
 			// Not a trigger — silently ignore.
 		}

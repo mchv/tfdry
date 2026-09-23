@@ -284,25 +284,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runFmt(ctx, stdout, stderr, dir, fmtCheck, recursive)
 	}
 
-	// When --fix is enabled, skip E008 in the initial Run pass.
-	// `checker.Run` would otherwise format every file just to emit E008,
-	// and `FixFormat` formats them again to write — doubling the
-	// hclwrite.Format work per dirty file. By disabling E008 here,
-	// FixFormat becomes the single emitter of E008 (for files it can't
-	// write — see FixFormat in checker/format.go which appends E008 alongside
-	// E000 on write failure so the actionable signal is preserved).
+	// Formatting is physical-file based, while semantic checks use OpenTofu
+	// precedence and override merging. Remove E008 from the semantic Run pass
+	// whenever enabled; CheckFormat or FixFormat handles the independently
+	// parsed physical files below.
+	shouldFormat := checksFilter.Enabled("E008")
+	shouldFix := fixFlag && shouldFormat
 	runFilter := checksFilter
-	shouldFix := fixFlag && checksFilter.Enabled("E008")
-	if shouldFix {
+	if shouldFormat {
 		runFilter = checksFilterWithout(checksFilter, "E008")
 	}
-	// CheckSet uses an empty/nil map as the implicit "all enabled"
-	// sentinel. If the user passed `--checks=E008 --fix`, removing E008
-	// from a single-element filter yields an empty CheckSet — which Run
-	// would interpret as "run everything", silently subverting the
-	// user's filter. Detect that case (originally non-empty filter that
-	// emptied out via exclusion) and skip Run entirely.
-	skipRun := shouldFix && len(checksFilter) > 0 && len(runFilter) == 0
+	// CheckSet uses an empty/nil map as the implicit "all enabled" sentinel.
+	// Removing the only selected E008 code would otherwise mean "run all".
+	skipRun := shouldFormat && len(checksFilter) > 0 && len(runFilter) == 0
 
 	// Clean the root once so path comparisons downstream are
 	// consistent. checker.ParseDir applies filepath.Clean internally,
@@ -373,53 +367,49 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return code
 		}
 
-		files, parseViolations, err := checker.ParseDir(ctx, d)
+		semanticFiles, semanticParseViolations, err := checker.ParseDir(ctx, d)
 		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 			return code
+		}
+
+		formatFiles := semanticFiles
+		parseViolations := semanticParseViolations
+		if shouldFormat {
+			var formatParseViolations []checker.Violation
+			formatFiles, formatParseViolations, err = checker.ParseDirForFormat(ctx, d)
+			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+				return code
+			}
+			parseViolations = formatParseViolations
 		}
 
 		// Parse violations (E000, E001) are always emitted — not
 		// subject to --checks filtering.
 		dirViolations := append([]checker.Violation{}, parseViolations...)
 
-		// Guard the Run and FixFormat calls behind len(files) > 0.
-		// Both are safe no-ops on empty input, but for large
-		// monorepos with many empty-of-.tf directories the
-		// function-call overhead adds up. The guard is around
-		// these two calls specifically (not the whole iteration)
-		// because parseViolations still needs to surface: a
-		// subdirectory where every .tf file failed to parse gives
-		// (files empty, parseViolations non-empty), and a directory-
-		// level E000 (unreadable dir) does the same. Dropping the
-		// iteration wholesale would swallow those signals.
-		if len(files) > 0 {
-			// Semantic checks require a complete root-module view. If any selected
-			// file failed to parse or load, running on the surviving subset can
-			// turn declarations from the failed file into false cross-file
-			// E002–E007/E009/W001 findings. Parse diagnostics remain visible;
-			// file-local E008 and --fix still operate on intact parsed files.
-			if !skipRun && len(parseViolations) == 0 {
-				runViolations, err := checker.Run(ctx, files, runFilter, d)
-				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
-					return code
-				}
-				dirViolations = append(dirViolations, runViolations...)
-			} else if !skipRun && runFilter.Enabled("E008") {
-				// Formatting is file-local and remains valid on the successfully
-				// parsed subset even when semantic checks need a complete module.
-				formatViolations, err := checker.CheckFormat(ctx, files)
-				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
-					return code
-				}
-				dirViolations = append(dirViolations, formatViolations...)
+		// Semantic checks need the precedence-selected complete module. Formatting
+		// instead remains file-local and uses every physical native-HCL file.
+		if len(semanticFiles) > 0 && !skipRun && len(semanticParseViolations) == 0 {
+			runViolations, err := checker.Run(ctx, semanticFiles, runFilter, d)
+			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+				return code
 			}
+			dirViolations = append(dirViolations, runViolations...)
+		}
 
+		if shouldFormat && len(formatFiles) > 0 {
 			if shouldFix {
-				_, fixViolations, err := checker.FixFormat(ctx, files, d)
+				_, fixViolations, err := checker.FixFormat(ctx, formatFiles, d)
 				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 					return code
 				}
 				dirViolations = append(dirViolations, fixViolations...)
+			} else {
+				formatViolations, err := checker.CheckFormat(ctx, formatFiles)
+				dirViolations = append(dirViolations, formatViolations...)
+				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+					return code
+				}
 			}
 		}
 

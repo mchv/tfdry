@@ -55,6 +55,13 @@ func openRegularFileRead(path string) (*os.File, os.FileInfo, error) {
 	return f, fi, nil
 }
 
+func rangeFilename(r hcl.Range, fallback string) string {
+	if r.Filename != "" {
+		return r.Filename
+	}
+	return fallback
+}
+
 // ParsedFile holds the parsed AST and original source for one native HCL
 // configuration file (.tf or .tofu).
 type ParsedFile struct {

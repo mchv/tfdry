@@ -153,7 +153,9 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	locals, dupViolations := buildLocalsMap(files)
+	effective := buildEffectiveConfig(files)
+	semanticFiles := effective.files
+	locals, dupViolations := buildLocalsMap(semanticFiles)
 
 	var violations []Violation
 
@@ -166,7 +168,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 	// Cache for module variable schemas — avoids re-reading the same module dir.
 	moduleCache := make(map[string]map[string]typeSchema)
 
-	for _, f := range files {
+	for _, f := range semanticFiles {
 		if err := ctx.Err(); err != nil {
 			return violations, err
 		}
@@ -190,7 +192,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 				// violation's code determines final emission.
 				if checks.Enabled("E009") || checks.Enabled("W009") {
 					if diag := ValidateScopeRoot(e, iterators); diag != nil {
-						v := scopeRootViolation(f.Name, diag)
+						v := scopeRootViolation(rangeFilename(e.SrcRange, f.Name), diag)
 						if checks.Enabled(v.Code) {
 							violations = append(violations, v)
 						}
@@ -212,7 +214,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 						violations = append(violations, Violation{
 							Code:     "E003",
 							Severity: "error",
-							File:     f.Name,
+							File:     rangeFilename(e.SrcRange, f.Name),
 							Line:     e.SrcRange.Start.Line,
 							Message:  "reference to undefined local \"" + attr.Name + "\"",
 						})
@@ -224,7 +226,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 					return
 				}
 				for _, part := range e.Parts {
-					if v := typeMismatchViolation(f.Name, part, locals, iterators); v != nil {
+					if v := typeMismatchViolation(rangeFilename(part.Range(), f.Name), part, locals, iterators); v != nil {
 						violations = append(violations, *v)
 					}
 				}
@@ -232,7 +234,7 @@ func Run(ctx context.Context, files []ParsedFile, checks CheckSet, dir string) (
 		})
 
 		if checks.Enabled("E005") {
-			violations = append(violations, checkCountForEach(f)...)
+			violations = append(violations, checkCountForEach(f, effective.sourceOrder)...)
 		}
 		if checks.Enabled("E006") || checks.Enabled("E007") {
 			violations = append(violations, checkModuleInputs(f, dir, locals, checks, moduleCache)...)
@@ -326,25 +328,41 @@ func typeMismatchViolation(file string, expr hclsyntax.Expression, locals map[st
 // checkCountForEach finds resource/data/module/action blocks with both count
 // and for_each. Terraform supports both meta-arguments individually on these
 // block types but rejects using both simultaneously.
-func checkCountForEach(f ParsedFile) []Violation {
+func checkCountForEach(f ParsedFile, sourceOrder map[string]int) []Violation {
 	var violations []Violation
 	for _, block := range f.Body.Blocks {
 		if block.Type != "resource" && block.Type != "data" && block.Type != "module" && block.Type != "action" {
 			continue
 		}
-		_, hasCount := block.Body.Attributes["count"]
-		_, hasForEach := block.Body.Attributes["for_each"]
+		countAttr, hasCount := block.Body.Attributes["count"]
+		forEachAttr, hasForEach := block.Body.Attributes["for_each"]
 		if hasCount && hasForEach {
+			culprit := laterAttribute(countAttr, forEachAttr, sourceOrder)
 			violations = append(violations, Violation{
 				Code:     "E005",
 				Severity: "error",
-				File:     f.Name,
-				Line:     block.OpenBraceRange.Start.Line,
+				File:     rangeFilename(culprit.NameRange, f.Name),
+				Line:     culprit.NameRange.Start.Line,
 				Message:  block.Type + " \"" + strings.Join(block.Labels, ".") + "\" uses both count and for_each",
 			})
 		}
 	}
 	return violations
+}
+
+func laterAttribute(a, b *hclsyntax.Attribute, sourceOrder map[string]int) *hclsyntax.Attribute {
+	aFile := a.NameRange.Filename
+	bFile := b.NameRange.Filename
+	if aFile == bFile {
+		if b.NameRange.Start.Byte > a.NameRange.Start.Byte {
+			return b
+		}
+		return a
+	}
+	if sourceOrder[bFile] > sourceOrder[aFile] {
+		return b
+	}
+	return a
 }
 
 // scopeTraversalContext identifies Terraform/OpenTofu language positions where
