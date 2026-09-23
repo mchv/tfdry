@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
 )
 
 type effectiveConfig struct {
@@ -93,6 +94,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 	}
 
 	extraFiles := make(map[string]int)
+	ownedLocalsBlocks := make(map[effectiveAttributeLocation]struct{})
 	for _, override := range overrides {
 		if override.Body == nil {
 			continue
@@ -107,7 +109,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 					if !exists {
 						continue
 					}
-					replaceEffectiveAttribute(effective, location, name, attr)
+					replaceEffectiveAttribute(effective, location, name, attr, ownedLocalsBlocks)
 				}
 				continue
 			}
@@ -177,7 +179,7 @@ func applyTerraformOverride(files []ParsedFile, locations []effectiveBlockLocati
 	replaceStorage := false
 	for _, block := range override.Body.Blocks {
 		switch block.Type {
-		case "provider_meta", "required_providers":
+		case "provider_meta", "required_providers", "encryption":
 			continue
 		case "backend", "cloud", "state_store":
 			replaceStorage = true
@@ -205,10 +207,137 @@ func applyTerraformOverride(files []ParsedFile, locations []effectiveBlockLocati
 			continue
 		case "required_providers":
 			mergeRequiredProvidersOverride(primary, block)
+		case "encryption":
+			mergeEncryptionOverride(primary, block)
 		default:
 			first.Body.Blocks = append(first.Body.Blocks, block)
 		}
 	}
+}
+
+func mergeEncryptionOverride(primary []*hclsyntax.Block, override *hclsyntax.Block) {
+	for _, terraformBlock := range primary {
+		for i, nested := range terraformBlock.Body.Blocks {
+			if nested.Type != "encryption" {
+				continue
+			}
+			terraformBlock.Body.Blocks[i] = mergeEncryptionBlock(nested, override)
+			return
+		}
+	}
+	primary[0].Body.Blocks = append(primary[0].Body.Blocks, override)
+}
+
+// mergeEncryptionBlock mirrors OpenTofu v1.12 EncryptionConfig.Merge for the
+// syntax nodes tfdry observes. Named key providers and methods merge by
+// type/name; state, plan, and remote targets retain omitted settings.
+func mergeEncryptionBlock(base, override *hclsyntax.Block) *hclsyntax.Block {
+	merged := cloneBlock(base)
+	for name, attr := range override.Body.Attributes {
+		merged.Body.Attributes[name] = attr
+	}
+	for _, nested := range override.Body.Blocks {
+		switch nested.Type {
+		case "key_provider", "method":
+			mergeNamedEncryptionBlock(merged.Body, nested)
+		case "state", "plan":
+			mergeSingletonEncryptionTarget(merged.Body, nested)
+		case "remote_state_data_sources":
+			mergeRemoteEncryptionBlock(merged.Body, nested)
+		}
+	}
+	return merged
+}
+
+func mergeNamedEncryptionBlock(body *hclsyntax.Body, override *hclsyntax.Block) {
+	for i, existing := range body.Blocks {
+		if existing.Type == override.Type && sameBlockLabels(existing.Labels, override.Labels) {
+			merged := mergeNestedBlock(existing, override)
+			if existing.Type == "key_provider" {
+				if alias, exists := existing.Body.Attributes["encrypted_metadata_alias"]; exists {
+					merged.Body.Attributes["encrypted_metadata_alias"] = alias
+				} else {
+					delete(merged.Body.Attributes, "encrypted_metadata_alias")
+				}
+			}
+			body.Blocks[i] = merged
+			return
+		}
+	}
+	body.Blocks = append(body.Blocks, override)
+}
+
+func mergeSingletonEncryptionTarget(body *hclsyntax.Body, override *hclsyntax.Block) {
+	for i, existing := range body.Blocks {
+		if existing.Type == override.Type {
+			body.Blocks[i] = mergeEncryptionTarget(existing, override)
+			return
+		}
+	}
+	body.Blocks = append(body.Blocks, override)
+}
+
+func mergeEncryptionTarget(base, override *hclsyntax.Block) *hclsyntax.Block {
+	merged := mergeNestedBlock(base, override)
+	baseEnforced, baseIsBool := literalBoolAttribute(base.Body.Attributes["enforced"])
+	overrideEnforced, overrideIsBool := literalBoolAttribute(override.Body.Attributes["enforced"])
+	if baseIsBool && baseEnforced && (!overrideIsBool || !overrideEnforced) {
+		merged.Body.Attributes["enforced"] = base.Body.Attributes["enforced"]
+	}
+	return merged
+}
+
+func mergeRemoteEncryptionBlock(body *hclsyntax.Body, override *hclsyntax.Block) {
+	for i, existing := range body.Blocks {
+		if existing.Type != "remote_state_data_sources" {
+			continue
+		}
+		merged := cloneBlock(existing)
+		for _, target := range override.Body.Blocks {
+			switch target.Type {
+			case "default":
+				mergeSingletonEncryptionTarget(merged.Body, target)
+			case "remote_state_data_source":
+				mergeNamedRemoteTarget(merged.Body, target)
+			}
+		}
+		body.Blocks[i] = merged
+		return
+	}
+	body.Blocks = append(body.Blocks, override)
+}
+
+func mergeNamedRemoteTarget(body *hclsyntax.Body, override *hclsyntax.Block) {
+	for i, existing := range body.Blocks {
+		if existing.Type == override.Type && sameBlockLabels(existing.Labels, override.Labels) {
+			body.Blocks[i] = mergeEncryptionTarget(existing, override)
+			return
+		}
+	}
+	body.Blocks = append(body.Blocks, override)
+}
+
+func literalBoolAttribute(attr *hclsyntax.Attribute) (result, valid bool) {
+	if attr == nil {
+		return false, false
+	}
+	value, diags := attr.Expr.Value(nil)
+	if diags.HasErrors() || value.Type() != cty.Bool || !value.IsKnown() || value.IsNull() {
+		return false, false
+	}
+	return value.True(), true
+}
+
+func sameBlockLabels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeRequiredProvidersOverride(primary []*hclsyntax.Block, override *hclsyntax.Block) {
@@ -286,10 +415,13 @@ func allowOverrideOnlyBlock(block *hclsyntax.Block) bool {
 	return false
 }
 
-func replaceEffectiveAttribute(files []ParsedFile, location effectiveAttributeLocation, name string, attr *hclsyntax.Attribute) {
-	block := cloneBlock(files[location.file].Body.Blocks[location.block])
-	block.Body.Attributes[name] = attr
-	files[location.file].Body.Blocks[location.block] = block
+func replaceEffectiveAttribute(files []ParsedFile, location effectiveAttributeLocation, name string, attr *hclsyntax.Attribute, owned map[effectiveAttributeLocation]struct{}) {
+	if _, alreadyOwned := owned[location]; !alreadyOwned {
+		block := cloneBlock(files[location.file].Body.Blocks[location.block])
+		files[location.file].Body.Blocks[location.block] = block
+		owned[location] = struct{}{}
+	}
+	files[location.file].Body.Blocks[location.block].Body.Attributes[name] = attr
 }
 
 func mergeTopLevelBlock(base, override *hclsyntax.Block) *hclsyntax.Block {

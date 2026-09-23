@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -100,6 +101,65 @@ func BenchmarkParseDir(b *testing.B) {
 	}
 }
 
+func BenchmarkParseDirViews(b *testing.B) {
+	for _, basenames := range []int{1, 10, 50} {
+		for _, paired := range []bool{false, true} {
+			name := fmt.Sprintf("basenames=%d/paired=%t", basenames, paired)
+			b.Run(name, func(b *testing.B) {
+				dir := b.TempDir()
+				for i := range basenames {
+					base := fmt.Sprintf("file_%03d", i)
+					if err := os.WriteFile(filepath.Join(dir, base+".tf"), []byte("locals { value = \"terraform\" }\n"), 0o644); err != nil {
+						b.Fatal(err)
+					}
+					if paired {
+						if err := os.WriteFile(filepath.Join(dir, base+".tofu"), []byte("locals { value = \"opentofu\" }\n"), 0o644); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				semanticFiles, semanticViolations, err := ParseDir(context.Background(), dir)
+				if err != nil || len(semanticViolations) != 0 {
+					b.Fatalf("ParseDir: err=%v violations=%v", err, semanticViolations)
+				}
+				physicalFiles, physicalViolations, err := ParseDirForFormat(context.Background(), dir)
+				if err != nil || len(physicalViolations) != 0 {
+					b.Fatalf("ParseDirForFormat: err=%v violations=%v", err, physicalViolations)
+				}
+				views, err := ParseDirViews(context.Background(), dir)
+				if err != nil || len(views.PhysicalViolations) != 0 || len(views.SemanticViolations) != 0 {
+					b.Fatalf("ParseDirViews: err=%v physical=%v semantic=%v", err, views.PhysicalViolations, views.SemanticViolations)
+				}
+				if len(semanticFiles) != len(views.SemanticFiles) || len(physicalFiles) != len(views.PhysicalFiles) {
+					b.Fatalf("view size mismatch: two-pass=%d/%d one-pass=%d/%d", len(semanticFiles), len(physicalFiles), len(views.SemanticFiles), len(views.PhysicalFiles))
+				}
+				b.Run("two-pass", func(b *testing.B) {
+					b.ReportAllocs()
+					b.ReportMetric(float64(len(physicalFiles)), "physical/op")
+					b.ReportMetric(float64(len(semanticFiles)), "semantic/op")
+					for range b.N {
+						semanticFiles, semanticViolations, _ := ParseDir(context.Background(), dir)
+						physicalFiles, physicalViolations, _ := ParseDirForFormat(context.Background(), dir)
+						sink = semanticFiles
+						sink = semanticViolations
+						sink = physicalFiles
+						sink = physicalViolations
+					}
+				})
+				b.Run("one-pass", func(b *testing.B) {
+					b.ReportAllocs()
+					b.ReportMetric(float64(len(views.PhysicalFiles)), "physical/op")
+					b.ReportMetric(float64(len(views.SemanticFiles)), "semantic/op")
+					for range b.N {
+						views, _ := ParseDirViews(context.Background(), dir)
+						sink = views
+					}
+				})
+			})
+		}
+	}
+}
+
 // ── buildLocalsMap: parameterised by local count ──────────────────────────────
 // Use: benchstat -col /locals results.txt
 
@@ -150,6 +210,51 @@ resource "example" "x" { value = "base" }
 	}
 }
 
+func BenchmarkBuildEffectiveConfigLocals(b *testing.B) {
+	for _, locals := range []int{10, 100, 1000} {
+		replacementCases := []int{1, max(1, locals/10), locals}
+		seen := make(map[int]struct{}, len(replacementCases))
+		for _, replacements := range replacementCases {
+			if _, duplicate := seen[replacements]; duplicate {
+				continue
+			}
+			seen[replacements] = struct{}{}
+			name := fmt.Sprintf("locals=%d/replaced=%d", locals, replacements)
+			b.Run(name, func(b *testing.B) {
+				dir := b.TempDir()
+				var primary, override strings.Builder
+				primary.WriteString("locals {\n")
+				override.WriteString("locals {\n")
+				for i := range locals {
+					fmt.Fprintf(&primary, "  value_%04d = \"base-%d\"\n", i, i)
+					if i < replacements {
+						fmt.Fprintf(&override, "  value_%04d = \"override-%d\"\n", i, i)
+					}
+				}
+				primary.WriteString("}\n")
+				override.WriteString("}\n")
+				if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(primary.String()), 0o644); err != nil {
+					b.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "override.tf"), []byte(override.String()), 0o644); err != nil {
+					b.Fatal(err)
+				}
+				files, violations, err := ParseDir(context.Background(), dir)
+				if err != nil || len(violations) != 0 {
+					b.Fatalf("ParseDir: err=%v violations=%v", err, violations)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				b.ReportMetric(float64(locals), "locals/op")
+				b.ReportMetric(float64(replacements), "replaced/op")
+				for range b.N {
+					effectiveConfigSink = buildEffectiveConfig(files)
+				}
+			})
+		}
+	}
+}
+
 // ── Run (all checks): parameterised by file count ─────────────────────────────
 // Isolates CPU-only cost (files pre-parsed). Use: benchstat -col /files results.txt
 
@@ -169,9 +274,9 @@ func BenchmarkRun(b *testing.B) {
 	}
 }
 
-// ── Full pipeline (ParseDir + Run): end-to-end cost ───────────────────────────
+// ── Checker pipeline (ParseDir + Run; excludes CLI/output) ────────────────────
 
-func BenchmarkPipeline(b *testing.B) {
+func BenchmarkCheckerPipeline(b *testing.B) {
 	for _, files := range []int{0, 5, 10, 50} {
 		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
 			dir := tfDir(b, files, 10)

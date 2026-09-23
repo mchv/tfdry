@@ -923,3 +923,123 @@ func TestInertOverridePreservesAllPrimaryTerraformBlocks(t *testing.T) {
 		})
 	}
 }
+
+func TestOverrideEncryptionRetainsOmittedDefinitions(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tofu": `locals {
+  passphrase = "correct-horse-battery-staple"
+}
+terraform {
+  encryption {
+    key_provider "pbkdf2" "main" {
+      passphrase = local.passphrase
+    }
+    method "aes_gcm" "main" {
+      keys = key_provider.pbkdf2.main
+    }
+    state {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+		"override.tofu": `terraform {
+  encryption {
+    state {
+      enforced = true
+    }
+  }
+}`,
+	})
+	if hasCode(vs, "W001") || hasCode(vs, "W009") {
+		t.Fatalf("encryption override discarded retained definitions: %v", codes(vs))
+	}
+}
+
+func TestOverrideEncryptionRetainsBaseDiagnostics(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tofu": `terraform {
+  encryption {
+    key_provider "pbkdf2" "main" {
+      passphrase = vars.bad
+    }
+    method "aes_gcm" "main" {
+      keys = key_provider.pbkdf2.main
+    }
+    state {
+      method = method.aes_gcm.main
+    }
+  }
+}`,
+		"override.tofu": `terraform {
+  encryption {
+    state {
+      enforced = true
+    }
+  }
+}`,
+	})
+	if !hasCode(vs, "E009") {
+		t.Fatalf("retained key provider diagnostic disappeared: %v", codes(vs))
+	}
+}
+
+func TestOverrideEncryptionMergesNamedKeyProvider(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tofu": `terraform {
+  encryption {
+    key_provider "pbkdf2" "main" {
+      passphrase = vars.bad
+    }
+  }
+}`,
+		"override.tofu": `terraform {
+  encryption {
+    key_provider "pbkdf2" "main" {
+      passphrase = "replacement"
+    }
+  }
+}`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("named key provider override did not replace supplied field: %v", codes(vs))
+	}
+}
+
+func TestOverrideEncryptionRetainsRemoteTargets(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tofu": `terraform {
+  encryption {
+    remote_state_data_sources {
+      default {
+        method = vars.bad
+      }
+      remote_state_data_source "archive" {
+        method = vars.other
+      }
+    }
+  }
+}`,
+		"override.tofu": `terraform {
+  encryption {
+    remote_state_data_sources {
+      remote_state_data_source "new" {
+        method = method.aes_gcm.main
+      }
+    }
+  }
+}`,
+	})
+	count := 0
+	for _, violation := range vs {
+		if violation.Code == "E009" {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("retained remote target E009 count = %d, want 2; codes=%v", count, codes(vs))
+	}
+}

@@ -286,8 +286,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	// Formatting is physical-file based, while semantic checks use OpenTofu
 	// precedence and override merging. Remove E008 from the semantic Run pass
-	// whenever enabled; CheckFormat or FixFormat handles the independently
-	// parsed physical files below.
+	// whenever enabled; one shared directory load supplies both the semantic
+	// view and the physical files consumed by CheckFormat or FixFormat below.
 	shouldFormat := checksFilter.Enabled("E008")
 	shouldFix := fixFlag && shouldFormat
 	runFilter := checksFilter
@@ -367,20 +367,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return code
 		}
 
-		semanticFiles, semanticParseViolations, err := checker.ParseDir(ctx, d)
-		if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
-			return code
-		}
-
-		formatFiles := semanticFiles
-		parseViolations := semanticParseViolations
+		var semanticFiles, formatFiles []checker.ParsedFile
+		var semanticParseViolations, parseViolations []checker.Violation
 		if shouldFormat {
-			var formatParseViolations []checker.Violation
-			formatFiles, formatParseViolations, err = checker.ParseDirForFormat(ctx, d)
+			views, err := checker.ParseDirViews(ctx, d)
 			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 				return code
 			}
-			parseViolations = formatParseViolations
+			semanticFiles = views.SemanticFiles
+			semanticParseViolations = views.SemanticViolations
+			formatFiles = views.PhysicalFiles
+			parseViolations = views.PhysicalViolations
+		} else {
+			var err error
+			semanticFiles, semanticParseViolations, err = checker.ParseDir(ctx, d)
+			if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
+				return code
+			}
+			formatFiles = semanticFiles
+			parseViolations = semanticParseViolations
 		}
 
 		// Parse violations (E000, E001) are always emitted — not
