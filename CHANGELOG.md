@@ -34,8 +34,12 @@ Each release entry groups changes under the following headings (omitted if empty
   blocks retain omitted attributes and replace supplied attributes/nested block
   types, with field-aware lifecycle and per-provider `required_providers`
   merging plus mutually exclusive backend/cloud/state-store replacement.
-  Relative child-module schemas use the same projection. Formatting
-  continues to operate on every physical native-HCL file independently.
+  OpenTofu encryption overrides merge named key providers/methods and retain
+  omitted state, plan, fallback, and remote-target settings. Relative
+  child-module schemas use the same projection. The default CLI parses each
+  physical file once and derives semantic/formatting views from that result;
+  formatting continues to operate on every physical native-HCL file
+  independently.
 
 ### Fixed
 

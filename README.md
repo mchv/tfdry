@@ -213,8 +213,10 @@ analysis, matching OpenTofu's module-loading precedence rule. Files with
 different basenames are combined into the same module regardless of extension.
 E008 and `--fix` remain physical-file operations: they inspect or rewrite every
 `.tf` and `.tofu` file independently, including shadowed same-basename peers
-and override files. JSON configurations (`.tf.json` and `.tofu.json`) are not
-currently supported.
+and override files. The default CLI parses each physical file once and projects
+both views from that recorded result, so parse failures and semantic gating
+cannot disagree after a concurrent rewrite. JSON configurations (`.tf.json`
+and `.tofu.json`) are not currently supported.
 
 Terraform `override.tf` / `*_override.tf` files and OpenTofu's corresponding
 `.tofu` forms are applied after primary files in lexicographic order. Semantic
@@ -223,9 +225,12 @@ matching top-level blocks retain omitted arguments, supplied arguments replace
 prior values, and supplied nested block types replace their prior peers.
 Terraform's documented specials remain field-aware: lifecycle arguments merge
 individually, `required_providers` merges by provider local name, and
-backend/cloud/state-store selections replace one another. Relative child-module variable schemas use the same projection. Invalid
-unmatched or forbidden override constructs remain Terraform/OpenTofu semantic
-errors rather than new tfdry diagnostic codes.
+backend/cloud/state-store selections replace one another. OpenTofu encryption
+configuration merges key providers and methods by type/name and retains omitted
+state, plan, fallback, and remote-state target settings. Relative child-module
+variable schemas use the same projection. Invalid unmatched or forbidden
+override constructs remain Terraform/OpenTofu semantic errors rather than new
+tfdry diagnostic codes.
 
 The `fmt` subcommand is a native-HCL replacement for `terraform fmt` and
 `tofu fmt`. Like those formatters, directory and recursive runs format every

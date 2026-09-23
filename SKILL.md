@@ -14,11 +14,13 @@ For semantic checks, `name.tofu` takes precedence over a same-basename
 files are analysed together as one module. Valid `override.tf`,
 `*_override.tf`, `override.tofu`, and `*_override.tofu` files are applied after
 primary files in lexicographic order; semantic checks use the merged effective
-configuration, including relative child variable schemas. E008, `--fix`, and
-the standalone `fmt` subcommand instead inspect or rewrite every native
-physical file independently, including override files and shadowed
-same-basename peers. JSON configurations (`.tf.json` and `.tofu.json`) are not
-supported.
+configuration, including relative child variable schemas. OpenTofu encryption
+overrides merge named key providers/methods and retain omitted target settings.
+E008, `--fix`, and the standalone `fmt` subcommand instead inspect or rewrite
+every native physical file independently, including override files and shadowed
+same-basename peers. The default CLI parses each physical file once and projects
+both semantic and physical views from that result. JSON configurations
+(`.tf.json` and `.tofu.json`) are not supported.
 
 ## Invariants
 

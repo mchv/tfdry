@@ -70,6 +70,22 @@ type ParsedFile struct {
 	Src  []byte // original file bytes, used for format checking
 }
 
+// DirParseViews contains two projections of one physical directory load.
+// PhysicalFiles includes every successfully parsed native-HCL file; SemanticFiles
+// applies OpenTofu same-basename precedence using filenames, regardless of
+// parse success. Files present in both views share Body and Src storage.
+type DirParseViews struct {
+	PhysicalFiles      []ParsedFile
+	PhysicalViolations []Violation
+	SemanticFiles      []ParsedFile
+	SemanticViolations []Violation
+}
+
+type dirParseOps struct {
+	readDir  func(string) ([]os.DirEntry, error)
+	parseOne func(string, os.DirEntry) parseResult
+}
+
 // nativeConfigEntries selects the native-HCL Terraform/OpenTofu files from a
 // directory listing. OpenTofu's loading contract gives a .tofu file precedence
 // over a same-basename .tf file (main.tofu shadows main.tf); otherwise distinct
@@ -161,6 +177,58 @@ func collectResults(results []parseResult) ([]ParsedFile, []Violation) {
 	return files, violations
 }
 
+// ParseDirViews parses every physical native-HCL file exactly once and returns
+// both the physical formatting view and the precedence-selected semantic view.
+func ParseDirViews(ctx context.Context, dir string) (DirParseViews, error) {
+	return parseDirViewsWith(ctx, dir, dirParseOps{readDir: os.ReadDir, parseOne: parseOne})
+}
+
+func parseDirViewsWith(ctx context.Context, dir string, ops dirParseOps) (DirParseViews, error) {
+	if err := ctx.Err(); err != nil {
+		return DirParseViews{}, err
+	}
+	dir = filepath.Clean(dir)
+	entries, err := ops.readDir(dir)
+	if err != nil {
+		violation := Violation{Code: "E000", Severity: "error", File: dir, Message: fmt.Sprintf("cannot read directory: %v", err)}
+		return DirParseViews{
+			PhysicalViolations: []Violation{violation},
+			SemanticViolations: []Violation{violation},
+		}, nil
+	}
+
+	physicalEntries := allNativeConfigEntries(entries)
+	semanticNames := make(map[string]struct{})
+	for _, entry := range nativeConfigEntries(entries) {
+		semanticNames[entry.Name()] = struct{}{}
+	}
+	results, parseErr := parseConfigEntries(ctx, dir, physicalEntries, ops.parseOne)
+	views := projectDirParseViews(physicalEntries, results, semanticNames)
+	return views, parseErr
+}
+
+func projectDirParseViews(entries []os.DirEntry, results []parseResult, semanticNames map[string]struct{}) DirParseViews {
+	var views DirParseViews
+	for i, entry := range entries {
+		if i >= len(results) {
+			break
+		}
+		result := results[i]
+		views.PhysicalViolations = append(views.PhysicalViolations, result.violations...)
+		if result.file != nil {
+			views.PhysicalFiles = append(views.PhysicalFiles, *result.file)
+		}
+		if _, semantic := semanticNames[entry.Name()]; !semantic {
+			continue
+		}
+		views.SemanticViolations = append(views.SemanticViolations, result.violations...)
+		if result.file != nil {
+			views.SemanticFiles = append(views.SemanticFiles, *result.file)
+		}
+	}
+	return views
+}
+
 // ParseDir parses native-HCL .tf and .tofu files in dir concurrently, applying
 // OpenTofu's same-basename precedence rule. Returns parsed files,
 // any syntax/infrastructure violations, and a non-nil error if ctx was
@@ -207,72 +275,48 @@ func parseDir(ctx context.Context, dir string, applyTofuPrecedence bool) ([]Pars
 		configEntries = allNativeConfigEntries(entries)
 	}
 
-	results := make([]parseResult, len(configEntries))
+	results, parseErr := parseConfigEntries(ctx, dir, configEntries, parseOne)
+	files, violations := collectResults(results)
+	return files, violations, parseErr
+}
+
+func parseConfigEntries(ctx context.Context, dir string, entries []os.DirEntry, parse func(string, os.DirEntry) parseResult) ([]parseResult, error) {
+	results := make([]parseResult, len(entries))
 
 	// Sequential fallback for small directories: goroutine setup + scheduling
-	// overhead exceeds the parallelism win below this threshold. Typical
-	// Terraform/OpenTofu modules have 1-5 configuration files, so this is the
-	// common case.
+	// overhead exceeds the parallelism win below this threshold.
 	const parallelThreshold = 4
-	if len(configEntries) <= parallelThreshold {
-		for i, e := range configEntries {
+	if len(entries) <= parallelThreshold {
+		for i, entry := range entries {
 			if err := ctx.Err(); err != nil {
-				// Return what we've parsed so far rather than discarding it.
-				files, violations := collectResults(results[:i])
-				return files, violations, err
+				return results[:i], err
 			}
-			results[i] = parseOne(dir, e)
+			results[i] = parse(dir, entry)
 		}
-	} else {
-		// errgroup.WithContext gives each goroutine a derived ctx; when the
-		// parent ctx is cancelled the workers see it and we surface the
-		// cancellation through g.Wait().
-		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(runtime.NumCPU() * 2)
-		for i, e := range configEntries {
-			// Pre-dispatch cancel check. Without this, g.Go below
-			// blocks the dispatcher on the SetLimit semaphore for every
-			// remaining file even after cancellation has fired —
-			// e.g. with 10 000 files and cancel at file 100, we'd still
-			// spawn ~9 900 doomed goroutines that immediately return.
-			// Checking here lets us break the dispatcher loop early.
-			// The worker's own gctx.Err() check below stays for the
-			// race between dispatcher's read and the worker's start.
-			if err := gctx.Err(); err != nil {
-				break
-			}
-			g.Go(func() error {
-				if err := gctx.Err(); err != nil {
-					return err
-				}
-				results[i] = parseOne(dir, e)
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			// Workers that ran to completion before the cancellation
-			// populated their slot in results; surface those partial
-			// results rather than dropping them on the floor.
-			files, violations := collectResults(results)
-			return files, violations, err
-		}
-		// Dispatcher break path: if the per-iteration gctx.Err() check
-		// fires BEFORE any g.Go call (immediate cancellation as the
-		// concurrent branch is entered), no workers run, so g.Wait
-		// has nothing to surface and returns nil. Without this guard
-		// ParseDir would return (partial files, no E000, nil err)
-		// even though the contract documented above says cancellation
-		// must propagate as ctx.Err(). Explicitly surface it here so
-		// the early-cancel case behaves identically to the
-		// mid-execution case.
-		if err := ctx.Err(); err != nil {
-			files, violations := collectResults(results)
-			return files, violations, err
-		}
+		return results, nil
 	}
 
-	files, violations := collectResults(results)
-	return files, violations, nil
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.NumCPU() * 2)
+	for i, entry := range entries {
+		if err := gctx.Err(); err != nil {
+			break
+		}
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			results[i] = parse(dir, entry)
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return results, err
+	}
+	if err := ctx.Err(); err != nil {
+		return results, err
+	}
+	return results, nil
 }
 
 func parseOne(dir string, e os.DirEntry) parseResult {
