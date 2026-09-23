@@ -142,7 +142,7 @@ func checkBlockTypo(f ParsedFile) []Violation {
 			if !isTypo {
 				continue
 			}
-			violations = append(violations, blockTypoViolation(f.Name, child, resourceType, correct))
+			violations = append(violations, blockTypoViolation(rangeFilename(child.TypeRange, f.Name), child, resourceType, correct))
 		}
 	}
 	return violations

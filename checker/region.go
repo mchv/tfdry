@@ -148,7 +148,7 @@ func walkRegionBlocks(body *hclsyntax.Body, file string, awsContext bool, violat
 			if regionTriggers[attr.Name] != cidrShapeScalar {
 				continue
 			}
-			checkRegionScalar(file, attr, violations)
+			checkRegionScalar(rangeFilename(attr.NameRange, file), attr, violations)
 		}
 	}
 	for _, block := range body.Blocks {

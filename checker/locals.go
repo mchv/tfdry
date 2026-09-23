@@ -44,11 +44,12 @@ func buildLocalsMap(files []ParsedFile) (map[string]localInfo, []Violation) {
 				continue
 			}
 			for name, attr := range block.Body.Attributes {
+				attrFile := rangeFilename(attr.NameRange, f.Name)
 				if existing, ok := locals[name]; ok {
 					violations = append(violations, Violation{
 						Code:     "E002",
 						Severity: "error",
-						File:     f.Name,
+						File:     attrFile,
 						Line:     attr.NameRange.Start.Line,
 						Message:  "duplicate local \"" + name + "\", first defined at " + existing.File + ":" + strconv.Itoa(existing.Line),
 					})
@@ -57,7 +58,7 @@ func buildLocalsMap(files []ParsedFile) (map[string]localInfo, []Violation) {
 				locals[name] = localInfo{
 					Type: inferExprType(attr.Expr),
 					Expr: attr.Expr,
-					File: f.Name,
+					File: attrFile,
 					Line: attr.NameRange.Start.Line,
 				}
 			}

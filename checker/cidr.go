@@ -115,11 +115,12 @@ func walkCIDRBlocks(body *hclsyntax.Body, file string, checks CheckSet, violatio
 		return
 	}
 	for _, attr := range body.Attributes {
+		attrFile := rangeFilename(attr.NameRange, file)
 		switch s := cidrTriggers[attr.Name]; s {
 		case cidrShapeScalar:
-			checkCIDRScalar(file, attr, checks, violations)
+			checkCIDRScalar(attrFile, attr, checks, violations)
 		case cidrShapeList:
-			checkCIDRList(file, attr, checks, violations)
+			checkCIDRList(attrFile, attr, checks, violations)
 		case cidrShapeNone:
 			// Zero value: attribute is not on the trigger list. Explicit
 			// case (rather than an implicit fall-through) documents the

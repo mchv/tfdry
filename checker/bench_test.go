@@ -12,7 +12,10 @@ import (
 )
 
 // sink prevents the compiler from eliminating benchmark results (dead code elimination).
-var sink any
+var (
+	sink                any
+	effectiveConfigSink effectiveConfig
+)
 
 // ── Fixture generators ────────────────────────────────────────────────────────
 
@@ -111,6 +114,37 @@ func BenchmarkBuildLocalsMap(b *testing.B) {
 				m, v := buildLocalsMap(files)
 				sink = m
 				sink = v
+			}
+		})
+	}
+}
+
+// ── effective override projection ────────────────────────────────────────────
+
+func BenchmarkBuildEffectiveConfig(b *testing.B) {
+	for _, overrides := range []int{0, 1, 5} {
+		b.Run(fmt.Sprintf("overrides=%d", overrides), func(b *testing.B) {
+			dir := b.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { value = "base" }
+resource "example" "x" { value = "base" }
+`), 0o644); err != nil {
+				b.Fatal(err)
+			}
+			for i := range overrides {
+				name := fmt.Sprintf("%02d_override.tf", i)
+				src := fmt.Sprintf("locals { value = \"override-%d\" }\nresource \"example\" \"x\" { value = \"override-%d\" }\n", i, i)
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+					b.Fatal(err)
+				}
+			}
+			files, violations, err := ParseDir(context.Background(), dir)
+			if err != nil || len(violations) != 0 {
+				b.Fatalf("ParseDir: err=%v violations=%v", err, violations)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				effectiveConfigSink = buildEffectiveConfig(files)
 			}
 		})
 	}

@@ -37,6 +37,10 @@ var opentofuCorpusExpectations = map[string]opentofuCorpusExpectation{
 		lintFiles:   []string{"locals.tofu", "outputs.tofu", "variables.tofu"},
 		formatFiles: []string{"locals.tofu", "outputs.tofu", "variables.tofu"},
 	},
+	"override-loading": {
+		lintFiles:   []string{"main.tofu", "override.tofu"},
+		formatFiles: []string{"main.tofu", "override.tf", "override.tofu"},
+	},
 	"state-encryption": {
 		lintFiles:   []string{"main.tofu"},
 		formatFiles: []string{"main.tofu"},

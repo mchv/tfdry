@@ -9,12 +9,16 @@ configuration files (`.tf` and `.tofu`) without running `terraform init`,
 `tofu init`, or either tool's validation command. It catches a focused set of
 errors that are statically resolvable from the source files alone.
 
-When linting a directory, or applying `--fix`, `name.tofu` takes precedence
-over a same-basename `name.tf`, matching OpenTofu's module-loading rule.
-Distinct `.tf` and `.tofu` files are analysed together as one module. The
-standalone `fmt` subcommand instead formats every native file independently,
-including same-basename pairs, matching `tofu fmt`. JSON configurations
-(`.tf.json` and `.tofu.json`) are not supported.
+For semantic checks, `name.tofu` takes precedence over a same-basename
+`name.tf`, matching OpenTofu's module-loading rule. Distinct `.tf` and `.tofu`
+files are analysed together as one module. Valid `override.tf`,
+`*_override.tf`, `override.tofu`, and `*_override.tofu` files are applied after
+primary files in lexicographic order; semantic checks use the merged effective
+configuration, including relative child variable schemas. E008, `--fix`, and
+the standalone `fmt` subcommand instead inspect or rewrite every native
+physical file independently, including override files and shadowed
+same-basename peers. JSON configurations (`.tf.json` and `.tofu.json`) are not
+supported.
 
 ## Invariants
 

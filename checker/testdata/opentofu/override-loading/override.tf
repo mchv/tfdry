@@ -1,0 +1,5 @@
+locals {
+  value = {
+    terraform = true
+  }
+}

@@ -4,6 +4,7 @@
 package checker
 
 import (
+	stdctx "context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -109,49 +110,19 @@ func parseModuleVarSchemas(moduleDir string, cache map[string]map[string]typeSch
 		return nil
 	}
 
-	entries, err := os.ReadDir(moduleDir)
-	if err != nil {
+	files, parseViolations, err := ParseDir(stdctx.Background(), moduleDir)
+	if err != nil || len(parseViolations) != 0 {
 		cache[moduleDir] = nil
 		return nil
 	}
 
+	effective := buildEffectiveConfig(files)
 	schemas := make(map[string]typeSchema)
-	invalidate := func() map[string]typeSchema {
-		cache[moduleDir] = nil
-		return nil
-	}
-	for _, e := range nativeConfigEntries(entries) {
-		path := filepath.Join(moduleDir, e.Name())
-		// Schema loading is read-only and follows symlinks to regular files,
-		// matching root configuration loading. Any failure makes the aggregate
-		// schema incomplete, so fail safely rather than infer that declarations
-		// in the unread file do not exist.
-		fh, fi, err := openRegularFileRead(path)
-		if err != nil || fi.Size() > maxFileSize {
-			if fh != nil {
-				_ = fh.Close()
-			}
-			return invalidate()
+	for _, file := range effective.files {
+		if file.Body == nil {
+			continue
 		}
-		src, rerr := readAll(fh, fi.Size())
-		_ = fh.Close()
-		if rerr != nil {
-			return invalidate()
-		}
-		// readAll is bounded to maxFileSize+1 but is robust against Stat
-		// reporting a stale size (FUSE / file grew).
-		if int64(len(src)) > maxFileSize {
-			return invalidate()
-		}
-		f, diags := hclsyntax.ParseConfig(src, e.Name(), hcl.Pos{Line: 1, Column: 1})
-		if diags.HasErrors() {
-			return invalidate()
-		}
-		body, ok := f.Body.(*hclsyntax.Body)
-		if !ok {
-			return invalidate()
-		}
-		for _, block := range body.Blocks {
+		for _, block := range file.Body.Blocks {
 			if block.Type != "variable" || len(block.Labels) != 1 {
 				continue
 			}
@@ -368,13 +339,14 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]localInfo, ch
 			if _, skip := moduleMetaArgs[inputName]; skip {
 				continue
 			}
+			inputFile := rangeFilename(inputAttr.NameRange, f.Name)
 			schema, declared := schemas[inputName]
 			if !declared {
 				if checks.Enabled("E007") {
 					violations = append(violations, Violation{
 						Code:     "E007",
 						Severity: "error",
-						File:     f.Name,
+						File:     inputFile,
 						Line:     inputAttr.NameRange.Start.Line,
 						Message:  "module \"" + modName + "\" has no variable \"" + inputName + "\"",
 					})
@@ -382,7 +354,7 @@ func checkModuleInputs(f ParsedFile, dir string, locals map[string]localInfo, ch
 				continue
 			}
 			if checks.Enabled("E006") {
-				compareExprToSchema(f.Name, inputAttr.NameRange.Start.Line,
+				compareExprToSchema(inputFile, inputAttr.NameRange.Start.Line,
 					"module \""+modName+"\" input \""+inputName+"\"",
 					inputAttr.Expr, schema, locals, checks, &violations)
 			}

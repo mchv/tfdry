@@ -20,14 +20,22 @@ Each release entry groups changes under the following headings (omitted if empty
 
 - **OpenTofu native configuration support.** Linting, formatting, and
   relative-module input checks now recognise both `.tf` and `.tofu`
-  files. For linting, `--fix`, and module loading, a same-basename
-  `.tofu` file takes precedence over its `.tf` counterpart, matching
-  OpenTofu's module-loading rules; distinct files of both types are
-  analysed together. The standalone `fmt` subcommand formats every
-  native file independently, including same-basename pairs, matching
-  `tofu fmt`. OpenTofu 1.12's bare `tofu2024` language-edition keyword
+  files. Semantic checks during linting and `--fix`, plus relative-module input
+  checks, give a same-basename `.tofu` file precedence over its `.tf`
+  counterpart, matching OpenTofu's module-loading rules; distinct files of both
+  types are analysed together. E008, `--fix` formatting, and the standalone
+  `fmt` subcommand operate on every physical native file independently,
+  including same-basename pairs, matching `tofu fmt`. OpenTofu 1.12's bare `tofu2024` language-edition keyword
   is also recognised without a spurious W009 diagnostic. JSON
   configurations (`.tf.json` and `.tofu.json`) remain unsupported.
+- **Terraform/OpenTofu override semantics.** Semantic checks now load primary
+  files first and apply `override.tf`, `*_override.tf`, and OpenTofu `.tofu`
+  equivalents in lexicographic order. Local values merge by name; matching
+  blocks retain omitted attributes and replace supplied attributes/nested block
+  types, with field-aware lifecycle and per-provider `required_providers`
+  merging plus mutually exclusive backend/cloud/state-store replacement.
+  Relative child-module schemas use the same projection. Formatting
+  continues to operate on every physical native-HCL file independently.
 
 ### Fixed
 

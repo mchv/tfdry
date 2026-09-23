@@ -72,7 +72,7 @@ func walkAccountIDBlocks(body *hclsyntax.Body, file string, awsContext bool, vio
 			if accountIDTriggers[attr.Name] != cidrShapeScalar {
 				continue
 			}
-			checkAccountIDScalar(file, attr, violations)
+			checkAccountIDScalar(rangeFilename(attr.NameRange, file), attr, violations)
 		}
 	}
 	for _, block := range body.Blocks {

@@ -113,7 +113,7 @@ func checkS3BucketName(f ParsedFile) []Violation {
 		if !ok {
 			continue
 		}
-		checkS3BucketAttr(f.Name, attr, kind, &violations)
+		checkS3BucketAttr(rangeFilename(attr.NameRange, f.Name), attr, kind, &violations)
 	}
 	return violations
 }
