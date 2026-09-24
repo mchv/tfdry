@@ -177,3 +177,44 @@ func TestParseDirViewsWithPreCancelledContextSkipsReadDir(t *testing.T) {
 		t.Fatal("readDir called for pre-cancelled context")
 	}
 }
+
+func TestParseDirViewsWithFinalSequentialParseCancellation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(`locals { value = "ok" }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	views, err := parseDirViewsWith(ctx, dir, dirParseOps{
+		readDir: os.ReadDir,
+		parseOne: func(parseDir string, entry os.DirEntry) parseResult {
+			result := parseOne(parseDir, entry)
+			cancel()
+			return result
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if len(views.PhysicalFiles) != 1 || len(views.SemanticFiles) != 1 {
+		t.Fatalf("final-file partial views = %d/%d, want 1/1", len(views.PhysicalFiles), len(views.SemanticFiles))
+	}
+}
+
+func TestParseDirViewsWithCancellationDuringEmptyDirectoryRead(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	views, err := parseDirViewsWith(ctx, t.TempDir(), dirParseOps{
+		readDir: func(string) ([]os.DirEntry, error) {
+			cancel()
+			return []os.DirEntry{}, nil
+		},
+		parseOne: parseOne,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if len(views.PhysicalFiles) != 0 || len(views.SemanticFiles) != 0 {
+		t.Fatalf("empty cancelled views = %+v", views)
+	}
+}

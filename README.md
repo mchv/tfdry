@@ -215,8 +215,10 @@ E008 and `--fix` remain physical-file operations: they inspect or rewrite every
 `.tf` and `.tofu` file independently, including shadowed same-basename peers
 and override files. The default CLI parses each physical file once and projects
 both views from that recorded result, so parse failures and semantic gating
-cannot disagree after a concurrent rewrite. JSON configurations (`.tf.json`
-and `.tofu.json`) are not currently supported.
+cannot disagree for the same file after a concurrent rewrite. This is a
+consistent per-file observation, not an atomic snapshot transaction across all
+files in the directory. JSON configurations (`.tf.json` and `.tofu.json`) are
+not currently supported.
 
 Terraform `override.tf` / `*_override.tf` files and OpenTofu's corresponding
 `.tofu` forms are applied after primary files in lexicographic order. Semantic

@@ -293,7 +293,7 @@ func parseConfigEntries(ctx context.Context, dir string, entries []os.DirEntry, 
 			}
 			results[i] = parse(dir, entry)
 		}
-		return results, nil
+		return results, ctx.Err()
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
