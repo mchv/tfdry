@@ -10,6 +10,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
 )
 
 type effectiveConfig struct {
@@ -322,7 +323,11 @@ func literalBoolAttribute(attr *hclsyntax.Attribute) (result, valid bool) {
 		return false, false
 	}
 	value, diags := attr.Expr.Value(nil)
-	if diags.HasErrors() || value.Type() != cty.Bool || !value.IsKnown() || value.IsNull() {
+	if diags.HasErrors() || !value.IsKnown() || value.IsNull() {
+		return false, false
+	}
+	value, err := convert.Convert(value, cty.Bool)
+	if err != nil {
 		return false, false
 	}
 	return value.True(), true

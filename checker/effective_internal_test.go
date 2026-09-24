@@ -11,6 +11,8 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
 )
 
 func TestIsOverrideFilename(t *testing.T) {
@@ -213,14 +215,18 @@ func TestBuildEffectiveConfig_EncryptionKeyProviderKeepsBaseMetadataAlias(t *tes
 func TestBuildEffectiveConfig_EncryptionEnforcedTruthTable(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name     string
-		base     string
-		override string
-		wantFile string
+		name      string
+		base      string
+		override  string
+		wantFile  string
+		wantValue bool
 	}{
-		{name: "parenthesized true retained", base: "(true)", override: "false", wantFile: "main.tofu"},
-		{name: "unary true retained", base: "!false", override: "false", wantFile: "main.tofu"},
-		{name: "override true wins", base: "false", override: "!false", wantFile: "override.tofu"},
+		{name: "parenthesized true retained", base: "(true)", override: "false", wantFile: "main.tofu", wantValue: true},
+		{name: "unary true retained", base: "!false", override: "false", wantFile: "main.tofu", wantValue: true},
+		{name: "string true retained", base: `"true"`, override: "false", wantFile: "main.tofu", wantValue: true},
+		{name: "override true wins", base: "false", override: "!false", wantFile: "override.tofu", wantValue: true},
+		{name: "string false overridden", base: `"false"`, override: "true", wantFile: "override.tofu", wantValue: true},
+		{name: "invalid string ignored", base: `"yes"`, override: "false", wantFile: "override.tofu", wantValue: false},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -242,8 +248,20 @@ func TestBuildEffectiveConfig_EncryptionEnforcedTruthTable(t *testing.T) {
 }`)
 			encryption := effectiveEncryptionBlock(t, base, override)
 			state := findChildBlock(t, encryption.Body, "state")
-			if got := state.Body.Attributes["enforced"].NameRange.Filename; got != tc.wantFile {
+			enforced := state.Body.Attributes["enforced"]
+			if got := enforced.NameRange.Filename; got != tc.wantFile {
 				t.Fatalf("enforced file = %q, want %q", got, tc.wantFile)
+			}
+			value, diags := enforced.Expr.Value(nil)
+			if diags.HasErrors() || !value.IsKnown() || value.IsNull() {
+				t.Fatalf("evaluate enforced: %s", diags.Error())
+			}
+			value, err := convert.Convert(value, cty.Bool)
+			if err != nil {
+				t.Fatalf("convert enforced to bool: %v", err)
+			}
+			if got := value.True(); got != tc.wantValue {
+				t.Fatalf("enforced value = %v, want %v", got, tc.wantValue)
 			}
 		})
 	}

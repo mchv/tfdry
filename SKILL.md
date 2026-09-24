@@ -19,8 +19,9 @@ overrides merge named key providers/methods and retain omitted target settings.
 E008, `--fix`, and the standalone `fmt` subcommand instead inspect or rewrite
 every native physical file independently, including override files and shadowed
 same-basename peers. The default CLI parses each physical file once and projects
-both semantic and physical views from that result. JSON configurations
-(`.tf.json` and `.tofu.json`) are not supported.
+both semantic and physical views from that result. The views are consistent for
+each recorded file; they are not an atomic multi-file repository snapshot. JSON
+configurations (`.tf.json` and `.tofu.json`) are not supported.
 
 ## Invariants
 

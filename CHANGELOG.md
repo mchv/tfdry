@@ -37,9 +37,9 @@ Each release entry groups changes under the following headings (omitted if empty
   OpenTofu encryption overrides merge named key providers/methods and retain
   omitted state, plan, fallback, and remote-target settings. Relative
   child-module schemas use the same projection. The default CLI parses each
-  physical file once and derives semantic/formatting views from that result;
-  formatting continues to operate on every physical native-HCL file
-  independently.
+  physical file once and derives semantic/formatting views from that per-file
+  result; this is not an atomic snapshot across the whole directory. Formatting
+  continues to operate on every physical native-HCL file independently.
 
 ### Fixed
 
