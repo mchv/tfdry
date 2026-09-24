@@ -60,10 +60,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 	}
 
 	effective := make([]ParsedFile, len(primary))
-	for i, file := range primary {
-		effective[i] = file
-		effective[i].Body = cloneBody(file.Body)
-	}
+	copy(effective, primary)
 
 	blocks := make(map[string]effectiveBlockLocation)
 	terraformBlocks := make([]effectiveBlockLocation, 0)
@@ -95,6 +92,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 	}
 
 	extraFiles := make(map[string]int)
+	ownedFileBodies := make(map[int]struct{})
 	ownedLocalsBlocks := make(map[effectiveAttributeLocation]struct{})
 	for _, override := range overrides {
 		if override.Body == nil {
@@ -110,7 +108,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 					if !exists {
 						continue
 					}
-					replaceEffectiveAttribute(effective, location, name, attr, ownedLocalsBlocks)
+					replaceEffectiveAttribute(effective, location, name, attr, ownedFileBodies, ownedLocalsBlocks)
 				}
 				continue
 			}
@@ -121,12 +119,13 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 						fileIndex = len(effective)
 						extraFiles[override.Name] = fileIndex
 						effective = append(effective, ParsedFile{Name: override.Name, Body: emptyBodyLike(override.Body)})
+						ownedFileBodies[fileIndex] = struct{}{}
 					}
 					blockIndex := len(effective[fileIndex].Body.Blocks)
 					effective[fileIndex].Body.Blocks = append(effective[fileIndex].Body.Blocks, block)
 					terraformBlocks = append(terraformBlocks, effectiveBlockLocation{file: fileIndex, block: blockIndex})
 				} else {
-					applyTerraformOverride(effective, terraformBlocks, block)
+					applyTerraformOverride(effective, terraformBlocks, block, ownedFileBodies)
 				}
 				continue
 			}
@@ -145,6 +144,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 						Name: override.Name,
 						Body: emptyBodyLike(override.Body),
 					})
+					ownedFileBodies[fileIndex] = struct{}{}
 				}
 				blockIndex := len(effective[fileIndex].Body.Blocks)
 				effective[fileIndex].Body.Blocks = append(effective[fileIndex].Body.Blocks, block)
@@ -152,6 +152,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 				continue
 			}
 
+			ensureEffectiveFileBodyOwned(effective, location.file, ownedFileBodies)
 			base := effective[location.file].Body.Blocks[location.block]
 			effective[location.file].Body.Blocks[location.block] = mergeTopLevelBlock(base, block)
 		}
@@ -160,20 +161,32 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 	return effectiveConfig{files: effective, sourceOrder: sourceOrder}
 }
 
-func applyTerraformOverride(files []ParsedFile, locations []effectiveBlockLocation, override *hclsyntax.Block) {
+func applyTerraformOverride(files []ParsedFile, locations []effectiveBlockLocation, override *hclsyntax.Block, ownedFiles map[int]struct{}) {
 	primary := make([]*hclsyntax.Block, len(locations))
 	for i, location := range locations {
+		primary[i] = files[location.file].Body.Blocks[location.block]
+	}
+	ownedBlocks := make(map[int]struct{})
+	own := func(index int) *hclsyntax.Block {
+		if _, owned := ownedBlocks[index]; owned {
+			return primary[index]
+		}
+		location := locations[index]
+		ensureEffectiveFileBodyOwned(files, location.file, ownedFiles)
 		block := cloneBlock(files[location.file].Body.Blocks[location.block])
 		files[location.file].Body.Blocks[location.block] = block
-		primary[i] = block
+		primary[index] = block
+		ownedBlocks[index] = struct{}{}
+		return block
 	}
-	first := primary[0]
 
 	for name, attr := range override.Body.Attributes {
-		for _, block := range primary {
-			delete(block.Body.Attributes, name)
+		for i, block := range primary {
+			if _, exists := block.Body.Attributes[name]; exists {
+				delete(own(i).Body.Attributes, name)
+			}
 		}
-		first.Body.Attributes[name] = attr
+		own(0).Body.Attributes[name] = attr
 	}
 
 	replaceTypes := make(map[string]struct{})
@@ -188,9 +201,24 @@ func applyTerraformOverride(files []ParsedFile, locations []effectiveBlockLocati
 			replaceTypes[effectiveNestedBlockType(block)] = struct{}{}
 		}
 	}
-	for _, block := range primary {
-		kept := block.Body.Blocks[:0]
+	for i, block := range primary {
+		needsFilter := false
 		for _, nested := range block.Body.Blocks {
+			if replaceStorage && isTerraformStorageBlock(nested.Type) {
+				needsFilter = true
+				break
+			}
+			if _, replaced := replaceTypes[effectiveNestedBlockType(nested)]; replaced {
+				needsFilter = true
+				break
+			}
+		}
+		if !needsFilter {
+			continue
+		}
+		owned := own(i)
+		kept := owned.Body.Blocks[:0]
+		for _, nested := range owned.Body.Blocks {
 			if replaceStorage && isTerraformStorageBlock(nested.Type) {
 				continue
 			}
@@ -199,7 +227,7 @@ func applyTerraformOverride(files []ParsedFile, locations []effectiveBlockLocati
 			}
 			kept = append(kept, nested)
 		}
-		block.Body.Blocks = kept
+		owned.Body.Blocks = kept
 	}
 
 	for _, block := range override.Body.Blocks {
@@ -207,26 +235,32 @@ func applyTerraformOverride(files []ParsedFile, locations []effectiveBlockLocati
 		case "provider_meta":
 			continue
 		case "required_providers":
-			mergeRequiredProvidersOverride(primary, block)
+			mergeRequiredProvidersOverride(primary, own, block)
 		case "encryption":
-			mergeEncryptionOverride(primary, block)
+			mergeEncryptionOverride(primary, own, block)
 		default:
+			first := own(0)
 			first.Body.Blocks = append(first.Body.Blocks, block)
 		}
 	}
 }
 
-func mergeEncryptionOverride(primary []*hclsyntax.Block, override *hclsyntax.Block) {
-	for _, terraformBlock := range primary {
-		for i, nested := range terraformBlock.Body.Blocks {
+func mergeEncryptionOverride(primary []*hclsyntax.Block, own func(int) *hclsyntax.Block, override *hclsyntax.Block) {
+	// OpenTofu permits one primary encryption configuration per module.
+	// Additional primary encryption blocks are invalid and intentionally remain
+	// separate so an override cannot hide their still-visible expressions.
+	for blockIndex, terraformBlock := range primary {
+		for nestedIndex, nested := range terraformBlock.Body.Blocks {
 			if nested.Type != "encryption" {
 				continue
 			}
-			terraformBlock.Body.Blocks[i] = mergeEncryptionBlock(nested, override)
+			owned := own(blockIndex)
+			owned.Body.Blocks[nestedIndex] = mergeEncryptionBlock(owned.Body.Blocks[nestedIndex], override)
 			return
 		}
 	}
-	primary[0].Body.Blocks = append(primary[0].Body.Blocks, override)
+	first := own(0)
+	first.Body.Blocks = append(first.Body.Blocks, override)
 }
 
 // mergeEncryptionBlock mirrors OpenTofu v1.12 EncryptionConfig.Merge for the
@@ -345,18 +379,19 @@ func sameBlockLabels(a, b []string) bool {
 	return true
 }
 
-func mergeRequiredProvidersOverride(primary []*hclsyntax.Block, override *hclsyntax.Block) {
+func mergeRequiredProvidersOverride(primary []*hclsyntax.Block, own func(int) *hclsyntax.Block, override *hclsyntax.Block) {
 	if len(override.Body.Attributes) == 0 {
 		return
 	}
 	var target *hclsyntax.Block
-	for _, terraformBlock := range primary {
-		for i, nested := range terraformBlock.Body.Blocks {
+	for blockIndex, terraformBlock := range primary {
+		for nestedIndex, nested := range terraformBlock.Body.Blocks {
 			if nested.Type != "required_providers" {
 				continue
 			}
-			cloned := cloneBlock(nested)
-			terraformBlock.Body.Blocks[i] = cloned
+			owned := own(blockIndex)
+			cloned := cloneBlock(owned.Body.Blocks[nestedIndex])
+			owned.Body.Blocks[nestedIndex] = cloned
 			if target == nil {
 				target = cloned
 			}
@@ -367,7 +402,8 @@ func mergeRequiredProvidersOverride(primary []*hclsyntax.Block, override *hclsyn
 	}
 	if target == nil {
 		target = cloneBlock(override)
-		primary[0].Body.Blocks = append(primary[0].Body.Blocks, target)
+		first := own(0)
+		first.Body.Blocks = append(first.Body.Blocks, target)
 	}
 	for name, attr := range override.Body.Attributes {
 		target.Body.Attributes[name] = attr
@@ -420,11 +456,20 @@ func allowOverrideOnlyBlock(block *hclsyntax.Block) bool {
 	return false
 }
 
-func replaceEffectiveAttribute(files []ParsedFile, location effectiveAttributeLocation, name string, attr *hclsyntax.Attribute, owned map[effectiveAttributeLocation]struct{}) {
-	if _, alreadyOwned := owned[location]; !alreadyOwned {
+func ensureEffectiveFileBodyOwned(files []ParsedFile, fileIndex int, owned map[int]struct{}) {
+	if _, alreadyOwned := owned[fileIndex]; alreadyOwned {
+		return
+	}
+	files[fileIndex].Body = cloneBody(files[fileIndex].Body)
+	owned[fileIndex] = struct{}{}
+}
+
+func replaceEffectiveAttribute(files []ParsedFile, location effectiveAttributeLocation, name string, attr *hclsyntax.Attribute, ownedFiles map[int]struct{}, ownedBlocks map[effectiveAttributeLocation]struct{}) {
+	ensureEffectiveFileBodyOwned(files, location.file, ownedFiles)
+	if _, alreadyOwned := ownedBlocks[location]; !alreadyOwned {
 		block := cloneBlock(files[location.file].Body.Blocks[location.block])
 		files[location.file].Body.Blocks[location.block] = block
-		owned[location] = struct{}{}
+		ownedBlocks[location] = struct{}{}
 	}
 	files[location.file].Body.Blocks[location.block].Body.Attributes[name] = attr
 }
@@ -456,6 +501,8 @@ func restoreForbiddenNestedBlocks(merged, primary *hclsyntax.Body, topLevelType 
 	case "variable":
 		forbiddenType = "validation"
 	case "output":
+		// Terraform/OpenTofu output blocks support preconditions only;
+		// postconditions are invalid even in primary configuration.
 		forbiddenType = "precondition"
 	case "terraform":
 		forbiddenType = "provider_meta"

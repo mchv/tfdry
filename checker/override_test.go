@@ -1043,3 +1043,39 @@ func TestOverrideEncryptionRetainsRemoteTargets(t *testing.T) {
 		t.Fatalf("retained remote target E009 count = %d, want 2; codes=%v", count, codes(vs))
 	}
 }
+
+func TestOverrideEncryptionDoesNotMergeDuplicatePrimaryBlocks(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"a.tofu": `terraform {
+  encryption {
+    key_provider "pbkdf2" "main" {
+      passphrase = "base"
+    }
+  }
+}`,
+		"b.tofu": `terraform {
+  encryption {
+    state {
+      method = vars.bad
+    }
+  }
+}`,
+		"override.tofu": `terraform {
+  encryption {
+    state {
+      enforced = true
+    }
+  }
+}`,
+	})
+	for _, violation := range vs {
+		if violation.Code == "E009" {
+			if violation.File != "b.tofu" {
+				t.Fatalf("retained duplicate encryption diagnostic file = %q, want b.tofu", violation.File)
+			}
+			return
+		}
+	}
+	t.Fatalf("override collapsed invalid duplicate primary encryption blocks: %v", codes(vs))
+}
