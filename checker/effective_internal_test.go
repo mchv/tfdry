@@ -361,3 +361,119 @@ func findChildBlock(t *testing.T, body *hclsyntax.Body, blockType string, labels
 	t.Fatalf("block %s %v not found", blockType, labels)
 	return nil
 }
+
+func TestBuildEffectiveConfig_ClonesOnlyTouchedFileBodies(t *testing.T) {
+	t.Parallel()
+	untouched := parseEffectiveTestFile(t, "a.tf", `resource "example" "untouched" { value = "base" }`)
+	touched := parseEffectiveTestFile(t, "b.tf", `resource "example" "touched" { value = "base" }`)
+	override := parseEffectiveTestFile(t, "override.tf", `resource "example" "touched" { value = "override" }`)
+
+	effective := buildEffectiveConfig([]ParsedFile{untouched, touched, override})
+	var effectiveUntouched, effectiveTouched *ParsedFile
+	for i := range effective.files {
+		switch effective.files[i].Name {
+		case "a.tf":
+			effectiveUntouched = &effective.files[i]
+		case "b.tf":
+			effectiveTouched = &effective.files[i]
+		}
+	}
+	if effectiveUntouched == nil || effectiveTouched == nil {
+		t.Fatalf("effective files missing: %+v", effective.files)
+	}
+	if effectiveUntouched.Body != untouched.Body {
+		t.Fatal("untouched primary file body was cloned")
+	}
+	if effectiveTouched.Body == touched.Body {
+		t.Fatal("touched primary file body was not cloned")
+	}
+	winning := effectiveTouched.Body.Blocks[0].Body.Attributes["value"]
+	if got := stringLiteralValue(winning.Expr); got != "override" {
+		t.Fatalf("effective touched value = %q, want override", got)
+	}
+	original := touched.Body.Blocks[0].Body.Attributes["value"]
+	if got := stringLiteralValue(original.Expr); got != "base" {
+		t.Fatalf("original touched file mutated: %q", got)
+	}
+}
+
+func TestBuildEffectiveConfig_TerraformOverridesCloneOnlyAffectedBodies(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		primaryA   string
+		primaryB   string
+		override   string
+		wantAClone bool
+		wantBClone bool
+	}{
+		{
+			name:     "required providers touches containing block only",
+			primaryA: `terraform { required_version = ">= 1.0" }`,
+			primaryB: `terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws" }
+  }
+}`,
+			override: `terraform {
+  required_providers {
+    random = { source = "hashicorp/random" }
+  }
+}`,
+			wantBClone: true,
+		},
+		{
+			name:     "encryption touches containing block only",
+			primaryA: `terraform { required_version = ">= 1.0" }`,
+			primaryB: `terraform {
+  encryption {
+    state { enforced = false }
+  }
+}`,
+			override: `terraform {
+  encryption {
+    state { enforced = true }
+  }
+}`,
+			wantBClone: true,
+		},
+		{
+			name:     "provider meta override touches nothing",
+			primaryA: `terraform { required_version = ">= 1.0" }`,
+			primaryB: `terraform {
+  provider_meta "aws" { value = "base" }
+}`,
+			override: `terraform {
+  provider_meta "aws" { value = "ignored" }
+}`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := parseEffectiveTestFile(t, "a.tf", tc.primaryA)
+			b := parseEffectiveTestFile(t, "b.tf", tc.primaryB)
+			override := parseEffectiveTestFile(t, "override.tf", tc.override)
+			effective := buildEffectiveConfig([]ParsedFile{a, b, override})
+			var effectiveA, effectiveB *ParsedFile
+			for i := range effective.files {
+				switch effective.files[i].Name {
+				case "a.tf":
+					effectiveA = &effective.files[i]
+				case "b.tf":
+					effectiveB = &effective.files[i]
+				}
+			}
+			if effectiveA == nil || effectiveB == nil {
+				t.Fatalf("effective files missing: %+v", effective.files)
+			}
+			if got := effectiveA.Body != a.Body; got != tc.wantAClone {
+				t.Fatalf("a.tf cloned = %v, want %v", got, tc.wantAClone)
+			}
+			if got := effectiveB.Body != b.Body; got != tc.wantBClone {
+				t.Fatalf("b.tf cloned = %v, want %v", got, tc.wantBClone)
+			}
+		})
+	}
+}

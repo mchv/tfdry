@@ -255,6 +255,35 @@ func BenchmarkBuildEffectiveConfigLocals(b *testing.B) {
 	}
 }
 
+func BenchmarkBuildEffectiveConfigSparse(b *testing.B) {
+	for _, files := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("files=%d", files), func(b *testing.B) {
+			dir := b.TempDir()
+			for i := range files {
+				name := fmt.Sprintf("file_%04d.tf", i)
+				src := fmt.Sprintf("resource \"example\" \"file_%04d\" { value = \"base\" }\n", i)
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dir, "override.tf"), []byte(`resource "example" "file_0000" { value = "override" }
+`), 0o644); err != nil {
+				b.Fatal(err)
+			}
+			parsed, violations, err := ParseDir(context.Background(), dir)
+			if err != nil || len(violations) != 0 {
+				b.Fatalf("ParseDir: err=%v violations=%v", err, violations)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.ReportMetric(float64(files), "files/op")
+			for range b.N {
+				effectiveConfigSink = buildEffectiveConfig(parsed)
+			}
+		})
+	}
+}
+
 // ── Run (all checks): parameterised by file count ─────────────────────────────
 // Isolates CPU-only cost (files pre-parsed). Use: benchstat -col /files results.txt
 
