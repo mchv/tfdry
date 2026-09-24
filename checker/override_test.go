@@ -1079,3 +1079,19 @@ func TestOverrideEncryptionDoesNotMergeDuplicatePrimaryBlocks(t *testing.T) {
 	}
 	t.Fatalf("override collapsed invalid duplicate primary encryption blocks: %v", codes(vs))
 }
+
+func TestOverrideOnlyTerraformFiltersProviderMeta(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `locals { value = "base" }`,
+		"override.tf": `terraform {
+  required_version = ">= 1.0"
+  provider_meta "aws" {
+    value = vars.bad
+  }
+}`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("override-only provider_meta became effective: %v", codes(vs))
+	}
+}

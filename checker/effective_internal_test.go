@@ -477,3 +477,83 @@ func TestBuildEffectiveConfig_TerraformOverridesCloneOnlyAffectedBodies(t *testi
 		})
 	}
 }
+
+func TestBuildEffectiveConfig_OverrideOnlyTerraformFiltersAndCompounds(t *testing.T) {
+	t.Parallel()
+	primary := parseEffectiveTestFile(t, "main.tf", `locals { value = "base" }`)
+	first := parseEffectiveTestFile(t, "a_override.tf", `terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    aws = { source = "hashicorp/aws" }
+  }
+  backend "local" { path = "state.tfstate" }
+  provider_meta "aws" { value = vars.bad }
+  encryption {
+    key_provider "pbkdf2" "main" { passphrase = "secret" }
+  }
+}`)
+	later := parseEffectiveTestFile(t, "z_override.tf", `terraform {
+  required_version = ">= 2.0"
+  required_providers {
+    random = { source = "hashicorp/random" }
+  }
+  cloud {}
+  encryption {
+    state { enforced = true }
+  }
+}`)
+	firstProviderMeta := findChildBlock(t, first.Body.Blocks[0].Body, "provider_meta", "aws")
+	firstBackend := findChildBlock(t, first.Body.Blocks[0].Body, "backend", "local")
+
+	effective := buildEffectiveConfig([]ParsedFile{primary, first, later})
+	if len(effective.files) != 2 {
+		t.Fatalf("effective files = %d, want primary plus synthetic override", len(effective.files))
+	}
+	if effective.files[0].Body != primary.Body {
+		t.Fatal("unrelated primary body was cloned")
+	}
+	var synthetic *ParsedFile
+	for i := range effective.files {
+		if effective.files[i].Name == "a_override.tf" {
+			synthetic = &effective.files[i]
+		}
+	}
+	if synthetic == nil {
+		t.Fatalf("synthetic override file missing: %+v", effective.files)
+	}
+	terraformBlock := findChildBlock(t, synthetic.Body, "terraform")
+	if got := stringLiteralValue(terraformBlock.Body.Attributes["required_version"].Expr); got != ">= 2.0" {
+		t.Fatalf("required_version = %q, want later override", got)
+	}
+	if got := terraformBlock.Body.Attributes["required_version"].NameRange.Filename; got != "z_override.tf" {
+		t.Fatalf("required_version file = %q", got)
+	}
+	for _, block := range terraformBlock.Body.Blocks {
+		if block.Type == "provider_meta" || block.Type == "backend" {
+			t.Fatalf("forbidden/replaced block remained effective: %s", block.Type)
+		}
+	}
+	required := findChildBlock(t, terraformBlock.Body, "required_providers")
+	for _, name := range []string{"aws", "random"} {
+		if _, ok := required.Body.Attributes[name]; !ok {
+			t.Fatalf("required provider %q missing", name)
+		}
+	}
+	if got := required.Body.Attributes["random"].NameRange.Filename; got != "z_override.tf" {
+		t.Fatalf("random provider file = %q", got)
+	}
+	cloud := findChildBlock(t, terraformBlock.Body, "cloud")
+	if cloud.TypeRange.Filename != "z_override.tf" {
+		t.Fatalf("cloud file = %q", cloud.TypeRange.Filename)
+	}
+	encryption := findChildBlock(t, terraformBlock.Body, "encryption")
+	_ = findChildBlock(t, encryption.Body, "key_provider", "pbkdf2", "main")
+	state := findChildBlock(t, encryption.Body, "state")
+	if got := state.Body.Attributes["enforced"].NameRange.Filename; got != "z_override.tf" {
+		t.Fatalf("state enforced file = %q", got)
+	}
+	if findChildBlock(t, first.Body.Blocks[0].Body, "provider_meta", "aws") != firstProviderMeta ||
+		findChildBlock(t, first.Body.Blocks[0].Body, "backend", "local") != firstBackend {
+		t.Fatal("original override AST was mutated")
+	}
+}
