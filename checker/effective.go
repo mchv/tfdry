@@ -121,12 +121,13 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 						effective = append(effective, ParsedFile{Name: override.Name, Body: emptyBodyLike(override.Body)})
 						ownedFileBodies[fileIndex] = struct{}{}
 					}
+					seed := cloneBlock(block)
+					seed.Body = emptyBodyLike(block.Body)
 					blockIndex := len(effective[fileIndex].Body.Blocks)
-					effective[fileIndex].Body.Blocks = append(effective[fileIndex].Body.Blocks, block)
+					effective[fileIndex].Body.Blocks = append(effective[fileIndex].Body.Blocks, seed)
 					terraformBlocks = append(terraformBlocks, effectiveBlockLocation{file: fileIndex, block: blockIndex})
-				} else {
-					applyTerraformOverride(effective, terraformBlocks, block, ownedFileBodies)
 				}
+				applyTerraformOverride(effective, terraformBlocks, block, ownedFileBodies)
 				continue
 			}
 
