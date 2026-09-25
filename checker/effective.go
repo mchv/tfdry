@@ -30,10 +30,13 @@ type effectiveAttributeLocation struct {
 
 func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 	hasOverride := false
+	openTofu := false
 	for _, file := range files {
+		if filepath.Ext(file.Name) == ".tofu" {
+			openTofu = true
+		}
 		if isOverrideFilename(file.Name) {
 			hasOverride = true
-			break
 		}
 	}
 	if !hasOverride {
@@ -155,7 +158,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 
 			ensureEffectiveFileBodyOwned(effective, location.file, ownedFileBodies)
 			base := effective[location.file].Body.Blocks[location.block]
-			effective[location.file].Body.Blocks[location.block] = mergeTopLevelBlock(base, block)
+			effective[location.file].Body.Blocks[location.block] = mergeTopLevelBlock(base, block, openTofu)
 		}
 	}
 
@@ -475,9 +478,9 @@ func replaceEffectiveAttribute(files []ParsedFile, location effectiveAttributeLo
 	files[location.file].Body.Blocks[location.block].Body.Attributes[name] = attr
 }
 
-func mergeTopLevelBlock(base, override *hclsyntax.Block) *hclsyntax.Block {
+func mergeTopLevelBlock(base, override *hclsyntax.Block, openTofu bool) *hclsyntax.Block {
 	merged := cloneBlock(base)
-	merged.Body = mergeBody(base.Body, override.Body, blockSpecialMergeTypes(base.Type))
+	merged.Body = mergeBody(base.Body, override.Body, blockSpecialMergeTypes(base.Type), openTofu)
 	if forbidsOverrideDependsOn(base.Type) {
 		if primary, exists := base.Body.Attributes["depends_on"]; exists {
 			merged.Body.Attributes["depends_on"] = primary
@@ -505,6 +508,10 @@ func restoreForbiddenNestedBlocks(merged, primary *hclsyntax.Body, topLevelType 
 		// Terraform/OpenTofu output blocks support preconditions only;
 		// postconditions are invalid even in primary configuration.
 		forbiddenType = "precondition"
+	case "data", "ephemeral":
+		// Their lifecycle blocks contain conditions only; override check rules
+		// are not applied by the engine's Resource.merge path.
+		forbiddenType = "lifecycle"
 	case "terraform":
 		forbiddenType = "provider_meta"
 	default:
@@ -551,8 +558,10 @@ func isTerraformStorageBlock(blockType string) bool {
 
 func blockSpecialMergeTypes(topLevelType string) map[string]struct{} {
 	switch topLevelType {
-	case "resource", "data":
+	case "resource":
 		return map[string]struct{}{"lifecycle": {}}
+	case "action":
+		return map[string]struct{}{"config": {}}
 	case "terraform":
 		return map[string]struct{}{"required_providers": {}}
 	default:
@@ -560,7 +569,7 @@ func blockSpecialMergeTypes(topLevelType string) map[string]struct{} {
 	}
 }
 
-func mergeBody(base, override *hclsyntax.Body, special map[string]struct{}) *hclsyntax.Body {
+func mergeBody(base, override *hclsyntax.Body, special map[string]struct{}, openTofu bool) *hclsyntax.Body {
 	merged := cloneBody(base)
 	for name, attr := range override.Attributes {
 		merged.Attributes[name] = attr
@@ -588,12 +597,23 @@ func mergeBody(base, override *hclsyntax.Body, special map[string]struct{}) *hcl
 
 	mergedSpecial := make(map[string]*hclsyntax.Block)
 	for typeName, overrideBlocks := range overrideByType {
-		if _, mergeSpecial := special[typeName]; !mergeSpecial || len(baseByType[typeName]) == 0 {
+		if _, mergeSpecial := special[typeName]; !mergeSpecial {
 			continue
 		}
-		block := baseByType[typeName][0]
+		var block *hclsyntax.Block
+		if len(baseByType[typeName]) != 0 {
+			block = baseByType[typeName][0]
+		} else if typeName == "lifecycle" {
+			block = cloneBlock(overrideBlocks[0])
+			block.Body = emptyBodyLike(overrideBlocks[0].Body)
+		} else {
+			continue
+		}
 		for _, overrideBlock := range overrideBlocks {
-			block = mergeSpecialNestedBlock(typeName, block, overrideBlock)
+			block = mergeSpecialNestedBlock(typeName, block, overrideBlock, openTofu)
+		}
+		if len(block.Body.Attributes) == 0 && len(block.Body.Blocks) == 0 {
+			block = nil
 		}
 		mergedSpecial[typeName] = block
 	}
@@ -606,7 +626,9 @@ func mergeBody(base, override *hclsyntax.Body, special map[string]struct{}) *hcl
 				continue
 			}
 			emittedSpecial[typeName] = struct{}{}
-			kept = append(kept, block)
+			if block != nil {
+				kept = append(kept, block)
+			}
 			continue
 		}
 		kept = append(kept, overrideBlock)
@@ -615,23 +637,68 @@ func mergeBody(base, override *hclsyntax.Body, special map[string]struct{}) *hcl
 	return merged
 }
 
-func mergeSpecialNestedBlock(typeName string, base, override *hclsyntax.Block) *hclsyntax.Block {
-	if typeName != "lifecycle" {
-		return mergeNestedBlock(base, override)
+func mergeSpecialNestedBlock(typeName string, base, override *hclsyntax.Block, openTofu bool) *hclsyntax.Block {
+	if typeName == "lifecycle" {
+		return mergeManagedLifecycleBlock(base, override, openTofu)
 	}
-	filtered := cloneBlock(override)
-	filtered.Body.Blocks = filtered.Body.Blocks[:0]
-	for _, block := range override.Body.Blocks {
-		if block.Type == "action_trigger" {
-			filtered.Body.Blocks = append(filtered.Body.Blocks, block)
+	return mergeNestedBlock(base, override)
+}
+
+func mergeManagedLifecycleBlock(base, override *hclsyntax.Block, openTofu bool) *hclsyntax.Block {
+	merged := cloneBlock(base)
+	for _, name := range []string{"create_before_destroy", "prevent_destroy"} {
+		if attr, exists := override.Body.Attributes[name]; exists {
+			merged.Body.Attributes[name] = attr
 		}
 	}
-	return mergeNestedBlock(base, filtered)
+	if openTofu {
+		if attr, exists := override.Body.Attributes["destroy"]; exists {
+			merged.Body.Attributes["destroy"] = attr
+		}
+	}
+	baseIgnoreAll := isIgnoreAllChanges(base.Body.Attributes["ignore_changes"])
+	if attr, exists := override.Body.Attributes["ignore_changes"]; exists && !baseIgnoreAll && !isEmptyTuple(attr.Expr) {
+		merged.Body.Attributes["ignore_changes"] = attr
+	}
+	// replace_triggered_by and pre/postconditions are intentionally retained
+	// from the primary configuration; Resource.merge does not copy them from an
+	// override. Terraform action triggers replace only when the override supplies
+	// at least one.
+	var actionTriggers []*hclsyntax.Block
+	for _, block := range override.Body.Blocks {
+		if block.Type == "action_trigger" {
+			actionTriggers = append(actionTriggers, block)
+		}
+	}
+	if len(actionTriggers) != 0 {
+		kept := merged.Body.Blocks[:0]
+		for _, block := range merged.Body.Blocks {
+			if block.Type != "action_trigger" {
+				kept = append(kept, block)
+			}
+		}
+		kept = append(kept, actionTriggers...)
+		merged.Body.Blocks = kept
+	}
+	return merged
+}
+
+func isIgnoreAllChanges(attr *hclsyntax.Attribute) bool {
+	if attr == nil {
+		return false
+	}
+	traversal, ok := attr.Expr.(*hclsyntax.ScopeTraversalExpr)
+	return ok && len(traversal.Traversal) == 1 && traversal.Traversal.RootName() == "all"
+}
+
+func isEmptyTuple(expr hclsyntax.Expression) bool {
+	tuple, ok := expr.(*hclsyntax.TupleConsExpr)
+	return ok && len(tuple.Exprs) == 0
 }
 
 func mergeNestedBlock(base, override *hclsyntax.Block) *hclsyntax.Block {
 	merged := cloneBlock(base)
-	merged.Body = mergeBody(base.Body, override.Body, nil)
+	merged.Body = mergeBody(base.Body, override.Body, nil, false)
 	return merged
 }
 

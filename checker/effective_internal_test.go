@@ -557,3 +557,127 @@ func TestBuildEffectiveConfig_OverrideOnlyTerraformFiltersAndCompounds(t *testin
 		t.Fatal("original override AST was mutated")
 	}
 }
+
+func TestBuildEffectiveConfig_ManagedLifecycleAndActionConfigProvenance(t *testing.T) {
+	t.Parallel()
+	base := parseEffectiveTestFile(t, "main.tf", `resource "example" "x" {
+  lifecycle {
+    create_before_destroy = false
+    ignore_changes        = [tags]
+    replace_triggered_by  = [aws_instance.base]
+  }
+}
+action "example" "run" {
+  config {
+    retained = "base"
+    replaced = "base"
+  }
+}`)
+	override := parseEffectiveTestFile(t, "override.tf", `resource "example" "x" {
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = []
+    replace_triggered_by  = [aws_instance.override]
+  }
+}
+action "example" "run" {
+  config {
+    replaced = "override"
+  }
+}`)
+	baseLifecycle := findChildBlock(t, base.Body.Blocks[0].Body, "lifecycle")
+	baseActionConfig := findChildBlock(t, base.Body.Blocks[1].Body, "config")
+
+	effective := buildEffectiveConfig([]ParsedFile{base, override})
+	resource := findChildBlock(t, effective.files[0].Body, "resource", "example", "x")
+	lifecycle := findChildBlock(t, resource.Body, "lifecycle")
+	if got := lifecycle.Body.Attributes["create_before_destroy"].NameRange.Filename; got != "override.tf" {
+		t.Fatalf("create_before_destroy file = %q", got)
+	}
+	if got := lifecycle.Body.Attributes["ignore_changes"].NameRange.Filename; got != "main.tf" {
+		t.Fatalf("empty ignore_changes incorrectly cleared primary; file=%q", got)
+	}
+	if got := lifecycle.Body.Attributes["replace_triggered_by"].NameRange.Filename; got != "main.tf" {
+		t.Fatalf("replace_triggered_by incorrectly overridden; file=%q", got)
+	}
+	action := findChildBlock(t, effective.files[0].Body, "action", "example", "run")
+	config := findChildBlock(t, action.Body, "config")
+	if got := config.Body.Attributes["retained"].NameRange.Filename; got != "main.tf" {
+		t.Fatalf("retained action config file = %q", got)
+	}
+	if got := config.Body.Attributes["replaced"].NameRange.Filename; got != "override.tf" {
+		t.Fatalf("replaced action config file = %q", got)
+	}
+	if findChildBlock(t, base.Body.Blocks[0].Body, "lifecycle") != baseLifecycle ||
+		findChildBlock(t, base.Body.Blocks[1].Body, "config") != baseActionConfig {
+		t.Fatal("primary lifecycle/action AST was mutated")
+	}
+}
+
+func TestBuildEffectiveConfig_DataEphemeralLifecycleRetainsPrimaryNode(t *testing.T) {
+	t.Parallel()
+	for _, blockType := range []string{"data", "ephemeral"} {
+		blockType := blockType
+		t.Run(blockType, func(t *testing.T) {
+			t.Parallel()
+			base := parseEffectiveTestFile(t, "main.tf", blockType+` "example" "x" {
+  lifecycle {
+    precondition {
+      condition     = true
+      error_message = "base"
+    }
+  }
+}`)
+			override := parseEffectiveTestFile(t, "override.tf", blockType+` "example" "x" {
+  lifecycle {
+    precondition {
+      condition     = true
+      error_message = "override"
+    }
+  }
+}`)
+			baseLifecycle := findChildBlock(t, base.Body.Blocks[0].Body, "lifecycle")
+			effective := buildEffectiveConfig([]ParsedFile{base, override})
+			block := findChildBlock(t, effective.files[0].Body, blockType, "example", "x")
+			if got := findChildBlock(t, block.Body, "lifecycle"); got != baseLifecycle {
+				t.Fatalf("%s lifecycle pointer changed", blockType)
+			}
+			if got := findChildBlock(t, override.Body.Blocks[0].Body, "lifecycle").Body.Blocks[0].Body.Attributes["error_message"].NameRange.Filename; got != "override.tf" {
+				t.Fatalf("override AST mutated; file=%q", got)
+			}
+		})
+	}
+}
+
+func TestBuildEffectiveConfig_ManagedLifecycleIgnoreChangesMerge(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		base     string
+		override string
+		wantFile string
+	}{
+		{name: "all remains sticky over list", base: "all", override: "[tags]", wantFile: "main.tf"},
+		{name: "list replaced by all", base: "[tags]", override: "all", wantFile: "override.tf"},
+		{name: "empty list does not clear", base: "[tags]", override: "[]", wantFile: "main.tf"},
+		{name: "nonempty list replaces list", base: "[tags]", override: "[name]", wantFile: "override.tf"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base := parseEffectiveTestFile(t, "main.tf", `resource "example" "x" {
+  lifecycle { ignore_changes = `+tc.base+` }
+}`)
+			override := parseEffectiveTestFile(t, "override.tf", `resource "example" "x" {
+  lifecycle { ignore_changes = `+tc.override+` }
+}`)
+			effective := buildEffectiveConfig([]ParsedFile{base, override})
+			resource := findChildBlock(t, effective.files[0].Body, "resource", "example", "x")
+			lifecycle := findChildBlock(t, resource.Body, "lifecycle")
+			if got := lifecycle.Body.Attributes["ignore_changes"].NameRange.Filename; got != tc.wantFile {
+				t.Fatalf("ignore_changes file = %q, want %q", got, tc.wantFile)
+			}
+		})
+	}
+}
