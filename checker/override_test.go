@@ -1095,3 +1095,159 @@ func TestOverrideOnlyTerraformFiltersProviderMeta(t *testing.T) {
 		t.Fatalf("override-only provider_meta became effective: %v", codes(vs))
 	}
 }
+
+func TestOverrideDataAndEphemeralLifecycleConditionsRemainPrimary(t *testing.T) {
+	t.Parallel()
+	for _, blockType := range []string{"data", "ephemeral"} {
+		blockType := blockType
+		t.Run(blockType, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{
+				"main.tf": blockType + ` "example" "x" {
+  lifecycle {
+    precondition {
+      condition     = true
+      error_message = vars.bad
+    }
+  }
+}`,
+				"override.tf": blockType + ` "example" "x" {
+  lifecycle {
+    precondition {
+      condition     = true
+      error_message = "invalid override construct"
+    }
+  }
+}`,
+			})
+			if !hasCode(vs, "E009") {
+				t.Fatalf("%s lifecycle override hid primary condition: %v", blockType, codes(vs))
+			}
+		})
+	}
+}
+
+func TestOverrideActionConfigMergesFields(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `action "example" "run" {
+  config {
+    retained = vars.bad
+    replaced = "base"
+  }
+}`,
+		"override.tf": `action "example" "run" {
+  config {
+    replaced = "override"
+  }
+}`,
+	})
+	if !hasCode(vs, "E009") {
+		t.Fatalf("action config override discarded omitted base field: %v", codes(vs))
+	}
+}
+
+func TestOverrideManagedLifecycleRetainsReplaceTriggeredBy(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `resource "example" "x" {
+  lifecycle {
+    replace_triggered_by = [vars.bad]
+  }
+}`,
+		"override.tf": `resource "example" "x" {
+  lifecycle {
+    replace_triggered_by = [aws_instance.example]
+  }
+}`,
+	})
+	if !hasCode(vs, "E009") {
+		t.Fatalf("replace_triggered_by override hid primary expression: %v", codes(vs))
+	}
+}
+
+func TestOverrideManagedLifecycleDestroyRespectsDialect(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		baseName string
+		overName string
+		wantE009 bool
+	}{
+		{name: "Terraform retains primary destroy", baseName: "main.tf", overName: "override.tf", wantE009: true},
+		{name: "OpenTofu replaces destroy", baseName: "main.tofu", overName: "override.tofu", wantE009: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{
+				tc.baseName: `resource "example" "x" {
+  lifecycle {
+    destroy = vars.bad
+  }
+}`,
+				tc.overName: `resource "example" "x" {
+  lifecycle {
+    destroy = true
+  }
+}`,
+			})
+			if got := hasCode(vs, "E009"); got != tc.wantE009 {
+				t.Fatalf("E009 = %v, want %v; codes=%v", got, tc.wantE009, codes(vs))
+			}
+		})
+	}
+}
+
+func TestOverrideOnlyManagedLifecycleFiltersUnsupportedFields(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		baseName  string
+		overName  string
+		lifecycle string
+		wantE009  bool
+	}{
+		{name: "Terraform ignores destroy", baseName: "main.tf", overName: "override.tf", lifecycle: "destroy = vars.bad", wantE009: false},
+		{name: "OpenTofu applies destroy", baseName: "main.tofu", overName: "override.tofu", lifecycle: "destroy = vars.bad", wantE009: true},
+		{name: "replace_triggered_by ignored", baseName: "main.tf", overName: "override.tf", lifecycle: "replace_triggered_by = [vars.bad]", wantE009: false},
+		{name: "precondition ignored", baseName: "main.tf", overName: "override.tf", lifecycle: `precondition {
+      condition     = true
+      error_message = vars.bad
+    }`, wantE009: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			vs := run(t, map[string]string{
+				tc.baseName: `resource "example" "x" {}`,
+				tc.overName: `resource "example" "x" {
+  lifecycle {
+    ` + tc.lifecycle + `
+  }
+}`,
+			})
+			if got := hasCode(vs, "E009"); got != tc.wantE009 {
+				t.Fatalf("E009 = %v, want %v; codes=%v", got, tc.wantE009, codes(vs))
+			}
+		})
+	}
+}
+
+func TestOverrideDialectDetectionScansFilesAfterOverride(t *testing.T) {
+	t.Parallel()
+	vs := run(t, map[string]string{
+		"main.tf": `resource "example" "x" {
+  lifecycle { destroy = vars.bad }
+}`,
+		"override.tf": `resource "example" "x" {
+  lifecycle { destroy = true }
+}`,
+		"z.tofu": `output "dialect" { value = "opentofu" }`,
+	})
+	if hasCode(vs, "E009") {
+		t.Fatalf("late .tofu file did not select OpenTofu lifecycle semantics: %v", codes(vs))
+	}
+}
