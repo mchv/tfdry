@@ -86,9 +86,10 @@ func WriteFormatted(ctx context.Context, path string, formatted []byte) error {
 // (the write error itself) and E008 (the file is still unformatted)
 // are appended so callers that suppressed E008 in the initial Run pass
 // for performance still surface the actionable formatting violation to
-// the user. ctx is checked once before any work and once per file at
-// the top of the iteration so a SIGINT mid-fix bails before opening
-// the next file rather than after every individual rewrite.
+// the user. ctx is checked once before any work, once per file at the top of
+// the iteration, and once after the pass. The final check preserves a completed
+// atomic rewrite in the partial results while still reporting cancellation that
+// arrived during the last file.
 func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]bool, []Violation, error) {
 	// Initialize fixed before the ctx check so every exit path returns a
 	// non-nil map. Callers using FixFormat's partial-results contract may
@@ -134,7 +135,7 @@ func FixFormat(ctx context.Context, files []ParsedFile, dir string) (map[string]
 			fixed[f.Name] = true
 		}
 	}
-	return fixed, violations, nil
+	return fixed, violations, ctx.Err()
 }
 
 // writeFormatted atomically writes pre-formatted bytes to path.

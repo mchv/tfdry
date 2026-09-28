@@ -73,3 +73,61 @@ func BenchmarkWriteHuman(b *testing.B) {
 		})
 	}
 }
+
+// makeFixedFiles builds n synthetic root-relative fixed-file display paths.
+func makeFixedFiles(n int) []string {
+	files := make([]string, n)
+	for i := range files {
+		files[i] = fmt.Sprintf("modules/example/file_%d.tf", i)
+	}
+	return files
+}
+
+// BenchmarkNewReportWithFixedFiles measures fixed-path copying, sanitisation,
+// and sorting separately from rendering.
+func BenchmarkNewReportWithFixedFiles(b *testing.B) {
+	for _, n := range []int{0, 10, 1000} {
+		b.Run(fmt.Sprintf("fixed_files=%d", n), func(b *testing.B) {
+			fixedFiles := makeFixedFiles(n)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				sink = output.NewReportWithFixedFiles("/some/terraform/dir", nil, fixedFiles)
+			}
+		})
+	}
+}
+
+// BenchmarkWriteJSONFixedFiles measures rendering reports containing only
+// successful rewrites.
+func BenchmarkWriteJSONFixedFiles(b *testing.B) {
+	for _, n := range []int{0, 10, 1000} {
+		b.Run(fmt.Sprintf("fixed_files=%d", n), func(b *testing.B) {
+			r := output.NewReportWithFixedFiles("/some/terraform/dir", nil, makeFixedFiles(n))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if err := output.WriteJSON(io.Discard, r); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkWriteHumanFixedFiles measures fixed-only human rendering while
+// retaining the single-buffer write path.
+func BenchmarkWriteHumanFixedFiles(b *testing.B) {
+	for _, n := range []int{0, 10, 1000} {
+		b.Run(fmt.Sprintf("fixed_files=%d", n), func(b *testing.B) {
+			r := output.NewReportWithFixedFiles("/some/terraform/dir", nil, makeFixedFiles(n))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if err := output.WriteHuman(io.Discard, r); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
