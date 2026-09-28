@@ -6,6 +6,7 @@ package output_test
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -416,5 +417,78 @@ func TestSanitize_TerminalInjection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewReportWithFixedFiles_NormalisesCopiesSanitisesAndSorts(t *testing.T) {
+	t.Parallel()
+	fixed := []string{"z.tf", "evil\nname.tf", "a.tf", "b\u202E.tf\x1b[31m"}
+	r := output.NewReportWithFixedFiles("/dir", nil, fixed)
+	fixed[0] = "mutated.tf"
+	want := []string{"a.tf", "b.tf", "evilname.tf", "z.tf"}
+	if !slices.Equal(r.FixedFiles, want) {
+		t.Fatalf("FixedFiles = %v, want %v", r.FixedFiles, want)
+	}
+	if r.FixedFiles == nil {
+		t.Fatal("FixedFiles must be non-nil")
+	}
+}
+
+func TestWriteJSON_FixedFilesAlwaysArray(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	if err := output.WriteJSON(&buf, output.NewReport("/dir", nil)); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.FixedFiles == nil {
+		t.Fatalf("fixed_files must be [], not null: %s", buf.String())
+	}
+	if len(got.FixedFiles) != 0 {
+		t.Fatalf("fixed_files = %v, want empty", got.FixedFiles)
+	}
+}
+
+func TestWriteHuman_FixedOnly(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	r := output.NewReportWithFixedFiles("/dir", nil, []string{"z.tf", "a.tf"})
+	if err := output.WriteHuman(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	want := "✓  Fixed a.tf\n✓  Fixed z.tf\n\n✓ No violations found.\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("human output = %q, want %q", got, want)
+	}
+}
+
+func TestWriteHuman_FixedFilesBeforeViolations(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	violations := []checker.Violation{{
+		Code: "E003", Severity: "error", File: "main.tf", Line: 4,
+		Message: "reference to undefined local \"x\"",
+	}}
+	r := output.NewReportWithFixedFiles("/dir", violations, []string{"fixed.tf"})
+	if err := output.WriteHuman(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	want := "✓  Fixed fixed.tf\n\n✗  [E003] main.tf:4  reference to undefined local \"x\"\n\n1 error(s), 0 warning(s)\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("human output = %q, want %q", got, want)
+	}
+}
+
+func TestNewReportWithFixedFiles_PreservesSanitisationCollisions(t *testing.T) {
+	t.Parallel()
+	r := output.NewReportWithFixedFiles("/dir", nil, []string{"a.tf", "a\n.tf"})
+	want := []string{"a.tf", "a.tf"}
+	if !slices.Equal(r.FixedFiles, want) {
+		t.Fatalf("FixedFiles = %v, want one entry per rewritten physical file: %v", r.FixedFiles, want)
 	}
 }

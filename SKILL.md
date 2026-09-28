@@ -27,7 +27,7 @@ configurations (`.tf.json` and `.tofu.json`) are not supported.
 
 - **The lint path is purely read-only.** `tfdry [dir]` and `tfdry --json [dir]` never modify files.
 - **Only two flows write to disk**, both opt-in and obvious from the command:
-  - `tfdry --fix [dir]` — rewrites files to fix formatting (E008) only. Never modifies files for any other check.
+  - `tfdry --fix [dir]` — rewrites files to fix formatting (E008) only. Never modifies files for any other check. On completed runs, successful rewrites are listed on stdout and in JSON `fixed_files`, including when other violations or write failures remain. Interrupted runs exit 130 without a partial report.
   - `tfdry fmt [path]` — rewrites unformatted files in place (default), unless `-check` is passed (read-only, exit 3 on dirt).
 - **Exit codes are strict:**
   - `0` — no violations found (or all violations were fixed by `--fix`)
@@ -36,6 +36,7 @@ configurations (`.tf.json` and `.tofu.json`) are not supported.
   - `3` — `tfdry fmt -check` found unformatted files
   - `130` — interrupted by SIGINT / SIGTERM, or a context deadline expired
 - **Always use `--json` for machine consumption.** Human output format is not stable.
+- **`fixed_files` is always a JSON array.** It is empty when nothing was rewritten; otherwise paths are sanitised, lexically sorted, and relative to the requested directory (including workspace prefixes in recursive mode). Failed writes are omitted and remain visible as E000 plus E008.
 - **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`. `describe --json` also returns check-family metadata for integrations.
 - **`--checks` filters are additive.** Passing `--checks=E003,E004` runs only those two checks.
 - **Warnings (W001, W009) do not affect exit code.** Only errors (E001-E210) cause exit 1; E000 maps to exit 2 (tool error).
@@ -82,6 +83,7 @@ not merged across workspace directories.
 {
   "tfdry_version": "0.2.0",
   "directory": "/path/to/tf",
+  "fixed_files": [],
   "violations": [
     {
       "code": "E004",

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -22,6 +23,7 @@ var Version = "dev"
 type Report struct {
 	TfdryVersion string              `json:"tfdry_version"`
 	Directory    string              `json:"directory"`
+	FixedFiles   []string            `json:"fixed_files"`
 	Violations   []checker.Violation `json:"violations"`
 	Summary      Summary             `json:"summary"`
 }
@@ -58,6 +60,12 @@ type Summary struct {
 // terminal- and line-injection attacks that the human and fmt-subcommand
 // paths defend against.
 func NewReport(dir string, violations []checker.Violation) Report {
+	return NewReportWithFixedFiles(dir, violations, nil)
+}
+
+// NewReportWithFixedFiles builds a Report and records successfully rewritten
+// physical files. Fixed paths are copied, sanitised, and sorted.
+func NewReportWithFixedFiles(dir string, violations []checker.Violation, fixedFiles []string) Report {
 	if violations == nil {
 		violations = make([]checker.Violation, 0)
 	}
@@ -67,6 +75,11 @@ func NewReport(dir string, violations []checker.Violation) Report {
 		v.Message = sanitize(v.Message)
 		clean[i] = v
 	}
+	cleanFixed := make([]string, len(fixedFiles))
+	for i, file := range fixedFiles {
+		cleanFixed[i] = sanitize(file)
+	}
+	sort.Strings(cleanFixed)
 	s := Summary{}
 	for _, v := range clean {
 		switch v.Severity {
@@ -88,7 +101,13 @@ func NewReport(dir string, violations []checker.Violation) Report {
 			s.Errors++
 		}
 	}
-	return Report{TfdryVersion: Version, Directory: sanitize(dir), Violations: clean, Summary: s}
+	return Report{
+		TfdryVersion: Version,
+		Directory:    sanitize(dir),
+		FixedFiles:   cleanFixed,
+		Violations:   clean,
+		Summary:      s,
+	}
 }
 
 // WriteJSON writes r to w as indented JSON.
@@ -103,7 +122,7 @@ func WriteJSON(w io.Writer, r Report) error {
 // propagate this so a stdout failure (closed pipe, full disk) maps to a
 // non-zero exit code, consistent with the JSON output path.
 func WriteHuman(w io.Writer, r Report) error {
-	if len(r.Violations) == 0 {
+	if len(r.Violations) == 0 && len(r.FixedFiles) == 0 {
 		_, err := io.WriteString(w, "✓ No violations found.\n")
 		return err
 	}
@@ -112,12 +131,22 @@ func WriteHuman(w io.Writer, r Report) error {
 	// small outputs (the common 1-10 violations case), while still
 	// minimising syscalls for the large-output case.
 	var b bytes.Buffer
-	// Pre-size for the typical ~110-byte line plus the trailing summary.
-	// Saves the doubling-growth waste for the large-output case. The
-	// helper guards against integer overflow on pathologically large
-	// violation slices (which would panic bytes.Buffer.Grow on a negative
-	// argument).
+	// Pre-size for the typical ~110-byte violation line plus the trailing
+	// summary. Fixed-file lines grow the buffer lazily.
 	b.Grow(humanPreGrow(len(r.Violations)))
+	for _, file := range r.FixedFiles {
+		b.WriteString("✓  Fixed ")
+		b.WriteString(file)
+		b.WriteByte('\n')
+	}
+	if len(r.FixedFiles) != 0 {
+		b.WriteByte('\n')
+	}
+	if len(r.Violations) == 0 {
+		b.WriteString("✓ No violations found.\n")
+		_, err := b.WriteTo(w)
+		return err
+	}
 	for _, v := range r.Violations {
 		b.WriteString(severityIcon(v.Severity))
 		b.WriteString("  [")

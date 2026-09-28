@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -267,5 +268,101 @@ func TestRun_BrokenSymlinkSuppressesCrossFileSemanticChecks(t *testing.T) {
 	}
 	if strings.Contains(stdout, "[E003]") {
 		t.Fatalf("partial root module produced false E003: %q", stdout)
+	}
+}
+
+func TestRun_FixReportsPartialSuccessWithWriteFailure(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.tf"), []byte(`output"a"{value="ok"}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := t.TempDir()
+	target := filepath.Join(targetDir, "target.tf")
+	dirtyTarget := []byte(`output"z"{value="ok"}
+`)
+	if err := os.WriteFile(target, dirtyTarget, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "z.tf")); err != nil {
+		t.Skip("cannot create symlink:", err)
+	}
+
+	code, stdout, stderr := runCLI("--fix", "--json", dir)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty report errors on stdout", stderr)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+		Violations []struct {
+			Code string `json:"code"`
+			File string `json:"file"`
+		} `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.FixedFiles) != 1 || got.FixedFiles[0] != "a.tf" {
+		t.Fatalf("fixed_files = %v, want [a.tf]", got.FixedFiles)
+	}
+	var e000, e008 bool
+	for _, violation := range got.Violations {
+		if violation.File != "z.tf" {
+			continue
+		}
+		switch violation.Code {
+		case "E000":
+			e000 = true
+		case "E008":
+			e008 = true
+		}
+	}
+	if !e000 || !e008 {
+		t.Fatalf("violations = %+v, want z.tf E000 and E008", got.Violations)
+	}
+	after, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, dirtyTarget) {
+		t.Fatalf("symlink target changed: %q", after)
+	}
+}
+
+func TestRun_FixPreservesSanitisationCollidingFilenames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dirty := []byte(`output"x"{value="ok"}
+`)
+	for _, name := range []string{"a.tf", "a\n.tf"} {
+		if err := os.WriteFile(filepath.Join(dir, name), dirty, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, stdout, stderr := runCLI("--checks=E008", "--fix", "--json", dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.FixedFiles) != 2 || got.FixedFiles[0] != "a.tf" || got.FixedFiles[1] != "a.tf" {
+		t.Fatalf("fixed_files = %v, want one sanitised entry per physical rewrite", got.FixedFiles)
+	}
+	for _, name := range []string{"a.tf", "a\n.tf"} {
+		contents, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(contents), `output "x"`) {
+			t.Fatalf("%q was not rewritten: %q", name, contents)
+		}
 	}
 }

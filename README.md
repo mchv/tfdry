@@ -118,7 +118,11 @@ The format is `{icon} [{code}] {file}:{line}  {message}`, where the
 icon is `✗` for errors and `⚠` for warnings. File-level violations
 (e.g. `E000` tool errors) omit the `:{line}` segment because there's
 no source line to point at. A clean run prints `✓ No violations found.`
-instead.
+instead. When a `--fix` run completes, each successfully rewritten file is
+reported on stdout before any remaining violations, for example
+`✓  Fixed main.tf`; paths are sanitised and sorted. In recursive mode they are
+relative to the recursion root, such as `staging/main.tf`. Interrupted runs
+retain the existing exit-130 behaviour and do not render a partial report.
 
 Same input with `--json`:
 
@@ -126,6 +130,7 @@ Same input with `--json`:
 {
   "tfdry_version": "0.2.0",
   "directory": "./infra",
+  "fixed_files": [],
   "violations": [
     {
       "code": "E003",
@@ -213,7 +218,11 @@ analysis, matching OpenTofu's module-loading precedence rule. Files with
 different basenames are combined into the same module regardless of extension.
 E008 and `--fix` remain physical-file operations: they inspect or rewrite every
 `.tf` and `.tofu` file independently, including shadowed same-basename peers
-and override files. The default CLI parses each physical file once and projects
+and override files. On completed runs, `--fix` reports every successful rewrite
+on stdout and in the JSON `fixed_files` array even when other violations or
+write failures remain; a failed write is omitted from `fixed_files` and
+continues to emit E000 and E008. An interrupted run exits 130 without rendering
+a partial report. The default CLI parses each physical file once and projects
 both views from that recorded result, so parse failures and semantic gating
 cannot disagree for the same file after a concurrent rewrite. This is a
 consistent per-file observation, not an atomic snapshot transaction across all
@@ -271,6 +280,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 {
   "tfdry_version": "0.2.0",
   "directory": "./infra",
+  "fixed_files": [],
   "violations": [
     {
       "code": "E004",
@@ -292,6 +302,7 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 |-------|------|-------|
 | `tfdry_version` | string | Semver of the binary that produced the output. |
 | `directory` | string | The directory tfdry analysed (sanitised — control characters, ANSI escapes, and Bidi-override codepoints are stripped). |
+| `fixed_files` | array of strings | Files successfully rewritten by `--fix`, sorted lexically after sanitisation. Paths are relative to `directory`; recursive results include the workspace sub-path. Always present and `[]` when no files were rewritten. |
 | `violations[]` | array | One object per violation, ordered by `file` then `line`. |
 | `violations[].code` | string | Registered tfdry check code; use `tfdry describe --json` for the runtime catalogue. |
 | `violations[].severity` | string | `"error"` or `"warning"`. |
