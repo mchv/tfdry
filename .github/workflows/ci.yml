@@ -104,7 +104,7 @@ jobs:
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
         continue-on-error: true
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage.out
           token: ${{ secrets.CODECOV_TOKEN }}
