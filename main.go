@@ -413,7 +413,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 					if !wasFixed {
 						continue
 					}
-					fixedFiles = append(fixedFiles, filepath.ToSlash(displayPath(rootClean, d, name)))
+					fixedFiles = append(fixedFiles, fixedFilePath(rootClean, d, name))
 				}
 				dirViolations = append(dirViolations, fixViolations...)
 			} else {
@@ -879,6 +879,18 @@ func checksFilterWithout(filter checker.CheckSet, code string) checker.CheckSet 
 		}
 	}
 	return out
+}
+
+// fixedFilePath formats a physical filename returned by FixFormat relative to
+// the user-supplied root. Unlike displayPath, name is always a file path and
+// must never be interpreted as a directory-level diagnostic when it happens
+// to equal dir.
+func fixedFilePath(rootArg, dir, name string) string {
+	relDir, err := filepath.Rel(rootArg, dir)
+	if err != nil {
+		return filepath.ToSlash(filepath.Join(dir, name))
+	}
+	return filepath.ToSlash(filepath.Join(relDir, name))
 }
 
 // displayPath formats the path embedded in a violation for output,

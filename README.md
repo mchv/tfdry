@@ -313,6 +313,12 @@ The `--json` flag produces a single JSON object — the **stable machine-consump
 | `summary.warnings` | integer | Count of `severity == "warning"` violations. |
 | `summary.tool_errors` | integer | Count of E000 violations specifically. Drives exit code 2 when `> 0`. |
 
+`fixed_files` entries are sanitised display paths, not lossless filesystem
+identifiers. Names containing stripped control, ANSI, or Bidi characters may
+not round-trip to the original path, and distinct filenames can therefore
+produce identical entries. The array still retains one entry per successful
+physical rewrite.
+
 ## Integrations
 
 ### Pre-commit hook

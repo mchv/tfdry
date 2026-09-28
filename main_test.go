@@ -3064,3 +3064,72 @@ func TestRun_FixPreCancelledContextEmitsNoReport(t *testing.T) {
 		t.Fatalf("stderr = %q, want interrupted", stderr.String())
 	}
 }
+
+func TestRun_FixRelativeRootNamedLikeFileReportsFilename(t *testing.T) {
+	for _, recursive := range []bool{false, true} {
+		name := "non-recursive"
+		if recursive {
+			name = "recursive"
+		}
+		t.Run(name, func(t *testing.T) {
+			// The root must be relative and equal to the physical filename to
+			// exercise the ambiguity in displayPath's directory-diagnostic case.
+			root, err := os.MkdirTemp(".", "fixed-root-*.tf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(root)
+			filename := filepath.Base(root)
+			path := filepath.Join(root, filename)
+			if err := os.WriteFile(path, []byte(`output"x"{value="ok"}
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			args := []string{"--checks=E008", "--fix", "--json"}
+			if recursive {
+				args = append(args, "--recursive")
+			}
+			args = append(args, root)
+			code, stdout, stderr := runCLI(args...)
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+			}
+			var got struct {
+				FixedFiles []string `json:"fixed_files"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got.FixedFiles, []string{filename}) {
+				t.Fatalf("fixed_files = %v, want [%s]", got.FixedFiles, filename)
+			}
+		})
+	}
+}
+
+func TestRun_FixReportsOnlyFilesRewrittenByCurrentInvocation(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `output"x"{value="ok"}
+`,
+	})
+	for invocation, want := range [][]string{{"main.tf"}, {}} {
+		code, stdout, stderr := runCLI("--checks=E008", "--fix", "--json", dir)
+		if code != 0 {
+			t.Fatalf("invocation %d: exit = %d, want 0 (stdout=%q stderr=%q)", invocation+1, code, stdout, stderr)
+		}
+		var got struct {
+			FixedFiles []string `json:"fixed_files"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got.FixedFiles, want) {
+			t.Fatalf("invocation %d: fixed_files = %v, want %v", invocation+1, got.FixedFiles, want)
+		}
+		if got.FixedFiles == nil {
+			t.Fatalf("invocation %d: fixed_files must be a non-nil array", invocation+1)
+		}
+	}
+}

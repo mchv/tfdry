@@ -5,6 +5,8 @@ package checker
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,5 +149,43 @@ func TestWriteFormatted_RaceToSymlink_RefusesRename(t *testing.T) {
 	//      actually exercises the cleanup path.
 	if leftovers := leftoverFmtTemps(t, dir); len(leftovers) > 0 {
 		t.Errorf("leftover temp files after raced rename: %v", leftovers)
+	}
+}
+
+func TestFixFormat_FinalWriteCancellationReturnsPartialResults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.tf")
+	dirty := []byte(`output"x"{value="ok"}
+`)
+	if err := os.WriteFile(path, dirty, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	prev := writeFormattedBeforeRename
+	writeFormattedBeforeRename = func(p string) {
+		if p == path {
+			cancel()
+		}
+	}
+	defer func() { writeFormattedBeforeRename = prev }()
+
+	fixed, violations, err := FixFormat(ctx, []ParsedFile{{Name: "main.tf", Src: dirty}}, dir)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if !fixed["main.tf"] || len(fixed) != 1 {
+		t.Fatalf("fixed = %v, want main.tf partial success", fixed)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("violations = %v, want none after successful rewrite", violations)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	want := `output "x" { value = "ok" }
+`
+	if string(contents) != want {
+		t.Fatalf("rewritten file = %q, want %q", contents, want)
 	}
 }

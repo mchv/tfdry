@@ -64,7 +64,10 @@ func NewReport(dir string, violations []checker.Violation) Report {
 }
 
 // NewReportWithFixedFiles builds a Report and records successfully rewritten
-// physical files. Fixed paths are copied, sanitised, and sorted.
+// physical files. Fixed paths are copied, sanitised, and sorted. Sanitisation
+// produces terminal-safe display values rather than lossless filesystem
+// identifiers: stripped characters can prevent round-tripping, and distinct
+// filenames can produce identical entries.
 func NewReportWithFixedFiles(dir string, violations []checker.Violation, fixedFiles []string) Report {
 	if violations == nil {
 		violations = make([]checker.Violation, 0)
