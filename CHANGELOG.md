@@ -28,6 +28,13 @@ Each release entry groups changes under the following headings (omitted if empty
   including same-basename pairs, matching `tofu fmt`. OpenTofu 1.12's bare `tofu2024` language-edition keyword
   is also recognised without a spurious W009 diagnostic. JSON
   configurations (`.tf.json` and `.tofu.json`) remain unsupported.
+- **Visible `--fix` rewrite reporting.** On completed runs, human output now
+  lists every successfully rewritten file on stdout, and JSON reports the same
+  sanitised, lexically sorted paths in an always-present `fixed_files` array.
+  Recursive paths are relative to the requested root. Successful rewrites
+  remain visible alongside remaining violations and partial write failures;
+  exit-code semantics are unchanged, and interrupted runs still exit 130
+  without a partial report.
 - **Terraform/OpenTofu override semantics.** Semantic checks now load primary
   files first and apply `override.tf`, `*_override.tf`, and OpenTofu `.tofu`
   equivalents in lexicographic order. Local values merge by name; matching

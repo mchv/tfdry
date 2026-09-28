@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -232,6 +233,7 @@ func TestRun_FixWithChecksOnlyE008_DoesNotRunOtherChecks(t *testing.T) {
 			code, stderr, stdout)
 	}
 	var got struct {
+		FixedFiles []string `json:"fixed_files"`
 		Violations []struct {
 			Code string `json:"code"`
 			File string `json:"file"`
@@ -239,6 +241,9 @@ func TestRun_FixWithChecksOnlyE008_DoesNotRunOtherChecks(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	if len(got.FixedFiles) != 1 || got.FixedFiles[0] != "main.tf" {
+		t.Fatalf("fixed_files = %v, want [main.tf]", got.FixedFiles)
 	}
 	for _, v := range got.Violations {
 		// Only E008 (and E000, parse violations) may appear. E002 must NOT.
@@ -2813,5 +2818,249 @@ func TestRun_FixFormatsShadowedTerraformPeer(t *testing.T) {
 	want := "locals { value = \"terraform\" }\n"
 	if string(got) != want {
 		t.Fatalf("shadowed main.tf after --fix = %q, want %q", got, want)
+	}
+}
+
+func TestRun_FixReportsFixedFileHuman(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `output"x"{value="ok"}
+`,
+	})
+	code, stdout, stderr := runCLI("--fix", dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	want := "✓  Fixed main.tf\n\n✓ No violations found.\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestRun_FixReportsFixedFilesJSON(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"z.tf": `output"z"{value="ok"}
+`,
+		"a.tf": `output"a"{value="ok"}
+`,
+	})
+	code, stdout, stderr := runCLI("--fix", "--json", dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+		Violations []any    `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	want := []string{"a.tf", "z.tf"}
+	if !slices.Equal(got.FixedFiles, want) {
+		t.Fatalf("fixed_files = %v, want %v", got.FixedFiles, want)
+	}
+	if len(got.Violations) != 0 {
+		t.Fatalf("violations = %v, want empty", got.Violations)
+	}
+}
+
+func TestRun_FixRecursiveReportsRootRelativeSortedPaths(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"z/main.tf": `output"z"{value="ok"}
+`,
+		"a/main.tf": `output"a"{value="ok"}
+`,
+	})
+	code, stdout, stderr := runCLI("--fix", "--recursive", "--json", dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a/main.tf", "z/main.tf"}
+	if !slices.Equal(got.FixedFiles, want) {
+		t.Fatalf("fixed_files = %v, want %v", got.FixedFiles, want)
+	}
+}
+
+func TestRun_FixReportsBothSameBasenamePeers(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `output"tf"{value="ok"}
+`,
+		"main.tofu": `output"tofu"{value="ok"}
+`,
+		"z_override.tf": `output"override"{value="ok"}
+`,
+	})
+	code, stdout, stderr := runCLI("--checks=E008", "--fix", "--json", dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"main.tf", "main.tofu", "z_override.tf"}
+	if !slices.Equal(got.FixedFiles, want) {
+		t.Fatalf("fixed_files = %v, want %v", got.FixedFiles, want)
+	}
+}
+
+func TestRun_FixedFilesEmptyWithoutFixOrWhenE008Excluded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "no fix", args: []string{"--json"}},
+		{name: "E008 excluded", args: []string{"--fix", "--checks=E001", "--json"}},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeTFDir(t, map[string]string{
+				"main.tf": `output"x"{value="ok"}
+`,
+			})
+			args := append(append([]string(nil), tc.args...), dir)
+			_, stdout, _ := runCLI(args...)
+			var got struct {
+				FixedFiles []string `json:"fixed_files"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+				t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+			}
+			if got.FixedFiles == nil || len(got.FixedFiles) != 0 {
+				t.Fatalf("fixed_files = %#v, want non-nil empty", got.FixedFiles)
+			}
+		})
+	}
+}
+
+func TestRun_FixReportsSuccessAlongsideParseError(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"broken.tf": `locals { value = `,
+		"fixed.tf": `output"x"{value="ok"}
+`,
+	})
+	code, stdout, stderr := runCLI("--fix", "--json", dir)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+		Violations []struct {
+			Code string `json:"code"`
+		} `json:"violations"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.FixedFiles, []string{"fixed.tf"}) {
+		t.Fatalf("fixed_files = %v, want fixed.tf", got.FixedFiles)
+	}
+	if len(got.Violations) != 1 || got.Violations[0].Code != "E001" {
+		t.Fatalf("violations = %+v, want one E001", got.Violations)
+	}
+}
+
+func TestRun_FixOutputFailureStillLeavesFileRewritten(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "human", args: []string{"--fix"}},
+		{name: "JSON", args: []string{"--fix", "--json"}},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeTFDir(t, map[string]string{
+				"main.tf": `output"x"{value="ok"}
+`,
+			})
+			stdout := errWriter{err: io.ErrClosedPipe}
+			var stderr bytes.Buffer
+			args := append(append([]string(nil), tc.args...), dir)
+			code := run(context.Background(), args, stdout, &stderr)
+			if code != 2 {
+				t.Fatalf("exit = %d, want 2 (stderr=%q)", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "error writing output") {
+				t.Fatalf("stderr = %q, want output error", stderr.String())
+			}
+			contents, err := os.ReadFile(filepath.Join(dir, "main.tf"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(contents), `output "x"`) {
+				t.Fatalf("file was not rewritten before output failed: %q", contents)
+			}
+		})
+	}
+}
+
+func TestRun_FixReportsSuccessAlongsideWarning(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `locals{unused="warning"}
+`,
+	})
+	code, stdout, stderr := runCLI("--fix", "--json", dir)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 for warning-only report (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	var got struct {
+		FixedFiles []string `json:"fixed_files"`
+		Violations []struct {
+			Code string `json:"code"`
+		} `json:"violations"`
+		Summary struct {
+			Warnings int `json:"warnings"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.FixedFiles, []string{"main.tf"}) {
+		t.Fatalf("fixed_files = %v, want [main.tf]", got.FixedFiles)
+	}
+	if len(got.Violations) != 1 || got.Violations[0].Code != "W001" || got.Summary.Warnings != 1 {
+		t.Fatalf("report = %+v, want one W001 warning", got)
+	}
+}
+
+func TestRun_FixPreCancelledContextEmitsNoReport(t *testing.T) {
+	t.Parallel()
+	dir := writeTFDir(t, map[string]string{
+		"main.tf": `output"x"{value="ok"}
+`,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout, stderr bytes.Buffer
+	code := run(ctx, []string{"--fix", "--json", dir}, &stdout, &stderr)
+	if code != 130 {
+		t.Fatalf("exit = %d, want 130 (stderr=%q)", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no partial report", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "tfdry: interrupted") {
+		t.Fatalf("stderr = %q, want interrupted", stderr.String())
 	}
 }

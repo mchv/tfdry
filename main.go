@@ -358,6 +358,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	var violations []checker.Violation
+	var fixedFiles []string
 	for _, d := range dirs {
 		// Per-directory cancel checkpoint. On large monorepos the
 		// walker may cover hundreds of subdirs; a SIGINT mid-walk
@@ -404,9 +405,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 		if shouldFormat && len(formatFiles) > 0 {
 			if shouldFix {
-				_, fixViolations, err := checker.FixFormat(ctx, formatFiles, d)
+				fixed, fixViolations, err := checker.FixFormat(ctx, formatFiles, d)
 				if code, ok := handleFatalErr(err, stderr, "tfdry"); ok {
 					return code
+				}
+				for name, wasFixed := range fixed {
+					if !wasFixed {
+						continue
+					}
+					fixedFiles = append(fixedFiles, filepath.ToSlash(displayPath(rootClean, d, name)))
 				}
 				dirViolations = append(dirViolations, fixViolations...)
 			} else {
@@ -444,7 +451,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		violations = append(violations, dirViolations...)
 	}
 
-	report := output.NewReport(dir, violations)
+	report := output.NewReportWithFixedFiles(dir, violations, fixedFiles)
 
 	if jsonFlag {
 		if err := output.WriteJSON(stdout, report); err != nil {
