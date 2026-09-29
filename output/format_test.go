@@ -492,3 +492,55 @@ func TestNewReportWithFixedFiles_PreservesSanitisationCollisions(t *testing.T) {
 		t.Fatalf("FixedFiles = %v, want one entry per rewritten physical file: %v", r.FixedFiles, want)
 	}
 }
+
+func TestWriteChecksJSON_SourceSupportContract(t *testing.T) {
+	t.Parallel()
+	write := func() []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		if err := output.WriteChecksJSON(&buf, nil); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	first := write()
+	second := write()
+	if !bytes.Equal(first, second) {
+		t.Fatalf("describe JSON must be deterministic\nfirst:  %s\nsecond: %s", first, second)
+	}
+	var got struct {
+		Checks        json.RawMessage `json:"checks"`
+		SourceSupport *struct {
+			Syntax         string   `json:"syntax"`
+			Dialects       []string `json:"dialects"`
+			FileExtensions []string `json:"file_extensions"`
+		} `json:"source_support"`
+	}
+	if err := json.Unmarshal(first, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceSupport == nil {
+		t.Fatalf("source_support must always be present: %s", first)
+	}
+	if got.SourceSupport.Syntax != "native_hcl" {
+		t.Fatalf("source_support.syntax = %q, want native_hcl", got.SourceSupport.Syntax)
+	}
+	if want := []string{"terraform", "opentofu"}; !slices.Equal(got.SourceSupport.Dialects, want) {
+		t.Fatalf("source_support.dialects = %v, want %v", got.SourceSupport.Dialects, want)
+	}
+	if want := []string{".tf", ".tofu"}; !slices.Equal(got.SourceSupport.FileExtensions, want) {
+		t.Fatalf("source_support.file_extensions = %v, want %v", got.SourceSupport.FileExtensions, want)
+	}
+	for _, unsupported := range []string{".tf.json", ".tofu.json"} {
+		if slices.Contains(got.SourceSupport.FileExtensions, unsupported) {
+			t.Fatalf("source_support must not advertise unsupported extension %s", unsupported)
+		}
+	}
+	var checks []any
+	if err := json.Unmarshal(got.Checks, &checks); err != nil {
+		t.Fatalf("checks must be an array: %v", err)
+	}
+	if checks == nil || len(checks) != 0 {
+		t.Fatalf("nil checks must encode as [], got %s", got.Checks)
+	}
+}

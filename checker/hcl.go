@@ -108,8 +108,8 @@ func nativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
 			continue
 		}
 		name := e.Name()
-		if filepath.Ext(name) == ".tofu" {
-			tofuBases[name[:len(name)-len(".tofu")]] = struct{}{}
+		if filepath.Ext(name) == opentofuFileExtension {
+			tofuBases[name[:len(name)-len(opentofuFileExtension)]] = struct{}{}
 		}
 	}
 
@@ -120,10 +120,10 @@ func nativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
 		}
 		name := e.Name()
 		switch filepath.Ext(name) {
-		case ".tofu":
+		case opentofuFileExtension:
 			selected = append(selected, e)
-		case ".tf":
-			base := name[:len(name)-len(".tf")]
+		case terraformFileExtension:
+			base := name[:len(name)-len(terraformFileExtension)]
 			if _, shadowed := tofuBases[base]; !shadowed {
 				selected = append(selected, e)
 			}
@@ -142,7 +142,7 @@ func allNativeConfigEntries(entries []os.DirEntry) []os.DirEntry {
 			continue
 		}
 		switch filepath.Ext(e.Name()) {
-		case ".tf", ".tofu":
+		case terraformFileExtension, opentofuFileExtension:
 			selected = append(selected, e)
 		}
 	}

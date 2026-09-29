@@ -32,7 +32,7 @@ func buildEffectiveConfig(files []ParsedFile) effectiveConfig {
 	hasOverride := false
 	openTofu := false
 	for _, file := range files {
-		if filepath.Ext(file.Name) == ".tofu" {
+		if filepath.Ext(file.Name) == opentofuFileExtension {
 			openTofu = true
 		}
 		if isOverrideFilename(file.Name) {
@@ -416,7 +416,7 @@ func mergeRequiredProvidersOverride(primary []*hclsyntax.Block, own func(int) *h
 
 func isOverrideFilename(name string) bool {
 	ext := filepath.Ext(name)
-	if ext != ".tf" && ext != ".tofu" {
+	if ext != terraformFileExtension && ext != opentofuFileExtension {
 		return false
 	}
 	base := strings.TrimSuffix(name, ext)
