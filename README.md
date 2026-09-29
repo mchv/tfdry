@@ -258,7 +258,24 @@ non-recursive case — no cross-directory scope merging. `local.foo` in
 parent directory's `locals.tf`. That's a separate design question
 tracked in [#32](https://github.com/mchv/tfdry/issues/32).
 
-The `describe` subcommand prints the check table to stdout (or JSON with `--json`) and exits 0 — useful for building IDE integrations or `--checks=` allow-lists.
+The `describe` subcommand prints the check table to stdout (or JSON with
+`--json`) and exits 0 — useful for building IDE integrations or `--checks=`
+allow-lists. Its JSON includes explicit native-source capability metadata:
+
+```json
+{
+  "source_support": {
+    "syntax": "native_hcl",
+    "dialects": ["terraform", "opentofu"],
+    "file_extensions": [".tf", ".tofu"]
+  }
+}
+```
+
+This describes the static native-HCL sources tfdry accepts, not complete
+Terraform/OpenTofu execution or validation. JSON configurations (`.tf.json`
+and `.tofu.json`) remain unsupported. `describe --json` may gain additive
+metadata fields in future releases; consumers should ignore unknown fields.
 
 ### Exit codes
 

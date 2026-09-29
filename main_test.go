@@ -3133,3 +3133,30 @@ func TestRun_FixReportsOnlyFilesRewrittenByCurrentInvocation(t *testing.T) {
 		}
 	}
 }
+
+func TestRun_DescribeJSON_SourceSupport(t *testing.T) {
+	t.Parallel()
+	code, stdout, stderr := runCLI("describe", "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (stderr=%q)", code, stderr)
+	}
+	var got struct {
+		SourceSupport struct {
+			Syntax         string   `json:"syntax"`
+			Dialects       []string `json:"dialects"`
+			FileExtensions []string `json:"file_extensions"`
+		} `json:"source_support"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceSupport.Syntax != "native_hcl" {
+		t.Fatalf("source_support.syntax = %q, want native_hcl", got.SourceSupport.Syntax)
+	}
+	if want := []string{"terraform", "opentofu"}; !slices.Equal(got.SourceSupport.Dialects, want) {
+		t.Fatalf("source_support.dialects = %v, want %v", got.SourceSupport.Dialects, want)
+	}
+	if want := []string{".tf", ".tofu"}; !slices.Equal(got.SourceSupport.FileExtensions, want) {
+		t.Fatalf("source_support.file_extensions = %v, want %v", got.SourceSupport.FileExtensions, want)
+	}
+}

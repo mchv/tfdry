@@ -37,7 +37,7 @@ configurations (`.tf.json` and `.tofu.json`) are not supported.
   - `130` — interrupted by SIGINT / SIGTERM, or a context deadline expired
 - **Always use `--json` for machine consumption.** Human output format is not stable.
 - **`fixed_files` is always a JSON array.** It is empty when nothing was rewritten; otherwise entries are sanitised display paths, lexically sorted and relative to the requested directory (including workspace prefixes in recursive mode). They are not lossless filesystem identifiers: stripped characters may prevent round-tripping, and distinct filenames can produce identical entries. The array retains one entry per successful physical rewrite. Failed writes are omitted and remain visible as E000 plus E008.
-- **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`. `describe --json` also returns check-family metadata for integrations.
+- **Use `tfdry describe` to enumerate check codes** before filtering with `--checks`. `describe --json` returns check-family metadata and `source_support`, which explicitly identifies `native_hcl`, the `terraform`/`opentofu` dialects, and the supported `.tf`/`.tofu` extensions. It does not advertise JSON configurations or full runtime validation. Treat future describe metadata as additive and ignore unknown fields.
 - **`--checks` filters are additive.** Passing `--checks=E003,E004` runs only those two checks.
 - **Warnings (W001, W009) do not affect exit code.** Only errors (E001-E210) cause exit 1; E000 maps to exit 2 (tool error).
 

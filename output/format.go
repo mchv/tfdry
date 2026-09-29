@@ -183,9 +183,10 @@ func WriteHuman(w io.Writer, r Report) error {
 // with a top-level "checks" key. Used by `tfdry describe --json`.
 //
 // The output also carries a "families" array so consumers can render or filter
-// by family without having to reconstruct the family metadata from the check
-// codes. Each check entry references its family via the "family" field
-// (matching the family's "code").
+// by family without reconstructing family metadata, plus "source_support" so
+// integrations can detect native Terraform/OpenTofu support without inferring
+// it from check summaries. Each check references its family via the "family"
+// field (matching the family's "code").
 func WriteChecksJSON(w io.Writer, checks []checker.CheckInfo) error {
 	type checkEntry struct {
 		Code     string `json:"code"`
@@ -199,9 +200,15 @@ func WriteChecksJSON(w io.Writer, checks []checker.CheckInfo) error {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
+	type sourceSupportEntry struct {
+		Syntax         string   `json:"syntax"`
+		Dialects       []string `json:"dialects"`
+		FileExtensions []string `json:"file_extensions"`
+	}
 	type wrap struct {
-		Families []familyEntry `json:"families"`
-		Checks   []checkEntry  `json:"checks"`
+		Families      []familyEntry      `json:"families"`
+		Checks        []checkEntry       `json:"checks"`
+		SourceSupport sourceSupportEntry `json:"source_support"`
 	}
 	checkEntries := make([]checkEntry, len(checks))
 	for i, c := range checks {
@@ -212,9 +219,15 @@ func WriteChecksJSON(w io.Writer, checks []checker.CheckInfo) error {
 	for i, f := range familyList {
 		familyEntries[i] = familyEntry{f.Code, f.Severity, f.Name, f.Description}
 	}
+	support := checker.SourceSupport()
+	sourceSupport := sourceSupportEntry{
+		Syntax:         support.Syntax,
+		Dialects:       support.Dialects,
+		FileExtensions: support.FileExtensions,
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(wrap{Families: familyEntries, Checks: checkEntries})
+	return enc.Encode(wrap{Families: familyEntries, Checks: checkEntries, SourceSupport: sourceSupport})
 }
 
 func severityIcon(s string) string {

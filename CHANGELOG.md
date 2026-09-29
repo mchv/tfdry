@@ -28,6 +28,11 @@ Each release entry groups changes under the following headings (omitted if empty
   including same-basename pairs, matching `tofu fmt`. OpenTofu 1.12's bare `tofu2024` language-edition keyword
   is also recognised without a spurious W009 diagnostic. JSON
   configurations (`.tf.json` and `.tofu.json`) remain unsupported.
+- **Machine-readable native source support.** `tfdry describe --json` now
+  includes an always-present `source_support` object identifying native HCL,
+  Terraform/OpenTofu dialects, and `.tf`/`.tofu` extensions without implying
+  JSON configuration support. Registry-enforced tests require equivalent
+  Terraform and OpenTofu diagnostics for every registered check.
 - **Visible `--fix` rewrite reporting.** On completed runs, human output now
   lists every successfully rewritten file on stdout, and JSON reports the same
   sanitised, lexically sorted paths in an always-present `fixed_files` array.
