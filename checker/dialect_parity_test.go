@@ -22,32 +22,37 @@ const (
 )
 
 type dialectParityCase struct {
-	mode  dialectParityMode
-	files map[string]string
+	mode      dialectParityMode
+	wantCount int
+	files     map[string]string
 }
 
 var dialectParityCases = map[string]dialectParityCase{
 	"E001": {
-		mode: dialectParityParse,
+		mode:      dialectParityParse,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `resource "aws_s3_bucket" "example" { broken syntax !!!`,
 		},
 	},
 	"E002": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"a.tf": `locals { name = "first" }`,
 			"b.tf": `locals { name = "second" }`,
 		},
 	},
 	"E003": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `output "value" { value = local.missing }`,
 		},
 	},
 	"E004": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `
 locals { tags = { environment = "production" } }
@@ -56,7 +61,8 @@ output "value" { value = "prefix-${local.tags}" }
 		},
 	},
 	"E005": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `
 resource "aws_instance" "example" {
@@ -67,7 +73,8 @@ resource "aws_instance" "example" {
 		},
 	},
 	"E006": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `
 locals { names = ["one", "two"] }
@@ -80,7 +87,8 @@ module "child" {
 		},
 	},
 	"E007": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `
 module "child" {
@@ -92,61 +100,71 @@ module "child" {
 		},
 	},
 	"E008": {
-		mode: dialectParityFormat,
+		mode:      dialectParityFormat,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": "locals{value=\"unformatted\"}\n",
 		},
 	},
 	"E009": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `output "value" { value = vars.name }`,
 		},
 	},
 	"W001": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `locals { unused = "value" }`,
 		},
 	},
 	"W009": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `output "value" { value = mynewthing.environment }`,
 		},
 	},
 	"E101": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `resource "aws_vpc" "example" { cidr_block = "10.0.0.0/33" }`,
 		},
 	},
 	"E201": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `provider "aws" { region = "us-east-11" }`,
 		},
 	},
 	"E202": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `resource "aws_something" "example" { account_id = "12345678901" }`,
 		},
 	},
 	"E203": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `resource "aws_iam_role_policy_attachment" "example" { policy_arn = "not-an-arn" }`,
 		},
 	},
 	"E204": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `resource "aws_s3_bucket" "example" { bucket = "ab" }`,
 		},
 	},
 	"E210": {
-		mode: dialectParityRun,
+		mode:      dialectParityRun,
+		wantCount: 1,
 		files: map[string]string{
 			"main.tf": `
 resource "aws_quicksight_data_source" "example" {
@@ -170,8 +188,12 @@ func TestRegisteredChecks_TerraformOpenTofuParity(t *testing.T) {
 			t.Fatalf("duplicate registered check code %s", check.Code)
 		}
 		registered[check.Code] = struct{}{}
-		if _, ok := dialectParityCases[check.Code]; !ok {
+		parityCase, ok := dialectParityCases[check.Code]
+		if !ok {
 			t.Fatalf("registered check %s has no Terraform/OpenTofu parity case", check.Code)
+		}
+		if parityCase.wantCount <= 0 {
+			t.Fatalf("registered check %s must declare a positive expected parity count", check.Code)
 		}
 	}
 	for code := range dialectParityCases {
@@ -185,8 +207,8 @@ func TestRegisteredChecks_TerraformOpenTofuParity(t *testing.T) {
 		t.Run(check.Code, func(t *testing.T) {
 			t.Parallel()
 			parityCase := dialectParityCases[check.Code]
-			terraform := runDialectParityCase(t, check.Code, parityCase, ".tf")
-			opentofu := runDialectParityCase(t, check.Code, parityCase, ".tofu")
+			terraform := runDialectParityCase(t, check, parityCase, ".tf")
+			opentofu := runDialectParityCase(t, check, parityCase, ".tofu")
 			normalizeDialectViolationPaths(terraform, ".tf", parityCase.files)
 			normalizeDialectViolationPaths(opentofu, ".tofu", parityCase.files)
 			if !slices.Equal(terraform, opentofu) {
@@ -196,7 +218,7 @@ func TestRegisteredChecks_TerraformOpenTofuParity(t *testing.T) {
 	}
 }
 
-func runDialectParityCase(t *testing.T, code string, parityCase dialectParityCase, extension string) []checker.Violation {
+func runDialectParityCase(t *testing.T, check checker.CheckInfo, parityCase dialectParityCase, extension string) []checker.Violation {
 	t.Helper()
 	files := make(map[string]string, len(parityCase.files))
 	for name, source := range parityCase.files {
@@ -237,7 +259,7 @@ func runDialectParityCase(t *testing.T, code string, parityCase dialectParityCas
 		if len(parseViolations) != 0 {
 			t.Fatalf("run fixture has parse violations: %+v", parseViolations)
 		}
-		violations, err = checker.Run(ctx, parsed, checker.CheckSet{code: {}}, dir)
+		violations, err = checker.Run(ctx, parsed, checker.CheckSet{check.Code: {}}, dir)
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -245,12 +267,15 @@ func runDialectParityCase(t *testing.T, code string, parityCase dialectParityCas
 		t.Fatalf("unknown parity mode %q", parityCase.mode)
 	}
 
-	if len(violations) == 0 {
-		t.Fatalf("fixture produced no %s violation", code)
+	if len(violations) != parityCase.wantCount {
+		t.Fatalf("fixture for %s produced %d violations, want %d: %+v", check.Code, len(violations), parityCase.wantCount, violations)
 	}
 	for _, violation := range violations {
-		if violation.Code != code {
-			t.Fatalf("fixture for %s produced unexpected violation %+v", code, violation)
+		if violation.Code != check.Code {
+			t.Fatalf("fixture for %s produced unexpected violation %+v", check.Code, violation)
+		}
+		if violation.Severity != check.Severity {
+			t.Fatalf("fixture for %s produced severity %q, want registry severity %q", check.Code, violation.Severity, check.Severity)
 		}
 	}
 	return violations
